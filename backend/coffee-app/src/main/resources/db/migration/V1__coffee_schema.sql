@@ -1,0 +1,15 @@
+CREATE TABLE branches(id VARCHAR(36) PRIMARY KEY,name VARCHAR(80) NOT NULL,address VARCHAR(200) NOT NULL,phone VARCHAR(30) NOT NULL,active BOOLEAN NOT NULL,monthly_target INTEGER NOT NULL CHECK(monthly_target>=0));
+CREATE TABLE roles(code VARCHAR(40) PRIMARY KEY,name VARCHAR(60) NOT NULL,scope VARCHAR(10) NOT NULL CHECK(scope IN ('SELF','BRANCH','GLOBAL')));
+CREATE TABLE role_permissions(role_code VARCHAR(40) NOT NULL REFERENCES roles(code),permission VARCHAR(40) NOT NULL,PRIMARY KEY(role_code,permission));
+CREATE TABLE accounts(id VARCHAR(36) PRIMARY KEY,username VARCHAR(100) NOT NULL UNIQUE,name VARCHAR(80) NOT NULL,role_code VARCHAR(40) NOT NULL REFERENCES roles(code),branch_id VARCHAR(36) REFERENCES branches(id),active BOOLEAN NOT NULL,password_hash VARCHAR(100) NOT NULL,session_version INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE products(id VARCHAR(36) PRIMARY KEY,name VARCHAR(80) NOT NULL,subtitle VARCHAR(200) NOT NULL,category VARCHAR(40) NOT NULL,price INTEGER NOT NULL CHECK(price>0),cost INTEGER NOT NULL CHECK(cost>=0),image VARCHAR(40) NOT NULL,badge VARCHAR(20) NOT NULL,active BOOLEAN NOT NULL,sort_order INTEGER NOT NULL DEFAULT 99);
+CREATE TABLE orders(id VARCHAR(20) PRIMARY KEY,branch_id VARCHAR(36) NOT NULL REFERENCES branches(id),account_id VARCHAR(36) NOT NULL REFERENCES accounts(id),status VARCHAR(24) NOT NULL CHECK(status IN ('PENDING_PAYMENT','PAID','PREPARING','READY','COMPLETED','CANCELLED')),fulfillment VARCHAR(20) NOT NULL CHECK(fulfillment IN ('DINE_IN','TAKEAWAY')),payment_method VARCHAR(10) NOT NULL CHECK(payment_method IN ('CASH','ECPAY')),total INTEGER NOT NULL CHECK(total>0),note VARCHAR(200) NOT NULL,created_at BIGINT NOT NULL,paid_at BIGINT,tendered INTEGER,change_amount INTEGER,provider_trade_no VARCHAR(64) UNIQUE,idempotency_key VARCHAR(80) NOT NULL,request_hash VARCHAR(64) NOT NULL,UNIQUE(account_id,idempotency_key));
+CREATE INDEX idx_orders_branch_paid ON orders(branch_id,paid_at);
+CREATE INDEX idx_orders_paid ON orders(paid_at);
+CREATE INDEX idx_orders_account_created ON orders(account_id,created_at);
+CREATE INDEX idx_orders_branch_created ON orders(branch_id,created_at);
+CREATE TABLE order_items(id VARCHAR(36) PRIMARY KEY,order_id VARCHAR(20) NOT NULL REFERENCES orders(id),product_id VARCHAR(36) NOT NULL REFERENCES products(id),name VARCHAR(80) NOT NULL,category VARCHAR(40) NOT NULL,unit_price INTEGER NOT NULL,unit_cost INTEGER NOT NULL,quantity INTEGER NOT NULL CHECK(quantity>0),temperature VARCHAR(12) NOT NULL,sugar VARCHAR(12) NOT NULL);
+CREATE INDEX idx_order_items_order ON order_items(order_id);
+CREATE TABLE payment_events(id VARCHAR(36) PRIMARY KEY,order_id VARCHAR(20) NOT NULL REFERENCES orders(id),provider_trade_no VARCHAR(64) NOT NULL,result_code VARCHAR(20) NOT NULL,simulated BOOLEAN NOT NULL,received_at BIGINT NOT NULL);
+CREATE INDEX idx_payment_events_order ON payment_events(order_id);
+CREATE TABLE audit_log(id VARCHAR(36) PRIMARY KEY,actor_id VARCHAR(36) NOT NULL,action VARCHAR(40) NOT NULL,target_id VARCHAR(80) NOT NULL,created_at BIGINT NOT NULL);

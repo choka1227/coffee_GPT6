@@ -1,0 +1,13 @@
+spring:
+  datasource:
+    url: jdbc:h2:file:./data/coffee;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    username: sa
+    password: ""
+server:
+  servlet:
+    session:
+      cookie:
+        secure: false
+app:
+  seed-demo: true
+  demo-password: ${DEMO_PASSWORD:CoffeeDemo!2026}

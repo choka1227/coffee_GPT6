@@ -1,0 +1,42 @@
+spring:
+  application:
+    name: coffee
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/coffee}
+    username: ${DB_USER:coffee}
+    password: ${DB_PASSWORD:}
+  flyway:
+    enabled: true
+  jackson:
+    time-zone: Asia/Taipei
+    deserialization:
+      accept-float-as-int: false
+      fail-on-null-for-primitives: true
+server:
+  port: 8080
+  servlet:
+    session:
+      timeout: 8h
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${COOKIE_SECURE:true}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+app:
+  public-url: ${APP_PUBLIC_URL:http://localhost:8080}
+  seed-demo: false
+  bootstrap-username: ${BOOTSTRAP_USERNAME:}
+  bootstrap-password: ${BOOTSTRAP_PASSWORD:}
+ecpay:
+  enabled: ${ECPAY_ENABLED:false}
+  environment: ${ECPAY_ENVIRONMENT:stage}
+  merchant-id: ${ECPAY_MERCHANT_ID:}
+  hash-key: ${ECPAY_HASH_KEY:}
+  hash-iv: ${ECPAY_HASH_IV:}
