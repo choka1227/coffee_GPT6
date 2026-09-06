@@ -1,0 +1,5 @@
+Source commit: 2c24542053e97f19483055e1d38238d40511582f
+Java 17 / Spring Boot 3.5.16 / Vue 3
+Verification: 13 tests passed; frontend typecheck and build passed.
+Remote GitHub write: denied (403); import the bundled Git commit manually.
+JAR SHA-256: e57ea9c9198b4f4099b4fd69c3d8bfb2679d53a386c15d99d47d9022e34633f8
