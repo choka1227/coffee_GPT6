@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: coffee
+      POSTGRES_USER: coffee
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    volumes:
+      - coffee-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coffee -d coffee"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/coffee
+      DB_USER: coffee
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      BOOTSTRAP_USERNAME: ${BOOTSTRAP_USERNAME:?Set BOOTSTRAP_USERNAME in .env}
+      BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD:?Set BOOTSTRAP_PASSWORD in .env}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:8080}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      ECPAY_ENABLED: ${ECPAY_ENABLED:-false}
+      ECPAY_ENVIRONMENT: ${ECPAY_ENVIRONMENT:-stage}
+      ECPAY_MERCHANT_ID: ${ECPAY_MERCHANT_ID:-}
+      ECPAY_HASH_KEY: ${ECPAY_HASH_KEY:-}
+      ECPAY_HASH_IV: ${ECPAY_HASH_IV:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  coffee-db:
