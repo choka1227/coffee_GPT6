@@ -44,18 +44,24 @@ git diff --stat origin/feature/init-project...refs/pr/<N> # GitHub 顯示的（�
 git log --format='%h | %an | %s'
 ```
 
-| author | 是誰 |
-| --- | --- |
-| `Codex` | Codex 的實作 |
-| `Claude` | Claude 寫的規格或文件 |
-| `choka1227` / `2608009` | HSIN 本人 |
+| git author | GitHub 帳號 | 是誰 |
+| --- | --- | --- |
+| `Codex` | `iisihsin-codex` | Codex 的實作 |
+| `Claude` | `ge179357-claude` | Claude 寫的規格或文件 |
+| `choka1227` / `2608009` | `choka1227` | HSIN 本人 |
+
+**判斷 PR 發起者一律看 GitHub author，不要看 commit 訊息：**
+
+```bash
+gh pr view <N> --json author --jq '.author.login'
+```
 
 ---
 
 ## Commit 與分支
 
 ```bash
-git -c user.name="Claude" -c user.email="claude@local.invalid" commit -m "docs: ..."
+git -c user.name="Claude" -c user.email="329894608+ge179357-claude@users.noreply.github.com" commit -m "docs: ..."
 ```
 
 分支用 `claude/<主題>`，例如 `claude/spec-wave0`。與 Codex 的 `codex/<主題>` 分開，一個 PR 一個專屬分支，base 一律 `feature/init-project`（本 repo 的主線不是 `main`，理由見 AGENTS.md）。
@@ -79,7 +85,7 @@ git update-index --chmod=+x backend/mvnw scripts/build.sh start-demo.sh
 git status --short
 
 # 4. commit（帶作者標記）
-git -c user.name="Claude" -c user.email="claude@local.invalid" commit -m "..."
+git -c user.name="Claude" -c user.email="329894608+ge179357-claude@users.noreply.github.com" commit -m "..."
 
 # 5. 本機先驗證，不要把會紅的 CI 推上去
 cd frontend && npm ci && npm run build

@@ -10,11 +10,18 @@ coffee_GPT6 — 咖啡廳點餐與營運系統。Java 17 / Spring Boot 3.5.16 Ma
 
 ## 角色分工
 
-| 角色 | 誰 | 負責 |
-| --- | --- | --- |
-| PO / 決策者 | HSIN | 需求取捨、優先順序、驗收 |
-| PM / SA | Claude | 缺口盤點、規格書、PR review |
-| **PG / SD** | **Codex（你）** | **系統設計細節、實作、測試、技術風險回報** |
+| 角色 | 誰 | GitHub 帳號 | 負責 |
+| --- | --- | --- | --- |
+| PO / 決策者 | HSIN | `choka1227` | 需求取捨、優先順序、驗收 |
+| PM / SA | Claude | `ge179357-claude` | 缺口盤點、規格書、PR review |
+| **PG / SD** | **Codex（你）** | **`iisihsin-codex`** | **系統設計細節、實作、測試、技術風險回報** |
+
+三個角色各有獨立的 GitHub 帳號。**判斷一個 PR 是誰發起的，看 GitHub author，不要靠
+commit 訊息或 PR 描述推測：**
+
+```bash
+gh pr view <N> --json author --jq '.author.login'
+```
 
 規格書在 `docs/specs/`，實作回報寫到 `docs/reports/`。
 
@@ -44,7 +51,7 @@ coffee_GPT6 — 咖啡廳點餐與營運系統。Java 17 / Spring Boot 3.5.16 Ma
 作者標記為 Codex，讓 `git log` 分得出誰做的：
 
 ```bash
-git -c user.name="Codex" -c user.email="codex@local.invalid" commit -m "..."
+git -c user.name="Codex" -c user.email="329891065+iisihsin-codex@users.noreply.github.com" commit -m "..."
 ```
 
 - 訊息格式 `<type>: <做了什麼>`，type 用 `feat` / `fix` / `docs` / `test` / `refactor` / `chore`
