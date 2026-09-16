@@ -95,7 +95,15 @@ cd frontend && npm ci && npm run build
 cd ../backend && ./mvnw -B -ntp verify
 ```
 
-**push 與開 PR 前先向 PO 確認，不要自動執行。** 讀取類操作（status、log、diff、fetch）不需要確認。
+**PO 已授權自主運作。** 開分支、commit、push、開 PR、回應審查意見都直接執行，不需逐次請示。
+
+但下列仍須 PO 決定，不要自己動：
+
+- **repo 設定** —— 分支保護、預設分支、collaborator 權限、auto-merge 開關
+- **帳號與憑證** —— 建帳號、登入、輸入 token
+- **不可逆操作** —— force push、改寫已推送的歷史、刪除遠端分支
+- **`main` 分支** —— 完全不碰。`main` 是這套自動化開始前的完整快照（程式碼齊全、
+  執行位元正確），是唯一的還原點
 
 ---
 
