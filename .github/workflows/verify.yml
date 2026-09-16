@@ -1,7 +1,7 @@
 name: Verify modular coffee system
 on:
   push:
-    branches: [main, 'feature/**']
+    branches: [main, 'feature/**', 'claude/**', 'codex/**']
   pull_request:
 permissions:
   contents: read
@@ -22,5 +22,7 @@ jobs:
           cache: maven
       - run: npm ci --no-audit --no-fund && npm run build
         working-directory: frontend
+      - run: chmod +x ./mvnw
+        working-directory: backend
       - run: ./mvnw -B -ntp verify
         working-directory: backend
