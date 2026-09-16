@@ -31,6 +31,34 @@ gh pr view <N> --json author --jq '.author.login'
 
 ## Git 協作規範
 
+### 分支運作原則（每次實作的完整循環）
+
+```
+1. 從最新的 feature/init-project 拉新分支
+        Claude → claude/<主題>
+        Codex  → codex/<主題>
+
+2. 實作、commit、push
+
+3. 開 PR（base = feature/init-project）並啟用 auto-merge
+        gh pr merge <N> --auto --merge
+
+4. 對方審查  ←── 這一步就是「偵測到對方改了什麼」
+        Claude 發的 PR → Codex 審
+        Codex  發的 PR → Claude 審
+
+5. 核准 + CI 綠 + 分支與主線同步
+        → GitHub 自動合併回 feature/init-project，並自動刪除該分支
+
+6. 下一件事回到第 1 步，重新從最新主線拉分支
+```
+
+**每個循環都要從最新的主線重新拉分支。** 不要在已合併的分支上接著做下一件事，
+不要從對方的分支拉，也不要把兩件事塞進同一支分支。
+
+這個循環的重點不只是合併，是**第 4 步**：雙方互審是彼此得知對方改了什麼的
+唯一管道。跳過它，對方就永遠不會知道那次變更。
+
 ### 分支
 
 - **本 repo 的主線是 `feature/init-project`，不是 `main`**
