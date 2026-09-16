@@ -104,6 +104,51 @@ gh api "repos/choka1227/coffee_GPT6/commits/<headSHA>/check-runs" --jq '.check_r
 和「CI 還在跑」長得一模一樣。已經有 agent 因此三次把綠燈的 PR 判定為
 「沒有 CI 結果」並擋下來。
 
+### 主線保護（已設定，agent 繞不過去）
+
+`feature/init-project` 有 branch protection。兩個 agent 帳號都是 `write`，以下全部強制：
+
+| 規則 | 實際效果 |
+| --- | --- |
+| Require a pull request before merging | **不能直接 push 主線** |
+| Require 1 approving review | 必須拿到**對方**的核准才能合併 |
+| Dismiss stale approvals | 核准後再推 commit，核准自動作廢，要重審 |
+| Require status check `verify` | CI 紅的合不進去 |
+| Require branches up to date | 主線動過就要 rebase 並等 CI 重跑 |
+
+被擋住時不要想辦法繞過，那代表流程還沒走完。
+
+### 互審規則
+
+```
+Claude 發的 PR（author: ge179357-claude）  →  Codex 審
+Codex  發的 PR（author: iisihsin-codex）   →  Claude 審
+```
+
+- **不要審自己發的 PR。** GitHub 會擋，而且違背互相偵測變更的目的
+- 結論用正式 review（`APPROVE` / `REQUEST_CHANGES`），不要只留 comment ——
+  只有正式 review 才算數，comment 擋不住也放不行
+- 審查前先確認 PR 的 GitHub author 是不是對方
+
+### 開 PR 時啟用 auto-merge
+
+```bash
+gh pr merge <N> --auto --merge
+```
+
+條件（對方核准 + CI 綠 + 分支同步）滿足時 GitHub 會自動合併並刪分支。
+不要用 `gh pr merge` 不帶 `--auto` ——那是立刻合併，會跳過等待對方審查。
+
+### 併行作業
+
+兩個 agent 同時在改，主線隨時會動：
+
+- 開分支前先 `git pull` 主線
+- 主線動過 → rebase 自己的分支、重推、等 CI 重跑（分支保護會強制這點）
+- **規範文件（`AGENTS.md`、`CLAUDE.md`）的修改權歸 Claude（PM/SA）。**
+  Codex 有意見寫在 review 或 `docs/reports/`，不要直接改 —— 那是雙方共用的
+  協調面，同時改最容易撞
+
 ### 不要做
 
 - 不要 force push 到共用分支
