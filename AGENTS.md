@@ -10,11 +10,18 @@ coffee_GPT6 — 咖啡廳點餐與營運系統。Java 17 / Spring Boot 3.5.16 Ma
 
 ## 角色分工
 
-| 角色 | 誰 | 負責 |
-| --- | --- | --- |
-| PO / 決策者 | HSIN | 需求取捨、優先順序、驗收 |
-| PM / SA | Claude | 缺口盤點、規格書、PR review |
-| **PG / SD** | **Codex（你）** | **系統設計細節、實作、測試、技術風險回報** |
+| 角色 | 誰 | GitHub 帳號 | 負責 |
+| --- | --- | --- | --- |
+| PO / 決策者 | HSIN | `choka1227` | 需求取捨、優先順序、驗收 |
+| PM / SA | Claude | `ge179357-claude` | 缺口盤點、規格書、PR review |
+| **PG / SD** | **Codex（你）** | **`iisihsin-codex`** | **系統設計細節、實作、測試、技術風險回報** |
+
+三個角色各有獨立的 GitHub 帳號。**判斷一個 PR 是誰發起的，看 GitHub author，不要靠
+commit 訊息或 PR 描述推測：**
+
+```bash
+gh pr view <N> --json author --jq '.author.login'
+```
 
 規格書在 `docs/specs/`，實作回報寫到 `docs/reports/`。
 
@@ -44,7 +51,7 @@ coffee_GPT6 — 咖啡廳點餐與營運系統。Java 17 / Spring Boot 3.5.16 Ma
 作者標記為 Codex，讓 `git log` 分得出誰做的：
 
 ```bash
-git -c user.name="Codex" -c user.email="codex@local.invalid" commit -m "..."
+git -c user.name="Codex" -c user.email="329891065+iisihsin-codex@users.noreply.github.com" commit -m "..."
 ```
 
 - 訊息格式 `<type>: <做了什麼>`，type 用 `feat` / `fix` / `docs` / `test` / `refactor` / `chore`
@@ -81,6 +88,21 @@ git update-index --chmod=+x backend/mvnw scripts/build.sh start-demo.sh
 - **描述必須誠實列出所有變更**，包含刪除的檔案、權限變更、相依更新。不要只寫你想強調的那一項
 - 描述要含：對應的規格書編號、驗收條件對照、**沒做到的部分與原因**
 - 開 PR 前先確認 CI 會過。**CI 紅的 PR 不要開**
+
+### 檢查 CI（踩過三次的坑，用對 API）
+
+GitHub Actions 的結果**只寫進 Checks API**，不寫 legacy Statuses API：
+
+```bash
+gh api "repos/choka1227/coffee_GPT6/commits/<headSHA>/check-runs" --jq '.check_runs[] | "\(.name) \(.status) \(.conclusion)"'
+```
+
+全部 `status=completed` 且 `conclusion=success` 才算綠燈。
+
+**不要用 `/commits/<sha>/status`。** 那支對 GitHub Actions 永遠回傳
+`state=pending`、`statuses=[]` —— 在它的回應裡，「這支 API 底下完全沒有東西」
+和「CI 還在跑」長得一模一樣。已經有 agent 因此三次把綠燈的 PR 判定為
+「沒有 CI 結果」並擋下來。
 
 ### 不要做
 
