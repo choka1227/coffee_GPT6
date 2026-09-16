@@ -89,6 +89,21 @@ git update-index --chmod=+x backend/mvnw scripts/build.sh start-demo.sh
 - 描述要含：對應的規格書編號、驗收條件對照、**沒做到的部分與原因**
 - 開 PR 前先確認 CI 會過。**CI 紅的 PR 不要開**
 
+### 檢查 CI（踩過三次的坑，用對 API）
+
+GitHub Actions 的結果**只寫進 Checks API**，不寫 legacy Statuses API：
+
+```bash
+gh api "repos/choka1227/coffee_GPT6/commits/<headSHA>/check-runs" --jq '.check_runs[] | "\(.name) \(.status) \(.conclusion)"'
+```
+
+全部 `status=completed` 且 `conclusion=success` 才算綠燈。
+
+**不要用 `/commits/<sha>/status`。** 那支對 GitHub Actions 永遠回傳
+`state=pending`、`statuses=[]` —— 在它的回應裡，「這支 API 底下完全沒有東西」
+和「CI 還在跑」長得一模一樣。已經有 agent 因此三次把綠燈的 PR 判定為
+「沒有 CI 結果」並擋下來。
+
 ### 不要做
 
 - 不要 force push 到共用分支

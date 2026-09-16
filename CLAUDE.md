@@ -36,7 +36,10 @@ git diff --stat origin/feature/init-project...refs/pr/<N> # GitHub 顯示的（�
 4. **模組邊界** — 有沒有跨模組引用 `internal`
 5. **金額規則** — 有沒有信任前端傳來的金額
 6. **權限檢查** — 新端點有沒有決定資料範圍，有沒有越權測試
-7. **CI 狀態** — 綠燈才談內容
+7. **CI 狀態** — 綠燈才談內容。用 Checks API 查，**不要用 legacy Statuses API**（它對 Actions 永遠回 `state=pending`、`statuses=[]`，理由見 AGENTS.md）：
+   ```bash
+   gh api "repos/choka1227/coffee_GPT6/commits/<headSHA>/check-runs" --jq '.check_runs[] | "\(.name) \(.status) \(.conclusion)"'
+   ```
 
 **辨識作者：**
 
