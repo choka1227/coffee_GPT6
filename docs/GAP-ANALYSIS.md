@@ -2,7 +2,17 @@
 
 盤點日期：2026-09-17（Asia/Taipei）。第二次盤點：2026-09-17，依據 `feature/init-project` 於 `16f801c` 的實際程式碼。盤點依據另含 `docs/ARCHITECTURE.md`、`docs/API.md`、`docs/ECPAY.md`、`docs/VALIDATION.md`。
 
-本檔由 PM / SA（Claude）維護。**優先順序是建議，最終由 PO（HSIN）決定。** 規格書寫在 `docs/specs/`，檔名對應缺口編號。
+本檔由 PM / SA（Claude）維護。**優先順序由 Claude 定案**（PO 於 2026-09-17 授權，見下節）。規格書寫在 `docs/specs/`，檔名對應缺口編號。
+
+## PO 決策：設計決策授權給 Claude（2026-09-17）
+
+**PO 已把設計決策整批授權給 Claude（PM / SA），不再人工介入設計。** 規則寫在 `AGENTS.md`「設計決策的歸屬」與 `CLAUDE.md`。對本檔的影響：
+
+- 優先順序由 Claude 定案並直接排入，不再標「建議，最終由 PO 決定」
+- 規格書不再有「待 PO 決定」章節，改為「設計決策」並附理由
+- Codex 的產出有問題時，**由下一輪規格修補**，不停工等人
+
+仍須 PO 決定的只剩 `CLAUDE.md` 列的那幾項：repo 設定、帳號與憑證、不可逆操作、`main` 分支。
 
 ## PO 決策：金流整批延後（2026-09-17）
 
@@ -39,7 +49,8 @@
 
 | 編號 | 缺口 | 狀態 | 規格書 |
 | --- | --- | --- | --- |
-| G01 | 金流對帳與付款狀態修復 | **實作已合併（PR #9），帶 2 項已知缺陷待修** | [`specs/G01-payment-reconciliation.md`](specs/G01-payment-reconciliation.md) |
+| G01 | 金流對帳與付款狀態修復 | 實作已合併（PR #9） | [`specs/G01-payment-reconciliation.md`](specs/G01-payment-reconciliation.md) |
+| G01a | 對帳實作的缺陷修正 | **規格書已完成，待實作（P1，不受金流延後影響）** | [`specs/G01a-reconciliation-fixes.md`](specs/G01a-reconciliation-fixes.md) |
 | G02 | 電子發票 | 延後 | — |
 | G03 | 退款與退單 | 延後 | — |
 | G04 | 線上付款訂單的取消與逾時處理 | 延後（與 G01 互斥設計，必須一起做） | — |
@@ -49,12 +60,12 @@
 PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452da`）送出過 `REQUEST_CHANGES`，PO 決定先合併，**下列兩項因此留在 `feature/init-project` 上，尚未修正**：
 
 1. **查無此筆交易被誤判成 `QUERY_FAILED`** —— `ReconciliationService.java:186-188` 把 `TradeAmt` / `TradeNo` 的驗證放在判斷 `TradeStatus` 之前，空的 `TradeNo` 直接丟例外收成 `QUERY_FAILED`。違反規格 §6「綠界查不到時照未付款處理，不是錯誤」與 §4「`provider_trade_no` 無值時填空字串」。顧客在導向綠界前放棄的訂單（`PENDING_PAYMENT` 的大宗）會整片顯示「查單失敗」，真正的連線異常被假告警淹沒。
-   **修法**：把 `TradeAmt` / `TradeNo` 的解析移到 `"1".equals(status)` 之後；非已付款時允許空的 `trade` 與 null 的 `amount`。並補測試：`TradeStatus=0`、`TradeNo=""`、`TradeAmt=""` → `STILL_UNPAID`。
+   **修法**：見 [`specs/G01a-reconciliation-fixes.md`](specs/G01a-reconciliation-fixes.md) 第 2 節。
 
 2. **CSRF 驗收測試無效** —— `ReconciliationTest.java:233-235` 有 csrf 與無 csrf 兩次 `POST` 都打跨店訂單、都期望 403，即使 CSRF 保護被關掉也照樣通過。
-   **修法**：改用該 manager 有權限的 taipei 訂單，無 `csrf()` → 403、有 `csrf()` → 200/409，跨店那條斷言留在 banqiao 訂單上。
+   **修法**：見 [`specs/G01a-reconciliation-fixes.md`](specs/G01a-reconciliation-fixes.md) 第 3 節。
 
-另有三項非阻斷建議（`PaymentDate` 時鐘偏移會讓已付款訂單反覆 `QUERY_FAILED`、`pending()` 的無上限撈取與 N+1、報表台灣日期歸屬未真正驗到）記在 PR #9 的 review 中。
+另有三項非阻斷建議（`PaymentDate` 時鐘偏移會讓已付款訂單反覆 `QUERY_FAILED`、`pending()` 的無上限撈取與 N+1、報表台灣日期歸屬未真正驗到）也已納入 G01a 第 4 節。
 
 **影響評估**：因為 PO 已決定金流先跑 stub、最後才串接綠界，且 `ecpay.reconcile.enabled` 預設為 `false`，這兩項目前**沒有生產影響**。但在進入綠界串接階段之前必須修掉，否則第一次真實查單就會踩到第 1 項。
 
@@ -100,6 +111,7 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 | G16 | 顧客自助註冊 | 未開始 |
 | G05 | Session 集中化（水平擴展前提） | 未開始 |
 | G08 | 庫存扣減 | 未開始 |
+| G17 | 點餐 UI 的「常用組合」快捷 | 未開始（G06 第 13.6 節登記） |
 | G12 | 外送、硬體印單 | 未開始 |
 
 **G09 報表效能** —— `ReportService.report()` 把整月已付款訂單投影載入記憶體，再對每一天（`ReportService.java:66-80`）與每一小時（`137-146`）各做一次 stream filter，是 O(天數 × 訂單數)。單店資料量下沒問題，跨店或資料累積後會變成記憶體與延遲風險。彙整應下推到 SQL。
@@ -110,25 +122,29 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 
 **G08 庫存扣減** —— `products` 沒有任何庫存欄位。注意 G13（售罄）是 G08 的輕量版：先做得到「今天這項賣完」，不必等完整的庫存管理。
 
-## 下一步建議
+**G17 點餐 UI 的「常用組合」快捷**（G06 第 13.6 節登記）—— 選項群組多的商品，手機版點餐流程會偏長。刻意延後：常用組合要先有真實訂單資料才知道哪些組合常用，現在做出來的一定是猜的。G06 上線跑一段時間後再用實際資料判斷要不要做。
 
-1. Codex 依 `specs/G06-product-options.md` 實作選項模型與加價（P0，已可開工）
-2. Codex 依 `specs/G13-branch-menu-availability.md` 實作分店可用性與售罄（**G06 合併後**才開工，兩者會撞同一段程式）
-3. Claude 產出 G11 + G15 合併規格書（稽核軌跡與現金日結）
-4. G10 訂單分頁與 N+1（小、確定，可穿插）
-5. 金流那條線（G01–G04）待 PO 宣布進入綠界串接階段後再排
+## 排定的工作順序
+
+1. **Codex 依 `specs/G06-product-options.md` 實作選項模型與加價** —— 規格第 13 節六項設計決策已定案，直接開工，不需等任何確認
+2. **Codex 依 `specs/G01a-reconciliation-fixes.md` 修正 G01 留在主線的兩項缺陷** —— 與第 1 項動到不同模組（`coffee-payments` vs `coffee-orders` / `coffee-catalog`），可並行
+3. **Codex 依 `specs/G13-branch-menu-availability.md` 實作分店可用性與售罄** —— **G06 合併後**才開工，兩者的 S3 會撞 `Catalog.sellable()` 簽章與 `OrderService.create()` 的品項迴圈
+4. Claude 產出 G11 + G15 合併規格書（稽核軌跡與現金日結）
+5. G10 訂單分頁與 N+1（小、確定，可穿插）
+6. 金流那條線（G01–G04 其餘部分）待進入綠界串接階段再排
 
 ### 排程注意
 
 PR #9（G01 對帳）已於 2026-09-17 08:32 合併，`OrderService` 的衝突風險解除，**G06 可以直接開工**。G06 的 Flyway 版號用 **V3**：`V2__payment_reconciliation.sql` 已隨 #9 進入主線。
 
-G01 留在主線的兩項缺陷（見上方 P3 段落）建議另開一支 `codex/g01-fixes` 處理，不要夾在 G06 的 PR 裡 —— 兩件事、兩支分支。
+G01 留在主線的缺陷已寫成獨立規格 [`specs/G01a-reconciliation-fixes.md`](specs/G01a-reconciliation-fixes.md)，用分支 `codex/g01-fixes`，**不要**夾在 G06 的 PR 裡 —— 兩件事、兩支分支。兩者動的是不同模組（`coffee-payments` vs `coffee-orders` / `coffee-catalog`），可以並行。
 
 ## 修訂紀錄
 
 | 日期 | 變更 |
 | --- | --- |
 | 2026-09-17 | 建立本檔；完成 G01 規格書 |
+| 2026-09-17 | PO 授權設計決策給 Claude，規格書的「待 PO 決定」改為「設計決策」；G06 六項設計決策定案（負加價改為**不允許**）；新增 G17；完成 G01a 缺陷修正規格書 |
 | 2026-09-17 | 完成 G13 規格書（分店菜單可用性與售罄）；記錄 G06 / G13 的施工順序相依；登記 G18（區域定價） |
 | 2026-09-17 | G13 規格書修正兩項（v1.1，依 PR #12 上 Codex 的 `REQUEST_CHANGES`）：§7.1 稽核 `target_id` 以 UUID 計長為 83 字元、超出 `VARCHAR(80)` 會讓設定整筆回滾，狀態改由 `action` 承載；§5.5 `fromUnlisted` 是先讀後寫的授權判斷，需鎖 `products` 行以序列化，鎖 `branch_products` 在尚無覆寫列時無效 |
 | 2026-09-17 | G13 規格書補上「施工階段」（S1/S2/S3）；第 11 節由「待 PO 決定」改為「設計決策」四項定案；區域定價編號由 G17 更正為 G18（G17 已由 G06 第 13.6 節占用） |
