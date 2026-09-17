@@ -94,6 +94,21 @@ public class InitialData implements ApplicationRunner {
           p[7],
           i);
     }
+    // Only bind freshly seeded demo products; never restore a manager's later unbinding.
+    for (String[] p : ps) {
+      if (p[3].equals("手作烘焙")) continue;
+      for (String[] g : new String[][] {{"temperature", "1"}, {"sugar", "2"}}) {
+        db.update(
+            "insert into product_option_groups(product_id,group_id,sort_order)"
+                + " select ?,?,? where not exists(select 1 from product_option_groups"
+                + " where product_id=? and group_id=?)",
+            p[0],
+            g[0],
+            Integer.parseInt(g[1]),
+            p[0],
+            g[0]);
+      }
+    }
     // Development fixture only: previous + current month, deterministic quantities, paid orders.
     var today = LocalDate.now(ZoneId.of("Asia/Taipei"));
     var first = today.withDayOfMonth(1).minusMonths(1);
@@ -127,7 +142,9 @@ public class InitialData implements ApplicationRunner {
               id,
               "demo");
           db.update(
-              "insert into order_items values(?,?,?,?,?,?,?,?,?,?)",
+              "insert into"
+                  + " order_items(id,order_id,product_id,name,category,unit_price,unit_cost,quantity,temperature,sugar)"
+                  + " values(?,?,?,?,?,?,?,?,?,?)",
               Ids.next(),
               id,
               p[0],
