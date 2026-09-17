@@ -123,7 +123,7 @@ CREATE TABLE option_items(
   id VARCHAR(36) PRIMARY KEY,
   group_id VARCHAR(36) NOT NULL REFERENCES option_groups(id),
   name VARCHAR(40) NOT NULL,
-  price_delta INTEGER NOT NULL,
+  price_delta INTEGER NOT NULL CHECK(price_delta>=0),
   cost_delta INTEGER NOT NULL CHECK(cost_delta>=0),
   active BOOLEAN NOT NULL,
   sort_order INTEGER NOT NULL DEFAULT 99
@@ -186,7 +186,7 @@ INSERT INTO product_option_groups(product_id,group_id,sort_order)
 
 `price_delta` 全部為 0，所以**遷移不改變任何既有商品的售價**。遷移後 `validateOptions` 的行為由這份資料完整取代。
 
-歷史 `order_items` 的 `temperature` / `sugar` 字串**不回填**進 `order_item_options`（見第 13 節待 PO 決定第 3 項）。舊訂單繼續由這兩個欄位顯示，新訂單由 `order_item_options` 顯示，前端兩者都要能渲染。
+歷史 `order_items` 的 `temperature` / `sugar` 字串**不回填**進 `order_item_options`（見第 13.3 節）。舊訂單繼續由這兩個欄位顯示，新訂單由 `order_item_options` 顯示，前端兩者都要能渲染。
 
 ### 4.3 `InitialData` 必須一起改（全新資料庫會壞在這裡）
 
@@ -322,8 +322,11 @@ void bindProductOptions(Actor a, String productId, List<String> groupIds);
 - 每份單價 = `products.price` + Σ `option_items.price_delta`（該 line 所選選項，值取自 DB，不是請求）
 - 每份成本 = `products.cost` + Σ `option_items.cost_delta`
 - line 小計 = 每份單價 × `quantity`，用 `Math.multiplyExact` / `Math.addExact`，不要裸算
-- **每份單價必須 > 0**，否則 `Problem(400, "商品金額不正確")`。`price_delta` 允許為負（自帶杯折 5 元之類），但不得把單價壓到 0 或負數
-- 單一 `price_delta` 限制在 −1000 至 10000、`cost_delta` 限制在 0 至 10000（`saveOptionItem` 時檢查）
+- **`price_delta` 不得為負**（第 13.1 節定案）。加價就是加價，折扣一律留給 G07。schema 有 `CHECK(price_delta>=0)`，`saveOptionItem` 也要在應用層擋，不要只靠 DB constraint 丟出英文錯誤
+- 單一 `price_delta` 與 `cost_delta` 皆限制在 0 至 10000（`saveOptionItem` 時檢查）
+- **每份單價必須 > 0**。在 `price_delta >= 0` 的前提下這條只會在 `products.price` 本身有問題時觸發（既有 schema 已有 `CHECK(price>0)`），但仍然要檢查 —— 它是 G07 導入折扣後的第一道防線，現在就寫好
+
+> `order_item_options.price_delta`（快照表）**刻意不加** `CHECK(price_delta>=0)`。它記錄的是「當時實際收了多少」，G07 導入折扣後可能出現負值，歷史快照不該因為當下的規則而寫不進去。
 - 訂單總額上限 `1000000` 的既有檢查不變
 - 全程新台幣整數元，不得出現 `double` / `float` / `BigDecimal`
 
@@ -406,7 +409,7 @@ void bindProductOptions(Actor a, String productId, List<String> groupIds);
 | --- | --- | --- |
 | 400 | 第 6 節任一驗證規則不過 | 見第 6 節表格 |
 | 400 | 每份單價 ≤ 0 | 商品金額不正確 |
-| 400 | `price_delta` / `cost_delta` 超出範圍 | 加價金額需為 −1000 至 10000 元 |
+| 400 | `price_delta` / `cost_delta` 為負或超過 10000 | 加價金額需為 0 至 10000 元 |
 | 400 | 群組名稱或項目名稱為空或超過 40 字 | 名稱需為 1–40 字 |
 | 400 | `min_select > max_select` | 選擇數量下限不能大於上限 |
 | 400 | 綁定不存在的群組或商品 | 找不到指定的選項群組 |
@@ -456,6 +459,52 @@ sum((i.unit_cost+i.options_cost)*i.quantity) as cost
 ```
 
 **驗收時要實際驗證** `sum(products[].revenue) == revenue`（同一組篩選條件下）。這是本規格最容易被漏掉的一項。
+
+---
+
+## 10a. 施工階段
+
+本規格分三個階段，**每個階段獨立 CI 綠、獨立可合併**。依 `AGENTS.md`「施工階段與中斷續作」，一次執行以推進一個階段為目標，階段完成就 commit + push。
+
+三個階段可以合在同一支 `codex/g06-product-options` 分支、同一個 PR 逐步推進（推薦，審查時看得到完整脈絡），也可以一階段一個 PR。**但未完成的階段不得標記 ready for review，也不得啟用 auto-merge。**
+
+### S1 — 資料層與初始化
+
+| 項目 | 內容 |
+| --- | --- |
+| 動到 | `db/migration/V3__product_options.sql`（新增）、`InitialData.java` |
+| 規格章節 | 第 4 節、第 4.3 節 |
+| 為什麼可獨立合併 | 只建表與 seed 資料，沒有任何 Java API 變更，沒有任何程式讀這些新表。既有行為與售價完全不變 |
+
+驗收子集：第 11 節「資料層」整段。
+
+> 這一階段就把 `InitialData` 的兩個坑一起修掉（第 4.3 節）。**不要留到後面** —— `ALTER TABLE` 一旦進去，`order_items` 的位置式 INSERT 立刻壞，demo 環境會啟動失敗。兩者必須同一個 commit。
+
+### S2 — Catalog 的選項讀取與維護
+
+| 項目 | 內容 |
+| --- | --- |
+| 動到 | `Catalog.java`（api，新增 record 與方法）、`CatalogService.java`、`CatalogController.java`、`frontend/src/modules/catalog/MenuAdminView.vue`、`frontend/src/shared/types.ts` |
+| 規格章節 | 第 5 節、第 5.1 節、第 6 節、第 8.2 節、第 8.3 節、第 9 節 |
+| 為什麼可獨立合併 | `Catalog.Product` 新增 `optionGroups` 是**加法**，`GET /api/menu` 多回一個欄位不影響任何既有呼叫端。`coffee-orders` 完全沒動，既有測試全綠 |
+
+驗收子集：第 11 節「選項模型」「成本保護」兩段，以及第 12 節的「成本不外洩測試」與第 6 節七條驗證規則的單元測試。
+
+> `resolveOptions` 在這一階段就要完整實作並測到 —— 它是後端重算的唯一入口，S3 只是呼叫它。把驗證邏輯的測試留在這一階段，S3 就只剩整合。
+
+### S3 — 點餐整合與報表
+
+| 項目 | 內容 |
+| --- | --- |
+| 動到 | `Orders.java`（api）、`OrderService.java`、`ReportService.java`、`frontend/src/modules/ordering/MenuView.vue`、既有測試 |
+| 規格章節 | 第 7 節、第 8.1 節、第 10 節 |
+| 為什麼不能再切 | 第 8.1 節的 `LineInput` 是**破壞性變更**：後端 record 一改，前端與既有測試同時編譯失敗。三者必須同一個 commit 才會綠 |
+
+驗收子集：第 11 節其餘各段，以及第 12 節其餘測試。
+
+**這是三個階段中最大的一個。** 如果一次執行做不完，依 `AGENTS.md` 推一個能編譯的中間狀態並維持 draft，下次續作 —— 不要為了收尾而把 S3 拆成半綠的兩半推上去。
+
+> 有考慮過讓 `LineInput` 同時接受舊的 `temperature`/`sugar` 與新的 `optionIds`，把 S3 再切成三個小階段。**不採用**：過渡期的雙路徑程式碼會長期留著沒人清，而且「兩條路徑算出不同金額」正是本規格要消滅的那類問題。寧可有一個大階段，靠中斷續作機制處理。
 
 ---
 
@@ -532,6 +581,8 @@ sum((i.unit_cost+i.options_cost)*i.quantity) as cost
 - [ ] 點餐畫面依 `optionGroups` 動態渲染選項，必選群組未選時不能加入購物車
 - [ ] 選項加價即時反映在小計上，但**送出時只送 `optionIds`**
 - [ ] 菜單管理畫面可維護群組、項目與商品綁定
+- [ ] **群組清單顯示「目前有 N 個商品使用」並可展開看清單**（第 13.4 節：群組是跨商品共用的，沒有這個提示，改一個群組會在總部看不見的地方影響一堆商品）
+- [ ] **停用被綁定的群組時，409 的畫面要列出還綁著的商品，並提供解綁入口**（第 13.5 節：不然「請先解綁」無從下手）
 - [ ] 訂單明細同時能顯示新訂單的 `options` 與歷史訂單的 `temperature` / `sugar`
 - [ ] 金額顯示使用 `shared/format.ts`，HTTP 經過 `shared/api.ts`
 - [ ] `npm run build` 通過
@@ -545,7 +596,8 @@ sum((i.unit_cost+i.options_cost)*i.quantity) as cost
 ### 單元測試（不需 Spring context 優先）
 
 - [ ] 第 6 節七條驗證規則，逐條一個案例
-- [ ] 每份單價計算：無選項、單一加價、多個加價、負加價、負加價把單價壓到 0（應被擋）
+- [ ] 每份單價計算：無選項、單一加價、多個加價、加價後溢位
+- [ ] `saveOptionItem` 拒絕負的 `price_delta`（第 13.1 節），錯誤訊息為繁體中文而非 DB constraint 的英文
 - [ ] `Math.multiplyExact` 溢位路徑：極大 `price_delta` × 極大 `quantity`
 - [ ] 指紋正規化：`["a","b"]` 與 `["b","a"]` 算出相同指紋
 
@@ -589,23 +641,65 @@ sum((i.unit_cost+i.options_cost)*i.quantity) as cost
 
 ---
 
-## 13. 待 PO 決定
+## 13. 設計決策（PM / SA 定案）
 
-Codex 實作前如果這幾項未定，請照括號內的**預設值**做，並在 PR 描述標明。
+PO 已把設計決策授權給 Claude（見 `AGENTS.md`「設計決策的歸屬」）。以下六項**已經定案，直接照做，不要等確認**。每項附上判斷理由與推翻它的代價，供下一輪推翻用。
 
-1. **負加價要不要開放** —— 自帶杯折 5 元是常見做法，但負加價本質上是折扣，會繞過 G07 未來的折扣稽核。（預設：開放，下限 −1000，且每份單價必須 > 0）
-2. **選項成本 `cost_delta`** —— 換燕麥奶的成本確實比較高，不記錄會虛報毛利。但要求總部維護每個選項的成本會增加建檔負擔。（預設：記錄，預設值 0）
-3. **歷史訂單的溫度甜度要不要回填** —— 回填成 `order_item_options` 可以讓顯示邏輯只有一套，但那是改寫歷史快照。（預設：不回填，前端兩種都要能渲染）
-4. **選項群組可否跨商品共用** —— 本規格的設計是可以（`product_option_groups` 是多對多），所以改「甜度」會影響所有綁定的商品。也可以改成每個商品獨立一份。（預設：共用）
-5. **停用選項群組時的處理** —— 目前規格是「仍被商品綁定就回 409，要先解綁」。也可以改成允許停用、由查詢端過濾。（預設：409）
-6. **點餐 UI 的選項呈現** —— 加價選項多的時候（例如 5 個群組），手機版點餐流程會變長。要不要做「常用組合」快捷？（預設：不做，另開缺口）
+### 13.1 負加價 — **不允許**（與 v1 草稿相反）
+
+`price_delta` 必須 `>= 0`，schema 加 `CHECK(price_delta>=0)`。自帶杯折 5 元這類需求**留給 G07 折扣**。
+
+**理由**：負加價本質上是折扣，但走的是「加價」這條路 —— 它不會出現在任何折扣報表裡，也不會留下「這筆便宜了多少、誰核准的」紀錄。目前 G11（稽核）與 G07（折扣）都還不存在，開放負加價等於在兩者之前先開一條沒有稽核、沒有報表可見度的降價路徑，而且任何有 `MENU_MANAGE` 的人建好之後，每個收銀員都能套用。
+
+**這也是不對稱風險**：事後放寬（把 CHECK 拿掉）幾乎零成本；事後收緊則要處理已經存在的負選項與已經產生的歷史訂單，貴得多。不確定的時候選容易反悔的那邊。
+
+**代價**：自帶杯折扣要等 G07。這是體驗損失，不是營收損失 —— 加價品項（本規格的主要目的）完全不受影響。
+
+> v1 草稿的預設值是「開放，下限 −1000」。定案時改為不允許，理由如上。第 7 節與第 8 節的錯誤碼表已同步更新。
+
+### 13.2 選項成本 `cost_delta` — **記錄，預設 0**
+
+換燕麥奶的成本確實比較高，不記錄會虛報毛利，而報表毛利是總部看的主要數字之一。建檔負擔用「預設 0」化解：總部可以先不填，之後再補。
+
+**代價**：總部要維護一份額外的成本資料。可見性規則見第 5.1 節。
+
+### 13.3 歷史訂單的溫度甜度 — **不回填**
+
+舊 `order_items` 的 `temperature` / `sugar` 字串保持原樣，不寫進 `order_item_options`。
+
+**理由**：那是改寫歷史快照。本專案在訂單快照上一貫的原則是「之後改菜單不回寫歷史」（第 1 節目標 4、`AGENTS.md` 金額規則），回填會自相矛盾。多一套顯示邏輯是可接受的代價，而且它會隨時間自然消失。
+
+**代價**：前端要能渲染兩種格式，直到舊訂單過了保留期限。
+
+### 13.4 選項群組 — **跨商品共用**（多對多）
+
+`product_option_groups` 維持多對多。改「甜度」會一次影響所有綁定的商品。
+
+**理由**：另一個選擇是每個商品一份獨立群組，那會讓「新增一個糖度選項」變成要改 N 個商品，總部一定會漏。共用的風險（改一個影響很多）比漏改的風險好控制。
+
+**附帶要求**：管理畫面在群組旁邊**必須顯示「目前有 N 個商品使用」**，並可展開看清單。沒有這個，共用就變成看不見的地雷。這一條列入第 11 節前端驗收。
+
+### 13.5 停用仍被綁定的群組 — **回 409，要先解綁**
+
+**理由**：另一個選擇是允許停用、由查詢端過濾，但那會產生模糊狀態 —— 群組停用了，已綁定的商品到底還能不能點？必選群組停用後，那個商品是不是就點不了了？409 把這個決定推回給操作的人，明確且可預期。
+
+**附帶要求**：409 的回應要能讓人知道**哪些商品還綁著**，否則「先解綁」無從下手。管理畫面直接提供解綁入口。
+
+### 13.6 點餐 UI 的「常用組合」快捷 — **不做，另開 G17**
+
+本版的點餐 UI 就是老實地一個群組一個群組選。
+
+**理由**：常用組合要先有資料才知道哪些組合常用，現在沒有任何選項資料，做出來的一定是猜的。等 G06 上線跑一段時間，用真實訂單決定要不要做、做哪些。
+
+**代價**：選項多的商品，手機版流程會偏長。先觀察，不要預先最佳化。已登記為 G17（見 `docs/GAP-ANALYSIS.md`）。
 
 ---
 
 ## 14. 給 Codex 的提醒
 
-- `AGENTS.md` 工作流程第 1 步：**先輸出設計摘要，等 PO 確認再動工**
-- 這份規格若有錯、不完整或技術上做不到，**先回報，不要自己補洞後默默實作**
+- **不需要等 PO 確認設計摘要**（見 `AGENTS.md`「設計決策的歸屬」）。輸出摘要留紀錄，然後直接開工
+- 這份規格若有錯、不完整或技術上做不到，**明講出來**（設計摘要與 PR 描述），但**講完就繼續做** —— 依你的判斷補上合理處理並標明，缺口由下一輪規格修補。要避免的是默默補洞，不是補洞
+- 第 13 節六項已經定案，**不要再當成待決事項**。特別注意 13.1 的負加價**不允許**，與早期草稿相反
 - 第 8.1 節的 `LineInput` 是**破壞性變更**，前端與既有測試都要同步改。請在 PR 描述誠實列出所有被動到的檔案
 - 第 10 節的報表修正最容易漏。加價進了 `orders.total` 卻沒進商品彙整，報表會安靜地對不起來，沒有任何錯誤訊息
 - 第 7 節是本規格的核心：**任何情況下都不要相信請求裡的金額**。`LineInput` 上不要為了方便而加價格欄位
