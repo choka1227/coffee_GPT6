@@ -7,7 +7,7 @@
 | 規格版本 | v1 |
 | 撰寫 | Claude（PM / SA），2026-09-17 |
 | 實作 | Codex（PG / SD） |
-| 基準 commit | `16f801c` |
+| 基準 commit | 盤點依據 `16f801c`；合併主線 `7c2f2eb`（PR #9 已進入主線）後仍適用 |
 
 ---
 
@@ -102,7 +102,7 @@ else {
 
 **新增檔案：`backend/coffee-app/src/main/resources/db/migration/V3__product_options.sql`**
 
-> **版號注意：`V2` 已被 PR #9（G01 對帳）占用。** 即使 #9 尚未合併，本規格一律使用 **V3**，把 V2 留給 #9，避免兩支分支撞版號。若 #9 最終關閉不合併，也**不要**把本檔改回 V2 —— 版號跳號沒有成本，撞號要重跑整個資料庫。
+> **版號注意：`V2__payment_reconciliation.sql` 已隨 PR #9 進入主線**（2026-09-17 合併）。本規格使用 **V3**。開工前請確認主線上的 migration 目錄，取下一個未使用的版號，**不要**沿用本文寫死的數字而不檢查 —— 撞號要重跑整個資料庫。
 
 不得修改 `V1__coffee_schema.sql`（`AGENTS.md` 禁止事項第 6 條）。
 

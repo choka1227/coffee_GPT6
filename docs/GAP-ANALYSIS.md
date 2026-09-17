@@ -35,12 +35,26 @@
 
 | 編號 | 缺口 | 狀態 | 規格書 |
 | --- | --- | --- | --- |
-| G01 | 金流對帳與付款狀態修復 | 規格書已完成，實作延後 | [`specs/G01-payment-reconciliation.md`](specs/G01-payment-reconciliation.md) |
+| G01 | 金流對帳與付款狀態修復 | **實作已合併（PR #9），帶 2 項已知缺陷待修** | [`specs/G01-payment-reconciliation.md`](specs/G01-payment-reconciliation.md) |
 | G02 | 電子發票 | 延後 | — |
 | G03 | 退款與退單 | 延後 | — |
 | G04 | 線上付款訂單的取消與逾時處理 | 延後（與 G01 互斥設計，必須一起做） | — |
 
-**G01 金流對帳與付款狀態修復**
+#### G01 已合併，但有兩項缺陷留在主線
+
+PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452da`）送出過 `REQUEST_CHANGES`，PO 決定先合併，**下列兩項因此留在 `feature/init-project` 上，尚未修正**：
+
+1. **查無此筆交易被誤判成 `QUERY_FAILED`** —— `ReconciliationService.java:186-188` 把 `TradeAmt` / `TradeNo` 的驗證放在判斷 `TradeStatus` 之前，空的 `TradeNo` 直接丟例外收成 `QUERY_FAILED`。違反規格 §6「綠界查不到時照未付款處理，不是錯誤」與 §4「`provider_trade_no` 無值時填空字串」。顧客在導向綠界前放棄的訂單（`PENDING_PAYMENT` 的大宗）會整片顯示「查單失敗」，真正的連線異常被假告警淹沒。
+   **修法**：把 `TradeAmt` / `TradeNo` 的解析移到 `"1".equals(status)` 之後；非已付款時允許空的 `trade` 與 null 的 `amount`。並補測試：`TradeStatus=0`、`TradeNo=""`、`TradeAmt=""` → `STILL_UNPAID`。
+
+2. **CSRF 驗收測試無效** —— `ReconciliationTest.java:233-235` 有 csrf 與無 csrf 兩次 `POST` 都打跨店訂單、都期望 403，即使 CSRF 保護被關掉也照樣通過。
+   **修法**：改用該 manager 有權限的 taipei 訂單，無 `csrf()` → 403、有 `csrf()` → 200/409，跨店那條斷言留在 banqiao 訂單上。
+
+另有三項非阻斷建議（`PaymentDate` 時鐘偏移會讓已付款訂單反覆 `QUERY_FAILED`、`pending()` 的無上限撈取與 N+1、報表台灣日期歸屬未真正驗到）記在 PR #9 的 review 中。
+
+**影響評估**：因為 PO 已決定金流先跑 stub、最後才串接綠界，且 `ecpay.reconcile.enabled` 預設為 `false`，這兩項目前**沒有生產影響**。但在進入綠界串接階段之前必須修掉，否則第一次真實查單就會踩到第 1 項。
+
+**G01 原始問題描述**
 
 `EcpayService.callback()` 是目前**唯一**把 ECPAY 訂單從 `PENDING_PAYMENT` 推進到 `PAID` 的路徑。後端從未主動連線到綠界（主程式碼裡沒有任何 HTTP client，也沒有 `@Scheduled` / `@EnableScheduling`）。
 
@@ -102,7 +116,9 @@
 
 ### 排程注意
 
-G06 會改動 `OrderService`，而 PR #9（G01 對帳）也改了同一支檔案且仍在開啟狀態等待修正。**建議 #9 先落地再讓 Codex 開工 G06**，避免兩支分支在 `OrderService` 上衝突。G06 的 Flyway 版號已指定為 **V3**，把 V2 留給 #9。
+PR #9（G01 對帳）已於 2026-09-17 08:32 合併，`OrderService` 的衝突風險解除，**G06 可以直接開工**。G06 的 Flyway 版號用 **V3**：`V2__payment_reconciliation.sql` 已隨 #9 進入主線。
+
+G01 留在主線的兩項缺陷（見上方 P3 段落）建議另開一支 `codex/g01-fixes` 處理，不要夾在 G06 的 PR 裡 —— 兩件事、兩支分支。
 
 ## 修訂紀錄
 
