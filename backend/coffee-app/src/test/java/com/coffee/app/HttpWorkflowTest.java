@@ -1,7 +1,11 @@
 package com.coffee.app;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
+import com.coffee.payments.api.CheckMac;
+import com.coffee.payments.api.TradeQuery;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.CookieManager;
@@ -17,6 +21,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 /** Actual HTTP/cookies/CSRF plus production-style empty-database bootstrap. */
 @SpringBootTest(
@@ -27,10 +32,18 @@ import org.springframework.boot.test.web.server.LocalServerPort;
       "spring.datasource.password=",
       "server.servlet.session.cookie.secure=false",
       "app.seed-demo=false",
+      "ecpay.enabled=true",
+      "ecpay.merchant-id=3002607",
+      "ecpay.hash-key=test-key",
+      "ecpay.hash-iv=test-iv",
+      "app.public-url=https://coffee.example.test",
+      "ecpay.reconcile.enabled=true",
+      "ecpay.reconcile.interval-ms=86400000",
       "app.bootstrap-username=owner@coffee.local",
       "app.bootstrap-password=BootstrapTest!2026"
     })
 class HttpWorkflowTest {
+  @MockitoBean TradeQuery tradeQuery;
   @LocalServerPort int port;
   final ObjectMapper json = new ObjectMapper();
 
@@ -153,5 +166,41 @@ class HttpWorkflowTest {
         java.util.regex.Pattern.compile("src=\"(/assets/[^\"]+\\.js)\"").matcher(html.body());
     assertThat(asset.find()).isTrue();
     assertThat(hq.request("GET", asset.group(1), null, Map.of()).statusCode()).isEqualTo(200);
+
+    // The reconciliation endpoint uses the same real Cookie + CSRF workflow as the UI.
+    var online =
+        customer.request(
+            "POST",
+            "/api/orders",
+            body.replace("CASH", "ECPAY"),
+            Map.of("Idempotency-Key", UUID.randomUUID().toString()));
+    assertThat(online.statusCode()).isEqualTo(200);
+    String onlineId = json.readTree(online.body()).get("id").asText();
+    Map<String, String> fields = new java.util.HashMap<>();
+    fields.put("MerchantID", "3002607");
+    fields.put("MerchantTradeNo", onlineId);
+    fields.put("TradeNo", "T" + onlineId);
+    fields.put("TradeAmt", "290");
+    fields.put("TradeStatus", "1");
+    fields.put("CheckMacValue", CheckMac.sign(fields, "test-key", "test-iv"));
+    when(tradeQuery.query(anyString())).thenReturn(fields);
+    assertThat(
+            customer
+                .request("POST", "/api/payments/reconciliation/" + onlineId, null, Map.of())
+                .statusCode())
+        .isEqualTo(403);
+    assertThat(
+            hq.call("POST", "/api/payments/reconciliation/" + onlineId, null)
+                .get("outcome")
+                .asText())
+        .isEqualTo("CONFIRMED");
+    assertThat(
+            hq.call("GET", "/api/payments/reconciliation/" + onlineId, null).get("attempts").size())
+        .isEqualTo(1);
+    assertThat(
+            hq.call("GET", "/api/reports?month=" + YearMonth.now(ZoneId.of("Asia/Taipei")), null)
+                .get("revenue")
+                .asInt())
+        .isEqualTo(580);
   }
 }
