@@ -41,7 +41,8 @@ public class InitialData implements ApplicationRunner {
           "MANAGER",
           "店長",
           "BRANCH",
-          List.of("ORDER_CREATE", "POS_ORDER", "ORDER_MANAGE", "REPORT_STORE"));
+          List.of(
+              "ORDER_CREATE", "POS_ORDER", "ORDER_MANAGE", "REPORT_STORE", "PAYMENT_RECONCILE"));
       role("HQ", "總部人員", "GLOBAL", Identity.PERMISSIONS);
     }
     if (db.queryForObject("select count(*) from accounts", Integer.class) > 0) return;

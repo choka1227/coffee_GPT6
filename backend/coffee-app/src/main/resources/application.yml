@@ -40,3 +40,10 @@ ecpay:
   merchant-id: ${ECPAY_MERCHANT_ID:}
   hash-key: ${ECPAY_HASH_KEY:}
   hash-iv: ${ECPAY_HASH_IV:}
+  query-timeout-ms: ${ECPAY_QUERY_TIMEOUT_MS:10000}
+  reconcile:
+    enabled: ${ECPAY_RECONCILE_ENABLED:false}
+    interval-ms: ${ECPAY_RECONCILE_INTERVAL_MS:300000}
+    min-age-minutes: ${ECPAY_RECONCILE_MIN_AGE_MINUTES:15}
+    max-age-days: ${ECPAY_RECONCILE_MAX_AGE_DAYS:7}
+    batch-size: ${ECPAY_RECONCILE_BATCH_SIZE:50}
