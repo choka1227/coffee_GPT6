@@ -4,7 +4,7 @@
 | --- | --- |
 | 缺口編號 | G13 |
 | 優先順序 | P0（僅次於 G06） |
-| 規格版本 | v1 |
+| 規格版本 | v1.1（依 PR #12 上 Codex 的 `REQUEST_CHANGES` 修正兩項：§7.1 稽核 `target_id` 長度溢位、§5.5 `fromUnlisted` 的授權競態） |
 | 撰寫 | Claude（PM / SA），2026-09-17 |
 | 實作 | Codex（PG / SD） |
 | 基準 commit | `7b09f4b`（PR #10 合併後的 `feature/init-project`） |
@@ -283,9 +283,14 @@ void setAvailability(Actor a, String branchId, String productId, String availabi
 授權碼的形狀（放在 `CatalogService.setAvailability`）：
 
 ```java
+@Transactional
 public void setAvailability(Actor a, String branchId, String productId, String availability) {
   Problem.check(
       Set.of("AVAILABLE", "SOLD_OUT", "UNLISTED").contains(availability), "供應狀態不正確");
+  // 先取 products 的行鎖，序列化「讀現況 → 決定授權 → 寫入」整段（見 5.5）
+  Problem.check(
+      !db.queryForList("select id from products where id=? for update", productId).isEmpty(),
+      "找不到商品");
   boolean toUnlisted = "UNLISTED".equals(availability);
   boolean fromUnlisted = "UNLISTED".equals(currentAvailability(branchId, productId));
   if (toUnlisted || fromUnlisted) {
@@ -295,13 +300,36 @@ public void setAvailability(Actor a, String branchId, String productId, String a
     a.require("MENU_AVAILABILITY");
     a.branch(branchId);
   }
-  ...
+  ...  // upsert branch_products + 寫 audit_log，同一個交易
 }
 ```
 
 > **`fromUnlisted` 這一段是必要的，不是多餘的防呆。** 少了它，店員可以把總部設定的「本店不供應」直接改成 `AVAILABLE`，等於用店端權限繞過總部決定。
 
 `Actor.customer()`（顧客，scope `SELF`）沒有 `MENU_AVAILABILITY`，會被 `require()` 擋在 403。
+
+### 5.5 `fromUnlisted` 的併發：必須鎖 `products`，不是鎖 `branch_products`（v1.1 新增）
+
+`fromUnlisted` 是**先讀後寫的授權判斷**，沒有序列化就可以繞過：
+
+```
+店端：讀 currentAvailability = AVAILABLE（或無此列）→ 判定走店端分支，通過
+總部：              設為 UNLISTED，commit
+店端：                                     寫入 SOLD_OUT ← 蓋掉只有總部能解除的停供
+```
+
+**單靠 `@Transactional` 擋不住**：本專案預設是 READ COMMITTED，兩個交易各自讀到自己看得到的版本，都能提交。**也不能只鎖 `branch_products` 的現有列** —— 第一次設定時那一列根本不存在，`select ... for update` 鎖不到任何東西，正是最需要保護的情境（總部剛設 `UNLISTED`、店端同時第一次標售完）。
+
+所以鎖**一定存在**的那筆記錄：`products` 的該商品列。
+
+- 一律在 `setAvailability` 進入時、讀 `currentAvailability` **之前**取得 `select id from products where id=? for update`
+- 所有分店對同一商品的可用性變更因此排成一列。這不影響點餐（`sellable()` 是純讀，不取鎖），只序列化低頻的可用性切換
+- 順帶解決「商品不存在」的 404：鎖不到列就是查不到商品
+- 只取這一個鎖，沒有第二個鎖，不會有鎖順序造成的死結
+
+這與第 6 節「兩位顧客同時下單最後一杯、兩單都成立」**不是同一件事，不能套用那裡的免鎖理由**：那邊是刻意接受的業務競態（人工標記不是庫存扣減），這邊是**授權邊界被繞過**，屬於資安缺陷。`AGENTS.md` 的授權章節要求新端點決定資料範圍並驗證越權會被擋，這個競態就是越權的一種形式。
+
+> 如果實作上發現 `for update` 與 `JdbcTemplate` 的組合在此處有問題（例如需要 `queryForList` 以外的寫法），採用等效的原子條件更新（`update ... where availability 仍等於讀到的值`，影響列數為 0 就重讀重判）亦可，但**必須涵蓋「尚無覆寫列」的情境**，且要在 PR 描述寫明改用哪個做法。
 
 ---
 
@@ -339,11 +367,30 @@ for (LineInput l : q.items()) {
 | --- | --- |
 | `id` | `Ids.next()` |
 | `actor_id` | `a.id()` |
-| `action` | `MENU_AVAILABILITY` |
-| `target_id` | `{branchId}:{productId}:{availability}`（`target_id` 是 `VARCHAR(80)`，足夠） |
+| `action` | `MENU_AVAILABILITY_{availability}`，即 `MENU_AVAILABILITY_AVAILABLE` / `MENU_AVAILABILITY_SOLD_OUT` / `MENU_AVAILABILITY_UNLISTED` |
+| `target_id` | `{branchId}:{productId}` |
 | `created_at` | `System.currentTimeMillis()` |
 
 寫入與 `setAvailability` 同一個 `@Transactional`。
+
+### 7.1 為什麼狀態放在 `action` 而不是 `target_id`（v1.1 修正）
+
+**本節 v1 的寫法會讓稽核寫入直接失敗。** `target_id` 是 `VARCHAR(80)`（`V1__coffee_schema.sql:15`），而 `Ids.next()` 產生的是 36 字元 UUID（`Ids.java:6-8`），`branches.id` 與 `products.id` 都是 `VARCHAR(36)`：
+
+```
+36 (branchId) + 1 (:) + 36 (productId) + 1 (:) + 9 ("AVAILABLE") = 83 > 80
+```
+
+`SOLD_OUT` / `UNLISTED` 是 82，一樣超。demo seed 用的是 `taipei`、`latte` 這種短 id 所以測不出來，**正式環境第一次設定就會炸**，而且因為稽核與設定同一個交易，整筆設定會被回滾 —— 店員按「售完」會直接失敗。
+
+修正後：
+
+- `target_id` = `36 + 1 + 36 = 73` ≤ 80 ✅
+- `action` = 最長 `MENU_AVAILABILITY_AVAILABLE` 共 26 字元 ≤ `VARCHAR(40)` ✅
+
+狀態改由 `action` 承載，可追溯性不變（誰、哪一店、哪個商品、設成什麼、何時），且**不需要新增 migration 擴充欄位**，也就不必動 `V1`。
+
+> **給 G11 的備註**：稽核查詢端點設計 `action` 的篩選條件時，`MENU_AVAILABILITY_` 是一組前綴，不是單一值。
 
 本規格**不做**稽核查詢端點 —— 那是 G11 的範圍。這裡只負責讓資料留下來，不然 G11 做完也查不到任何歷史。
 
@@ -397,14 +444,14 @@ coffee-catalog     菜單、售價、成本、上下架     依賴：shared
 | 項目 | 內容 |
 | --- | --- |
 | 動到 | `Catalog.java`（**只新增** `BranchAvailability` record、`availability()`、`setAvailability()`）、`CatalogService.java`、`CatalogController.java`、`today()` helper、稽核寫入 |
-| 規格章節 | 第 5.2 節的兩個 `/api/menu/availability` 端點、第 5.3 節、第 5.4 節、第 7 節 |
+| 規格章節 | 第 5.2 節的兩個 `/api/menu/availability` 端點、第 5.3 節、第 5.4 節、**第 5.5 節（`products` 行鎖）**、第 7 節、**第 7.1 節（稽核欄位長度）** |
 | 為什麼可獨立合併 | `list()` 與 `sellable()` 的簽章**這一階段不動**，所以 `coffee-orders` 與前端完全不受影響，既有測試全綠。新端點是新增的，沒有既有呼叫端 |
 
 驗收子集：第 9 節「售完與供應設定」中**設定側**的四條（總部可設 `UNLISTED`、店端不可設 `UNLISTED`、店端不可把 `UNLISTED` 改回 `AVAILABLE`、跨店 403）、「稽核」整段，以及第 10.2、10.3、10.4 三節的測試。
 
 > `today()` helper 在這一階段就要寫好並被 `availability()` 用到，S3 直接沿用同一個。不要在 S3 再寫第二份日期計算 —— 兩份會漂。
 >
-> 第 5.4 節的 `fromUnlisted` 授權檢查屬於這一階段，**不要留到 S3**。少了它，店端權限就能推翻總部決定，而 S2 單獨合併後這個端點已經是活的。
+> 第 5.4 節的 `fromUnlisted` 授權檢查屬於這一階段，**不要留到 S3**。少了它，店端權限就能推翻總部決定，而 S2 單獨合併後這個端點已經是活的。**第 5.5 節的 `products` 行鎖與它是同一件事的一體兩面** —— 只做檢查不做序列化，一樣繞得過去，兩者要在同一個 commit。
 
 ### S3 — 菜單查詢與下單套用（破壞性變更，不能再切）
 
@@ -447,6 +494,7 @@ coffee-catalog     菜單、售價、成本、上下架     依賴：shared
 - [ ] 售完標記在台北時區隔日自動失效（測試用可注入的日期或直接寫入昨日的 `sold_out_date` 驗證）
 - [ ] 解除售完後恢復可售
 - [ ] 總部可設 `UNLISTED`；店端無法設 `UNLISTED`，也無法把 `UNLISTED` 改成 `AVAILABLE`
+- [ ] **併發下也擋得住**：總部設 `UNLISTED` 與店端設 `SOLD_OUT` 同時進行時，最終狀態不會是店端蓋掉 `UNLISTED`（見 §5.5 與 §10.4）
 - [ ] `products.active=false` 時，分店設 `AVAILABLE` 仍不可售
 
 **下單**
@@ -459,8 +507,9 @@ coffee-catalog     菜單、售價、成本、上下架     依賴：shared
 
 **稽核**
 
-- [ ] 每次 `setAvailability` 成功都在 `audit_log` 留下一列，`action='MENU_AVAILABILITY'`、`actor_id` 正確
+- [ ] 每次 `setAvailability` 成功都在 `audit_log` 留下一列，`action` 為 `MENU_AVAILABILITY_{狀態}`、`actor_id` 正確
 - [ ] 失敗的設定（403 / 400）不留稽核列
+- [ ] **用 36 字元 UUID 的 `branchId` 與 `productId`**（不是 demo seed 的短 id）設定成功，且稽核列確實寫入 —— `target_id` 73 字元未超出 `VARCHAR(80)`、`action` 未超出 `VARCHAR(40)`
 
 **前端**
 
@@ -521,7 +570,19 @@ coffee-catalog     菜單、售價、成本、上下架     依賴：shared
 
 - `availability` 傳空字串、null、`"sold_out"`（小寫）→ 400
 - 不存在的 `productId` → 404
+- **最大長度識別碼**：用 36 字元 UUID 的 `branchId` / `productId` 設定成功，稽核列確實寫入（釘住 §7.1 的長度修正）
 - 兩位顧客同時對最後一杯下單 → **兩單都成立**（第 6 節的刻意設計，寫成測試釘住這個行為，避免日後有人「順手修掉」）
+
+**受控併發：總部停供 vs 店端變更（§5.5）**
+
+兩條都要寫，用兩個執行緒或兩個交易，以 latch 控制交錯順序，不要靠 `Thread.sleep` 賭時序：
+
+| 情境 | 期望 |
+| --- | --- |
+| 店端讀到 `AVAILABLE`／無覆寫列後，總部先 commit `UNLISTED`，店端才寫 `SOLD_OUT` | 店端那筆**失敗（403）或被序列化後重新判定而失敗**；最終狀態必為 `UNLISTED` |
+| 同上，但**一開始就沒有覆寫列** | 同上 —— 這條是重點，鎖 `branch_products` 的實作會在這裡破功 |
+
+斷言要看**最終 DB 狀態**（`branch_products.availability` 仍是 `UNLISTED`），不要只看 HTTP 狀態碼 —— 兩者都要對。
 
 ---
 
