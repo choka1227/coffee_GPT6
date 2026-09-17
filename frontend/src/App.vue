@@ -31,6 +31,12 @@ const auth = useAuth(),
 const links = computed(() =>
   [
     {
+      path: "/payments/reconciliation",
+      label: "金流對帳",
+      icon: ShieldCheck,
+      show: !auth.customer && auth.can("PAYMENT_RECONCILE"),
+    },
+    {
       path: "/",
       label: auth.customer ? "開始點餐" : "櫃台點餐",
       icon: Coffee,

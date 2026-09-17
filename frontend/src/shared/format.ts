@@ -29,6 +29,7 @@ export const statuses: Record<string, string> = {
   CANCELLED: "已取消",
 };
 export const permissions: Record<string, string> = {
+  PAYMENT_RECONCILE: "金流對帳",
   ORDER_CREATE: "點餐",
   POS_ORDER: "櫃台收銀",
   ORDER_MANAGE: "門市訂單",

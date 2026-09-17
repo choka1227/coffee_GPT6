@@ -7,6 +7,7 @@ public interface Identity {
   List<String> PERMISSIONS =
       List.of(
           "ORDER_CREATE",
+          "PAYMENT_RECONCILE",
           "POS_ORDER",
           "ORDER_MANAGE",
           "REPORT_STORE",

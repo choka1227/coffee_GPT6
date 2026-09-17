@@ -7,6 +7,11 @@ import { notify } from "./shared/notice";
 import "./style.css";
 const routes = [
   {
+    path: "/payments/reconciliation",
+    component: () => import("./modules/payments/ReconciliationView.vue"),
+    meta: { permissions: ["PAYMENT_RECONCILE"] },
+  },
+  {
     path: "/login",
     component: () => import("./modules/identity/LoginView.vue"),
   },
