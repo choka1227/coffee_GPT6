@@ -54,50 +54,78 @@ if (!"1".equals(status)) { outcome = "STILL_UNPAID"; ... }
 
 ### 修法
 
-把 `TradeAmt` / `TradeNo` 的解析與驗證移到 `"1".equals(status)` 成立之後：
+核心是**把「解析」與「要求」拆開**，不要在還沒分流時就對欄位提出要求：
 
-- **非已付款時**（`TradeStatus != "1"`）：`trade` 允許空字串、`amount` 允許 `null`（`payment_reconciliations.trade_amount` 本來就 nullable）。這條路徑只寫稽核表，不動 `orders`
-- 只有要比對金額並入帳時，`TradeAmt` 才必須是合法 int，解析失敗才是 `QUERY_FAILED`（G01 §10 的規則不變）
-- `TradeNo` 非空時一律要驗格式（`[A-Za-z0-9]{1,64}`）
+- **解析一律照做，失敗不立刻當錯誤**：`TradeStatus` 先取（這是分流依據，格式不合法才是 `QUERY_FAILED`）；`TradeNo` 取到什麼算什麼，非空時才驗格式 `[A-Za-z0-9]{1,64}`；`TradeAmt` 解析失敗先記成「無法比對」，不要直接丟例外
+- **要求按分支提出**，依下一節的優先序決定：只有需要比對金額的分支（`AMOUNT_MISMATCH` 判定與 `CONFIRMED`）才要求 `TradeAmt` 是合法 int，只有 `CONFIRMED` 才要求 `TradeNo` 非空
+- `payment_reconciliations.trade_amount` 本來就 nullable，不入帳的分支寫 `null` 沒有問題
 
-### 空 `TradeNo` 的容許範圍僅限非已付款分支
+**不要寫成「`TradeStatus != "1"` 才容許空值」** —— `SIMULATED` 與 `AMOUNT_MISMATCH` 的 `TradeStatus` 都是 `"1"`，但同樣不入帳、同樣容許空 `TradeNo`。判斷依據是「這個分支會不會寫 `orders`」，不是 `TradeStatus` 的值。
 
-**`CONFIRMED` 分支（要入帳）必須要有合法且非空的 `TradeNo`，空字串一律視為 `QUERY_FAILED`，不得入帳。**
+### 空 `TradeNo` 的容許範圍僅限「不入帳」的分支
 
-原因是 `orders.provider_trade_no` 有 **UNIQUE 約束**（`V1__coffee_schema.sql`）：
+**先確立判斷優先序。** 沿用 G01 §6 決策表，由上而下，第一個成立的條件勝出：
+
+| # | 條件 | `outcome` | 動 `orders` 嗎 |
+| --- | --- | --- | --- |
+| 1 | HTTP 失敗 / timeout / 簽章驗證失敗 | `QUERY_FAILED` | 否 |
+| 2 | `TradeStatus != "1"` | `STILL_UNPAID` | 否 |
+| 3 | `TradeStatus == "1"` 且 `SimulatePaid == "1"` | `SIMULATED` | 否 |
+| 4 | `TradeStatus == "1"` 且 `TradeAmt != orders.total` | `AMOUNT_MISMATCH` | 否 |
+| 5 | `TradeStatus == "1"`、非模擬、金額相符 | `CONFIRMED` | **是** |
+
+**`TradeNo` 的非空要求只作用在第 5 條**，因為那是唯一會呼叫 `confirmOnline()`、把值寫進 `orders.provider_trade_no` 的分支。前四條只寫 `payment_reconciliations`，那張表的 `provider_trade_no` 沒有唯一性要求，空字串照收。
+
+所以正確的實作順序是：**`TradeNo` 是否為空，要等第 3、4 條都不成立之後才檢查。** 不是一看到 `TradeStatus=1` 就要求非空 —— 模擬付款與金額不符本來就不入帳，沒有理由因為少了一個交易編號而被改判成 `QUERY_FAILED`，那會讓待查核清單把「綠界說金額不符」這種需要人處理的訊號，混進「查單失敗」裡。
+
+| 分支 | 寫 `orders` | `TradeNo` 空字串 | `TradeAmt` 缺漏 |
+| --- | --- | --- | --- |
+| `STILL_UNPAID` | 否 | **容許**，寫入空字串 | 容許，寫入 `null` |
+| `SIMULATED` | 否 | **容許** | 容許 |
+| `AMOUNT_MISMATCH` | 否 | **容許** | 不容許（要能比對才判得出不符）→ `QUERY_FAILED` |
+| `CONFIRMED` | **是** | **不容許 → `QUERY_FAILED`** | 不容許 → `QUERY_FAILED` |
+
+### 為什麼 `CONFIRMED` 不能放行空 `TradeNo`
+
+`orders.provider_trade_no` 有 **UNIQUE 約束**（`V1__coffee_schema.sql`）：
 
 ```sql
 provider_trade_no VARCHAR(64) UNIQUE
 ```
 
-而 `OrderService.confirmOnline()` 是直接把傳進來的 `trade` 寫進該欄位，沒有任何非空檢查。所以如果放行空字串入帳：
+而 `OrderService.confirmOnline()` 直接把傳進來的 `trade` 寫進該欄位，沒有任何非空檢查。放行空字串入帳會造成三件事，**由重到輕**：
 
-1. 第一筆空 `TradeNo` 的訂單入帳成功，`provider_trade_no` 寫入 `''`
-2. 第二筆再來就撞 UNIQUE，整個交易回滾 —— 而且錯誤訊息會是資料庫層的英文約束違反，不是寫給營運人員看的中文
-3. 更糟的是，`confirmOnline` 的重複通知判斷是 `Objects.equals(old, trade)`。兩筆不同訂單的 `provider_trade_no` 都是 `''` 時，這個比對會把不相干的交易誤判為「同一筆重複通知」
+1. **該訂單永遠失去金流識別碼。** `provider_trade_no` 寫入 `''`，日後要跟綠界對帳、追爭議交易、退款（G03）時無從比對。這是不可逆的 —— 訂單已經是 `PAID`，對帳流程不會再碰它
+2. **把這筆訂單的回呼路徑堵死。** 之後綠界真正的回呼帶著實際 `TradeNo` 進來時，`confirmOnline` 走已付款分支比對 `Objects.equals("", 實際TradeNo)` → 不相等 → 丟 `Problem("付款交易編號不符")`。回呼收到非 `1|OK`，綠界重試耗盡後放棄
+3. **第二筆空 `TradeNo` 入帳時撞 UNIQUE**，交易回滾，錯誤訊息是資料庫層的英文約束違反，不是寫給營運人員看的中文
 
-實務上這個組合本來就不該發生 —— 綠界回報 `TradeStatus=1` 卻不給 `TradeNo`，代表回應本身有問題，拒絕入帳是正確的保守處置（G01 §14：「寧可該入帳的沒入帳，留紀錄等人處理」）。
+實務上這個組合本來就不該發生 —— 綠界回報 `TradeStatus=1`、非模擬、金額相符，卻不給 `TradeNo`，代表回應本身有問題。拒絕入帳並記為 `QUERY_FAILED` 是正確的保守處置（G01 §14：「寧可該入帳的沒入帳，留紀錄等人處理」）。
 
-所以三個分支的容許度是不對稱的，實作時不要寫成同一條規則：
-
-| 分支 | `TradeNo` 空字串 | `TradeAmt` 缺漏 |
-| --- | --- | --- |
-| `STILL_UNPAID` / `SIMULATED` | **容許**，寫入空字串 | 容許，寫入 `null` |
-| `AMOUNT_MISMATCH` | 容許 | 不容許（要比對才知道不符） |
-| `CONFIRMED` | **不容許 → `QUERY_FAILED`** | 不容許 → `QUERY_FAILED` |
-
-> 這一節是 Codex 在 PR #11 的審查意見（2026-09-17）指出的。原本的寫法「空字串直接接受並寫入空字串」沒有限定分支，照字面實作會讓 `CONFIRMED` 也放行，踩到上述 UNIQUE 問題。意見成立，已對照 `V1__coffee_schema.sql` 與 `OrderService.confirmOnline()` 確認。
+> **更正（2026-09-17）**：本節初稿曾寫「兩筆不同訂單的 `provider_trade_no` 都是空字串時，`Objects.equals(old, trade)` 會把不相干的交易誤判為同一筆重複通知」。**這是錯的。** `confirmOnline` 取 `old` 用的是 `select provider_trade_no from orders where id=?`，比對範圍在同一筆訂單內，不會跨訂單；而且 UNIQUE 本來就擋住第二筆空字串持久化，那個狀態不可達。由 Codex 在 PR #13 的審查指出，已對照程式碼確認。真正的風險是上面第 1、2 點。
 
 ### 驗收
 
+**未付款分支**
+
 - [ ] `TradeStatus=0`、`TradeNo=""`、`TradeAmt=""` → `STILL_UNPAID`，訂單維持 `PENDING_PAYMENT`
 - [ ] `TradeStatus=0`、`TradeNo=""`、`TradeAmt="0"` → `STILL_UNPAID`
-- [ ] `TradeStatus=1`、`TradeAmt` 非數字 → 仍然是 `QUERY_FAILED`，不入帳
-- [ ] `TradeStatus=1`、`TradeNo` 格式不合法 → 仍然是 `QUERY_FAILED`，不入帳
-- [ ] **`TradeStatus=1`、`TradeNo=""` → `QUERY_FAILED`，不入帳**（保護 `orders.provider_trade_no` 的 UNIQUE 約束）
-- [ ] 連續兩筆不同訂單都回 `TradeStatus=1` 且 `TradeNo=""` → 兩筆都不入帳，且第二筆不得出現資料庫層的約束違反錯誤
-- [ ] 簽章驗證失敗、HTTP 失敗、timeout → 仍然是 `QUERY_FAILED`（既有行為不變）
-- [ ] `payment_reconciliations.provider_trade_no` 在 `STILL_UNPAID` 時寫入空字串
+
+**已付款但不入帳的兩個分支 —— 空 `TradeNo` 不得改變判定結果**
+
+- [ ] `TradeStatus=1`、`SimulatePaid=1`、`TradeNo=""` → **`SIMULATED`**，不入帳。**不得**因為 `TradeNo` 為空而變成 `QUERY_FAILED`（第 3 條先成立）
+- [ ] `TradeStatus=1`、非模擬、`TradeAmt` 與 `orders.total` 不符、`TradeNo=""` → **`AMOUNT_MISMATCH`**，不入帳，`detail` 仍要寫明兩邊金額
+- [ ] 上述兩筆的 `payment_reconciliations.provider_trade_no` 寫入空字串，`trade_amount` 依規格寫入
+
+**入帳分支 —— 這裡才要求非空**
+
+- [ ] `TradeStatus=1`、非模擬、金額相符、`TradeNo=""` → **`QUERY_FAILED`**，不入帳
+- [ ] `TradeStatus=1`、非模擬、金額相符、`TradeNo` 格式不合法 → `QUERY_FAILED`，不入帳
+- [ ] `TradeStatus=1`、非模擬、`TradeAmt` 非數字或溢位 → `QUERY_FAILED`，不入帳
+
+**共通**
+
+- [ ] 簽章驗證失敗、HTTP 失敗、timeout → `QUERY_FAILED`（既有行為不變）
+- [ ] **任何分支都不會讓 `orders.provider_trade_no` 被寫入空字串**（這是本節所有規則的共同目的，請用一條斷言直接釘住）
 
 `ReconciliationTest.failuresNeverCreditOrders` 現有的 `"unpaid"` 案例沿用了 `response()` 的完整欄位，所以蓋不到這條路徑 —— 請新增案例，不要只改既有的。
 
