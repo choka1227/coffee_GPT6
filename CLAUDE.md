@@ -47,17 +47,25 @@ git diff --stat origin/feature/init-project...refs/pr/<N> # GitHub 顯示的（�
 git log --format='%h | %an | %s'
 ```
 
-| git author | GitHub 帳號 | 是誰 |
-| --- | --- | --- |
-| `Codex` | `iisihsin-codex` | Codex 的實作 |
-| `Claude` | `ge179357-claude` | Claude 寫的規格或文件 |
-| `choka1227` / `2608009` | `choka1227` | HSIN 本人 |
+| git author (`%an`) | GitHub 帳號 | head 分支 | 是誰 |
+| --- | --- | --- | --- |
+| `Codex` | `iisihsin-codex` | `codex/*` | Codex 的實作 |
+| `Claude` | `choka1227` | `claude/*` | Claude 寫的規格或文件 |
+| `choka1227` / `2608009` | `choka1227` | 其他 | HSIN 本人 |
 
-**判斷 PR 發起者一律看 GitHub author，不要看 commit 訊息：**
+PO 於 2026-09-17 決定：Claude 的 GitHub 操作改用 `choka1227` 帳號（不再使用
+`ge179357-claude`）。因此 **GitHub author 一欄無法區分 Claude 與 HSIN**，要靠
+head 分支前綴 `claude/`、PR 標題前綴 `[Claude]` 與 commit author `Claude` 來分辨。
+Codex 仍是獨立的 `iisihsin-codex`，互審關係不受影響。
+
+**判斷 PR 發起者一律看 GitHub author + head 分支，不要看 commit 訊息：**
 
 ```bash
-gh pr view <N> --json author --jq '.author.login'
+gh pr view <N> --json author,headRefName --jq '"\(.author.login) \(.headRefName)"'
 ```
+
+**Claude 不審 `claude/*` 分支的 PR**（那是自己發的），也不審 HSIN 本人手動開的 PR。
+只審 author 為 `iisihsin-codex` 的 PR。
 
 ---
 
@@ -67,7 +75,14 @@ gh pr view <N> --json author --jq '.author.login'
 git -c user.name="Claude" -c user.email="329894608+ge179357-claude@users.noreply.github.com" commit -m "docs: ..."
 ```
 
+commit author 仍保留 `Claude` / `ge179357-claude@users.noreply.github.com`，這是刻意的：
+GitHub 操作雖然改用 `choka1227` 帳號，但 `git log` 仍需要分得出哪些 commit 是 Claude 寫的、
+哪些是 HSIN 本人寫的。**這個 email 只是 commit 上的作者標記，不代表用哪個帳號推送。**
+
 分支用 `claude/<主題>`，例如 `claude/spec-wave0`。與 Codex 的 `codex/<主題>` 分開，一個 PR 一個專屬分支，base 一律 `feature/init-project`（本 repo 的主線不是 `main`，理由見 AGENTS.md）。
+
+PR 標題一律加 `[Claude] ` 前綴，例如 `[Claude] docs: 新增 G06 選項模型規格書`。這是 Codex
+與 HSIN 分辨「這個 `choka1227` 的 PR 是 Claude 發的」的依據之一。
 
 ---
 
