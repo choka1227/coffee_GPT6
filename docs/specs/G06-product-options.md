@@ -68,6 +68,7 @@ else {
 - 點餐時的選項驗證與加價重算
 - 訂單項目的選項快照
 - 既有溫度／甜度遷移進新模型
+- **`InitialData` 的商品 seed 後綁定預設選項，以及 `order_items` seed 的欄位清單修正**（見第 4.3 節）
 - `ReportService` 兩支彙整 SQL 的修正
 - 前端點餐畫面的選項選擇 UI
 
@@ -85,7 +86,7 @@ else {
 | `coffee-catalog` | 主要實作位置：選項群組／項目的 CRUD、查詢、`Catalog.Product` 擴充 |
 | `coffee-orders` | 改用 `Catalog` 的選項定義做驗證與加價；刪除 `validateOptions` 的硬編規則；快照選項 |
 | `coffee-reporting` | 兩支商品彙整 SQL 改為把加價計入 |
-| `coffee-app` | Flyway migration |
+| `coffee-app` | Flyway migration；`InitialData` 的預設綁定與 `order_items` seed 修正 |
 | `frontend/src/modules/catalog` | 選項維護畫面 |
 | `frontend/src/modules/ordering` | 點餐時的選項選擇 |
 
@@ -176,6 +177,7 @@ INSERT INTO option_items(id,group_id,name,price_delta,cost_delta,active,sort_ord
   ('sugar-full','sugar','正常糖',0,0,true,4);
 
 -- 既有規則：非「手作烘焙」的商品才有溫度與甜度
+-- 注意：這一段只對「執行 V3 當下已存在的商品」生效，見 4.3 節
 INSERT INTO product_option_groups(product_id,group_id,sort_order)
   SELECT id,'temperature',1 FROM products WHERE category <> '手作烘焙'
   UNION ALL
@@ -185,6 +187,53 @@ INSERT INTO product_option_groups(product_id,group_id,sort_order)
 `price_delta` 全部為 0，所以**遷移不改變任何既有商品的售價**。遷移後 `validateOptions` 的行為由這份資料完整取代。
 
 歷史 `order_items` 的 `temperature` / `sugar` 字串**不回填**進 `order_item_options`（見第 13 節待 PO 決定第 3 項）。舊訂單繼續由這兩個欄位顯示，新訂單由 `order_item_options` 顯示，前端兩者都要能渲染。
+
+### 4.3 `InitialData` 必須一起改（全新資料庫會壞在這裡）
+
+Flyway 在應用啟動時執行，`InitialData` 是 `ApplicationRunner`，**在 Flyway 之後才跑**。所以有兩個問題，兩個都會讓全新資料庫壞掉：
+
+**問題一：全新資料庫上 V3 的預設綁定是空的。**
+
+V3 的 `INSERT ... SELECT FROM products` 在既有資料庫上正確（商品已存在），但在全新資料庫上執行時 `products` 還是空的 —— demo 商品要等 `InitialData` 才建立。結果是所有 demo 飲品**一個選項群組都沒綁**，溫度與甜度整個消失。
+
+**修法**：`InitialData` 在 seed 完商品之後，補上預設綁定。`InitialData` 每次啟動都會執行，所以這段必須是冪等的：
+
+```java
+// 在 products seed 之後
+for (String[] p : ps)
+  if (!p[3].equals("手作烘焙"))
+    for (String[] g : new String[][] {{"temperature", "1"}, {"sugar", "2"}})
+      db.update(
+          "insert into product_option_groups(product_id,group_id,sort_order)"
+              + " select ?,?,? where not exists(select 1 from product_option_groups"
+              + " where product_id=? and group_id=?)",
+          p[0], g[0], Integer.parseInt(g[1]), p[0], g[0]);
+```
+
+實作方式不限（`ON CONFLICT DO NOTHING` 也可以，但要確認 H2 的 PostgreSQL 模式支援），**但必須冪等**，重複啟動不得失敗也不得產生重複列。
+
+**問題二：`order_items` 的 seed 會因欄位數不符而啟動失敗。**
+
+`InitialData.java:130` 目前是：
+
+```java
+db.update("insert into order_items values(?,?,?,?,?,?,?,?,?,?)", ...)   // 10 個位置參數，無欄位名稱
+```
+
+V3 用 `ALTER TABLE` 加了 `options_price` 與 `options_cost` 之後，`order_items` 變成 12 欄，這句十參數的位置式 INSERT 會直接拋錯，`app.seed-demo=true` 的環境**啟動就失敗**。
+
+**修法**：改為明確欄位清單。兩個新欄位有 `DEFAULT 0`，所以列出原本的十欄即可：
+
+```java
+db.update(
+    "insert into"
+        + " order_items(id,order_id,product_id,name,category,unit_price,unit_cost,quantity,temperature,sugar)"
+        + " values(?,?,?,?,?,?,?,?,?,?)", ...)
+```
+
+這些 seed 出來的是歷史訂單，`temperature` / `sugar` 保留原本的字串值、不建立 `order_item_options`，正好可以當成「遷移前的歷史訂單」測試資料。
+
+**一般規則**：本規格對既有表新增欄位，Codex 開工時請先 `grep` 全專案有沒有其他不帶欄位名稱的 `insert into <該表> values(...)`，一併改成明確欄位清單。目前已知只有 `InitialData.java:130` 這一處，但請自行確認。
 
 ---
 
@@ -199,7 +248,10 @@ record OptionItem(String id, String groupId, String name, int priceDelta, int co
 record OptionGroup(String id, String name, String selection, int minSelect, int maxSelect,
                    boolean active, int sortOrder, List<OptionItem> items) {}
 
-/** 點餐與菜單顯示用：某商品綁定的、且啟用中的選項群組，依 sortOrder 排序。 */
+/**
+ * 點餐與菜單顯示用：某商品綁定的、且啟用中的選項群組，依 sortOrder 排序。
+ * 回傳的 OptionItem 一律 costDelta=0，見第 5.1 節。
+ */
 List<OptionGroup> productOptions(String productId);
 
 /** 後端重算加價的唯一入口。回傳已解析、已驗證的選項快照；任何違規一律丟 Problem。 */
@@ -218,6 +270,27 @@ void bindProductOptions(Actor a, String productId, List<String> groupIds);
 `Catalog.Product` 增加一個欄位供菜單顯示：`List<OptionGroup> optionGroups`（`GET /api/menu` 帶出來，`POST /api/menu` 忽略這個欄位）。
 
 **`resolveOptions` 是本規格的核心。** `coffee-orders` 只呼叫它、只相信它的回傳值，所有驗證與定價都在 `coffee-catalog` 裡完成。這樣加價規則只有一個實作位置。
+
+### 5.1 選項成本絕對不能外流到菜單回應
+
+`CatalogService.list(actor, manage)` 目前對非管理呼叫端**刻意把 `Product.cost` 重建為 `0`**（`CatalogService.java:41-51`）。成本是內部經營資料，不給顧客也不給收銀員看。
+
+`optionGroups` 嵌進 `Product` 之後，`GET /api/menu` 會把整棵樹序列化出去。**如果 `OptionItem.costDelta` 照實帶出來，等於從旁邊繞過上面那道既有保護** —— 顧客可以直接讀到「換燕麥奶的成本是 12 元」。
+
+規則（比照既有 `cost` 的處理方式，不要另創機制）：
+
+| 路徑 | `costDelta` |
+| --- | --- |
+| `GET /api/menu`（`list(a, false)`，任何登入者） | **一律 `0`** |
+| `GET /api/menu?manage=true`（`MENU_MANAGE` + `global()`） | 真實值 |
+| `GET /api/menu/options`（`MENU_MANAGE` + `global()`） | 真實值 |
+| `productOptions(productId)` | **一律 `0`**（它是給菜單顯示用的） |
+| `resolveOptions(...)` → `ResolvedOption.costDelta` | 真實值。**這是模組內呼叫，不是 HTTP 回應**，由 `coffee-orders` 寫進 `order_items.options_cost` |
+| 訂單回應的 `items[].options[]` | **不含任何成本欄位**（比照 `Orders.Line` 本來就沒有 `unitCost`） |
+
+`ResolvedOption` 帶真實成本是必要的 —— `options_cost` 要寫進資料庫供報表算毛利。但它**不得**出現在任何送到瀏覽器的 DTO 裡。`Orders.Line` 新增的 `options` 欄位，其 record 只放 `groupName` / `optionName` / `priceDelta`，不放 `costDelta`。
+
+同理，`order_item_options.cost_delta` 只有 `coffee-reporting` 的彙整 SQL 會讀，不經任何端點回傳。
 
 ---
 
@@ -314,6 +387,8 @@ void bindProductOptions(Actor a, String productId, List<String> groupIds);
 
 每個 product 多帶 `optionGroups`，內容是該商品綁定且啟用中的群組與項目，依 `sortOrder` 排序。無綁定時回空陣列。
 
+**`items[].costDelta` 一律為 `0`**，比照同一支回應裡 `cost` 已經是 `0` 的既有行為（第 5.1 節）。只有 `manage=true` 的呼叫端拿得到真實成本。
+
 ### 8.3 選項維護（總部）
 
 三個端點都需要 `MENU_MANAGE` 且 `Actor.global()`，比照 `CatalogService.save()` 的既有寫法（`CatalogService.java:62-63`）。都需要 CSRF。
@@ -346,12 +421,16 @@ void bindProductOptions(Actor a, String productId, List<String> groupIds);
 
 **不新增權限常數。** 選項是菜單的一部分，沿用 `MENU_MANAGE`：
 
-| 操作 | 要求 |
-| --- | --- |
-| `GET /api/menu`（含 optionGroups） | 登入即可，比照既有菜單查詢 |
-| `GET /api/menu/options` | `MENU_MANAGE` + `global()` |
-| 三個維護端點 | `MENU_MANAGE` + `global()` |
-| 點餐時選擇選項 | `ORDER_CREATE`，比照既有下單 |
+| 操作 | 要求 | 成本可見性 |
+| --- | --- | --- |
+| `GET /api/menu`（含 optionGroups） | 登入即可，比照既有菜單查詢 | `cost` 與 `costDelta` 皆為 `0` |
+| `GET /api/menu?manage=true` | `MENU_MANAGE` + `global()` | 真實成本 |
+| `GET /api/menu/options` | `MENU_MANAGE` + `global()` | 真實成本 |
+| 三個維護端點 | `MENU_MANAGE` + `global()` | 真實成本 |
+| 點餐時選擇選項 | `ORDER_CREATE`，比照既有下單 | 回應不含成本 |
+| 查看訂單明細 | 比照既有訂單查詢 | 回應不含成本 |
+
+成本可見性的規則見第 5.1 節。**店長（`BRANCH` scope）也看不到成本** —— 既有的 `list(a, manage)` 對 `manage=true` 同時要求 `MENU_MANAGE` 與 `global()`，本規格不放寬這點。
 
 選項是全鏈共用的，沒有分店資料範圍問題。分店各自覆寫是 G13 的事，本版不做。
 
@@ -388,8 +467,13 @@ sum((i.unit_cost+i.options_cost)*i.quantity) as cost
 - [ ] 四張新表與索引建立成功
 - [ ] `order_items` 新增 `options_price` / `options_cost`，`temperature` / `sugar` 改為可為 null
 - [ ] 遷移後 `temperature` / `sugar` 兩個群組與 8 個項目存在，`price_delta` 全為 0
-- [ ] 遷移後所有非「手作烘焙」商品綁定這兩個群組，「手作烘焙」商品一個都沒綁
-- [ ] 空資料庫啟動後 Flyway 遷移到 V3 無錯誤
+- [ ] **既有資料庫升級**：升級前已存在的所有非「手作烘焙」商品綁定這兩個群組，「手作烘焙」商品一個都沒綁
+- [ ] **全新資料庫 + `app.seed-demo=true` 啟動**：demo 的 6 項飲品都綁到溫度與甜度，2 項烘焙商品都沒綁（驗證第 4.3 節問題一已修）
+- [ ] **全新資料庫 + `app.seed-demo=false` 啟動**（`HttpWorkflowTest` 的模式）無錯誤
+- [ ] `InitialData` 的預設綁定是冪等的：連續啟動兩次不失敗、不產生重複列
+- [ ] `InitialData` 的 `order_items` seed 已改為明確欄位清單，demo 環境啟動不再因欄位數不符失敗（驗證第 4.3 節問題二已修）
+- [ ] seed 出的歷史訂單 `options_price` / `options_cost` 為 0，`temperature` / `sugar` 保留原字串
+- [ ] 全專案已無其他不帶欄位名稱的 `insert into order_items values(...)`
 - [ ] **遷移不改變任何既有商品的售價**（以遷移前後的 `products.price` 比對驗證）
 
 **選項模型**
@@ -409,6 +493,14 @@ sum((i.unit_cost+i.options_cost)*i.quantity) as cost
 - [ ] `order_items.unit_price` 維持「不含加價」語意，加價寫在 `options_price`
 - [ ] `order_item_options` 完整快照 `group_name` / `option_name` / `price_delta` / `cost_delta`
 - [ ] 改選項定價後，既有訂單的金額與快照**完全不變**
+
+**成本保護（第 5.1 節）**
+
+- [ ] `GET /api/menu` 對顧客、收銀員、店長回應中，所有 `cost` 與 `costDelta` 皆為 `0`
+- [ ] `GET /api/menu?manage=true` 對總部回應真實 `cost` 與 `costDelta`
+- [ ] `Orders.Line` 新增的 `options` record 沒有任何成本欄位
+- [ ] 訂單查詢回應（`GET /api/orders`、`GET /api/orders/{id}`）不含任何選項成本
+- [ ] `order_items.options_cost` 有正確寫入（供報表用），但不經任何端點回傳
 
 **冪等**
 
@@ -470,6 +562,19 @@ sum((i.unit_cost+i.options_cost)*i.quantity) as cost
 - [ ] 遷移後點「手作烘焙」商品不需要也不能選溫度甜度
 - [ ] 報表：建立含加價的已付款訂單後，`sum(products[].revenue) == revenue`，且 `grossProfit` 已扣掉 `options_cost`
 
+### 成本不外洩測試（第 5.1 節）
+
+- [ ] 顧客、收銀員、店長三種角色各打一次 `GET /api/menu`，**掃過整份 JSON 回應**確認沒有任何非零的 `cost` / `costDelta`。建議用字串或樹走訪斷言，不要只檢查第一個商品 —— 洩漏會發生在巢狀的 `optionGroups[].items[]` 裡
+- [ ] 同三種角色查訂單明細，回應不含任何成本欄位
+- [ ] 總部 `GET /api/menu?manage=true` 拿得到真實 `costDelta`（確認遮蔽沒有做過頭，把管理介面也弄壞）
+- [ ] `resolveOptions` 回傳的 `ResolvedOption.costDelta` 是真實值，且 `order_items.options_cost` 有正確寫入
+
+### 啟動與初始化測試（第 4.3 節）
+
+- [ ] 全新 H2 + `app.seed-demo=true` 啟動後，查 `product_option_groups` 確認 demo 飲品綁定完整
+- [ ] 同一個資料庫再啟動一次不失敗（冪等）
+- [ ] 全新資料庫 + demo seed 後，歷史訂單查得到且 `temperature` / `sugar` 有值
+
 ### 越權測試（`AGENTS.md` 明列必要項）
 
 - [ ] 顧客（`SELF`）呼叫四個維護端點皆得 403
@@ -504,5 +609,7 @@ Codex 實作前如果這幾項未定，請照括號內的**預設值**做，並�
 - 第 8.1 節的 `LineInput` 是**破壞性變更**，前端與既有測試都要同步改。請在 PR 描述誠實列出所有被動到的檔案
 - 第 10 節的報表修正最容易漏。加價進了 `orders.total` 卻沒進商品彙整，報表會安靜地對不起來，沒有任何錯誤訊息
 - 第 7 節是本規格的核心：**任何情況下都不要相信請求裡的金額**。`LineInput` 上不要為了方便而加價格欄位
+- 第 5.1 節同樣不能妥協：`costDelta` 嵌在 `Product.optionGroups` 裡，一不小心就會跟著 `GET /api/menu` 整棵樹序列化出去。既有的 `cost` 遮蔽擋不到巢狀結構
+- 第 4.3 節是 `InitialData` 的兩個坑，**兩個都會讓全新資料庫啟動失敗或資料不完整**，而且在既有資料庫上測不出來。請務必用全新的 H2 實際跑一次 demo seed
 - 版號用 **V3**，V2 留給 PR #9
 - 實作回報寫到 `docs/reports/`
