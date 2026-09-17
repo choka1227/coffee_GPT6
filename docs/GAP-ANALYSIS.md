@@ -25,11 +25,15 @@
 | 編號 | 缺口 | 狀態 | 規格書 |
 | --- | --- | --- | --- |
 | G06 | 商品選項模型與加價 | **規格書已完成，待實作** | [`specs/G06-product-options.md`](specs/G06-product-options.md) |
-| G13 | 分店菜單可用性與售罄 | 未開始 | — |
+| G13 | 分店菜單可用性與售罄 | **規格書已完成，待實作（排在 G06 之後）** | [`specs/G13-branch-menu-availability.md`](specs/G13-branch-menu-availability.md) |
 
 **G06 商品選項模型與加價** —— `order_items.temperature` / `sugar` 是 `VARCHAR(12)` 自由字串，**完全不影響金額**（`OrderService.java:62` 的單價就是 `products.price`）。系統賣不了「加珍珠 +10」「換燕麥奶 +20」這類每天都在賣的加價品項，是唯一直接造成營收短收的缺口，且不依賴任何外部服務。另外 `validateOptions()`（`OrderService.java:100-111`）把分類字串 `"手作烘焙"` 與溫度／甜度的可選集合寫死在 `coffee-orders` 裡，但分類清單其實歸 `coffee-catalog` 管，總部新增分類就會讓點餐端的驗證默默失準。完整規格見 [`specs/G06-product-options.md`](specs/G06-product-options.md)。
 
-**G13 分店菜單可用性與售罄**（第二次盤點新增）—— `products` 表沒有 `branch_id`，`CatalogService.sellable()`（`CatalogService.java:55-59`）只看全域 `active`。三家分店共用同一份菜單與同一組售價。後果：中山店可頌賣完，只能把可頌從**全鏈**下架；也無法做分店限定品項或區域定價。「今天這項賣完」是咖啡廳每天都在做的動作，目前系統做不到。
+**G13 分店菜單可用性與售罄**（第二次盤點新增）—— `products` 表沒有 `branch_id`，`CatalogService.sellable()`（`CatalogService.java:55-59`）只看全域 `active`。三家分店共用同一份菜單與同一組售價。後果：中山店可頌賣完，只能把可頌從**全鏈**下架；也無法做分店限定品項或區域定價。「今天這項賣完」是咖啡廳每天都在做的動作，目前系統做不到。完整規格見 [`specs/G13-branch-menu-availability.md`](specs/G13-branch-menu-availability.md)。
+
+規格採「全鏈一份主檔 + 分店覆寫表（`branch_products`）」，沒有覆寫列時行為與現在完全相同，既有資料零遷移。售完標記記在台北營業日上，隔日自動失效，**不需要引入任何排程作業**。**區域定價（分店各自售價）刻意排除**，它會同時動到金額重算、成本快照與報表毛利，且與 G06 的加價計算相撞 —— 建議另立 **G17**，待 PO 確認。
+
+**排程注意：G06 與 G13 都會修改 `Catalog.sellable()` 的簽章與 `OrderService.create()` 的品項迴圈，不要同時開工。** G06 先實作合併，G13 再從最新主線開分支（G06 用 V3，G13 用 V4）。
 
 ### P3 — 金流（PO 決定延後，最後才串接）
 
@@ -109,7 +113,7 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 ## 下一步建議
 
 1. Codex 依 `specs/G06-product-options.md` 實作選項模型與加價（P0，已可開工）
-2. Claude 產出 G13 分店菜單可用性與售罄規格書
+2. Codex 依 `specs/G13-branch-menu-availability.md` 實作分店可用性與售罄（**G06 合併後**才開工，兩者會撞同一段程式）
 3. Claude 產出 G11 + G15 合併規格書（稽核軌跡與現金日結）
 4. G10 訂單分頁與 N+1（小、確定，可穿插）
 5. 金流那條線（G01–G04）待 PO 宣布進入綠界串接階段後再排
@@ -125,4 +129,5 @@ G01 留在主線的兩項缺陷（見上方 P3 段落）建議另開一支 `code
 | 日期 | 變更 |
 | --- | --- |
 | 2026-09-17 | 建立本檔；完成 G01 規格書 |
+| 2026-09-17 | 完成 G13 規格書（分店菜單可用性與售罄）；記錄 G06 / G13 的施工順序相依；提出 G17（區域定價）待 PO 確認 |
 | 2026-09-17 | 第二次盤點。PO 決定金流整批延後至最後階段，G01–G04 降為 P3；新增 G13（分店菜單與售罄）、G14（營業時間）、G15（現金日結）、G16（顧客自助註冊）四項；G16 自 G12 拆出；G06 升為 P0 並完成規格書；補正 G10 的 N+1 問題與 G11 的實際涵蓋範圍 |
