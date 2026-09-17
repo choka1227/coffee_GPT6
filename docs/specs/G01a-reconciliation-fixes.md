@@ -56,9 +56,37 @@ if (!"1".equals(status)) { outcome = "STILL_UNPAID"; ... }
 
 把 `TradeAmt` / `TradeNo` 的解析與驗證移到 `"1".equals(status)` 成立之後：
 
-- 非已付款時：`trade` 允許空字串、`amount` 允許 `null`（`trade_amount` 欄位本來就 nullable）
+- **非已付款時**（`TradeStatus != "1"`）：`trade` 允許空字串、`amount` 允許 `null`（`payment_reconciliations.trade_amount` 本來就 nullable）。這條路徑只寫稽核表，不動 `orders`
 - 只有要比對金額並入帳時，`TradeAmt` 才必須是合法 int，解析失敗才是 `QUERY_FAILED`（G01 §10 的規則不變）
-- `TradeNo` 非空時仍要驗格式；空字串直接接受並寫入空字串
+- `TradeNo` 非空時一律要驗格式（`[A-Za-z0-9]{1,64}`）
+
+### 空 `TradeNo` 的容許範圍僅限非已付款分支
+
+**`CONFIRMED` 分支（要入帳）必須要有合法且非空的 `TradeNo`，空字串一律視為 `QUERY_FAILED`，不得入帳。**
+
+原因是 `orders.provider_trade_no` 有 **UNIQUE 約束**（`V1__coffee_schema.sql`）：
+
+```sql
+provider_trade_no VARCHAR(64) UNIQUE
+```
+
+而 `OrderService.confirmOnline()` 是直接把傳進來的 `trade` 寫進該欄位，沒有任何非空檢查。所以如果放行空字串入帳：
+
+1. 第一筆空 `TradeNo` 的訂單入帳成功，`provider_trade_no` 寫入 `''`
+2. 第二筆再來就撞 UNIQUE，整個交易回滾 —— 而且錯誤訊息會是資料庫層的英文約束違反，不是寫給營運人員看的中文
+3. 更糟的是，`confirmOnline` 的重複通知判斷是 `Objects.equals(old, trade)`。兩筆不同訂單的 `provider_trade_no` 都是 `''` 時，這個比對會把不相干的交易誤判為「同一筆重複通知」
+
+實務上這個組合本來就不該發生 —— 綠界回報 `TradeStatus=1` 卻不給 `TradeNo`，代表回應本身有問題，拒絕入帳是正確的保守處置（G01 §14：「寧可該入帳的沒入帳，留紀錄等人處理」）。
+
+所以三個分支的容許度是不對稱的，實作時不要寫成同一條規則：
+
+| 分支 | `TradeNo` 空字串 | `TradeAmt` 缺漏 |
+| --- | --- | --- |
+| `STILL_UNPAID` / `SIMULATED` | **容許**，寫入空字串 | 容許，寫入 `null` |
+| `AMOUNT_MISMATCH` | 容許 | 不容許（要比對才知道不符） |
+| `CONFIRMED` | **不容許 → `QUERY_FAILED`** | 不容許 → `QUERY_FAILED` |
+
+> 這一節是 Codex 在 PR #11 的審查意見（2026-09-17）指出的。原本的寫法「空字串直接接受並寫入空字串」沒有限定分支，照字面實作會讓 `CONFIRMED` 也放行，踩到上述 UNIQUE 問題。意見成立，已對照 `V1__coffee_schema.sql` 與 `OrderService.confirmOnline()` 確認。
 
 ### 驗收
 
@@ -66,6 +94,8 @@ if (!"1".equals(status)) { outcome = "STILL_UNPAID"; ... }
 - [ ] `TradeStatus=0`、`TradeNo=""`、`TradeAmt="0"` → `STILL_UNPAID`
 - [ ] `TradeStatus=1`、`TradeAmt` 非數字 → 仍然是 `QUERY_FAILED`，不入帳
 - [ ] `TradeStatus=1`、`TradeNo` 格式不合法 → 仍然是 `QUERY_FAILED`，不入帳
+- [ ] **`TradeStatus=1`、`TradeNo=""` → `QUERY_FAILED`，不入帳**（保護 `orders.provider_trade_no` 的 UNIQUE 約束）
+- [ ] 連續兩筆不同訂單都回 `TradeStatus=1` 且 `TradeNo=""` → 兩筆都不入帳，且第二筆不得出現資料庫層的約束違反錯誤
 - [ ] 簽章驗證失敗、HTTP 失敗、timeout → 仍然是 `QUERY_FAILED`（既有行為不變）
 - [ ] `payment_reconciliations.provider_trade_no` 在 `STILL_UNPAID` 時寫入空字串
 
