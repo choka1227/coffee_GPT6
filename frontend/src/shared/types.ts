@@ -99,3 +99,21 @@ export interface Report {
   onlineOrders: number;
   takeawayOrders: number;
 }
+export interface ReconciliationPending {
+  orderId: string;
+  branchId: string;
+  branchName: string;
+  total: number;
+  createdAt: number;
+  lastOutcome: string | null;
+  lastQueriedAt: number | null;
+  attempts: number;
+}
+export interface ReconciliationAttempt {
+  outcome: string;
+  triggerSource: string;
+  tradeStatus: string;
+  tradeAmount: number | null;
+  detail: string;
+  queriedAt: number;
+}

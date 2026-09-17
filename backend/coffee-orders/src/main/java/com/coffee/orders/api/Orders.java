@@ -52,5 +52,9 @@ public interface Orders {
 
   void confirmOnline(String id, int amount, String providerTradeNo);
 
+  void confirmOnline(String id, int amount, String providerTradeNo, long paidAt);
+
+  List<Order> reconciliationCandidates(Actor actor, long since, long until, int limit, int offset);
+
   Order paymentSnapshot(String id);
 }

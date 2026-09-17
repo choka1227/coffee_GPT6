@@ -209,6 +209,39 @@ public class OrderService implements Orders {
 
   @Transactional
   public void confirmOnline(String id, int amount, String trade) {
+    confirmOnline(id, amount, trade, System.currentTimeMillis());
+  }
+
+  public List<Order> reconciliationCandidates(
+      Actor actor, long since, long until, int limit, int offset) {
+    String scope = "";
+    List<Object> params = new ArrayList<>(List.of(since, until));
+    if (actor != null) {
+      actor.require("PAYMENT_RECONCILE");
+      if (actor.customer()) throw new Problem(403, "沒有執行金流對帳的權限");
+      if (!actor.global()) {
+        scope = " and branch_id=?";
+        params.add(actor.branchId());
+      }
+    }
+    params.add(limit);
+    params.add(offset);
+    return db
+        .queryForList(
+            "select id from orders where payment_method='ECPAY'"
+                + " and status='PENDING_PAYMENT' and created_at>=? and created_at<=?"
+                + scope
+                + " order by created_at,id limit ? offset ?",
+            String.class,
+            params.toArray())
+        .stream()
+        .map(this::snapshot)
+        .toList();
+  }
+
+  @Transactional
+  public void confirmOnline(String id, int amount, String trade, long paidAt) {
+    Problem.check(paidAt > 0 && paidAt <= System.currentTimeMillis(), "付款時間不正確");
     lock(id);
     Order o = snapshot(id);
     Problem.check(o.paymentMethod().equals("ECPAY") && o.total() == amount, "付款金額或方式不符");
@@ -221,7 +254,7 @@ public class OrderService implements Orders {
     Problem.check(o.status().equals("PENDING_PAYMENT"), "訂單狀態無法收款");
     db.update(
         "update orders set status='PAID',paid_at=?,provider_trade_no=? where id=?",
-        System.currentTimeMillis(),
+        paidAt,
         trade,
         id);
   }
