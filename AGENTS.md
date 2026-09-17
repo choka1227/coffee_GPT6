@@ -13,14 +13,32 @@ coffee_GPT6 — 咖啡廳點餐與營運系統。Java 17 / Spring Boot 3.5.16 Ma
 | 角色 | 誰 | GitHub 帳號 | 負責 |
 | --- | --- | --- | --- |
 | PO / 決策者 | HSIN | `choka1227` | 需求取捨、優先順序、驗收 |
-| PM / SA | Claude | `ge179357-claude` | 缺口盤點、規格書、PR review |
+| PM / SA | Claude | `choka1227`（分支前綴 `claude/`） | 缺口盤點、規格書、PR review |
 | **PG / SD** | **Codex（你）** | **`iisihsin-codex`** | **系統設計細節、實作、測試、技術風險回報** |
 
-三個角色各有獨立的 GitHub 帳號。**判斷一個 PR 是誰發起的，看 GitHub author，不要靠
-commit 訊息或 PR 描述推測：**
+### 怎麼分辨一個 PR 是 Claude 發的還是 HSIN 本人發的
+
+PO 於 2026-09-17 決定：**Claude 的 GitHub 操作改用 `choka1227` 帳號**（不再使用
+`ge179357-claude`）。所以 PO 與 PM/SA 共用同一個 GitHub 帳號，Codex 則是獨立的
+`iisihsin-codex`——**互審仍然成立**，因為審查方與被審方永遠是不同帳號。
+
+Claude 發的 PR 一定同時滿足這三點：
+
+| 特徵 | Claude 的 PR | HSIN 本人的 PR |
+| --- | --- | --- |
+| GitHub author | `choka1227` | `choka1227` |
+| head 分支 | `claude/<主題>` | **不用** `claude/` 前綴 |
+| PR 標題 | `[Claude] ` 開頭 | 沒有這個前綴 |
+| commit author (`%an`) | `Claude` | `choka1227` / `2608009` |
+
+**給 Codex 的判斷規則：author 是 `choka1227` 且 head 分支是 `claude/*` 的 PR，就是
+Claude 發的 PR，要審。** author 是 `choka1227` 但分支不是 `claude/*` 的，是 HSIN 本人
+手動開的，不要審。
+
+**判斷 PR 發起者一律看 GitHub author 與 head 分支，不要看 commit 訊息或 PR 描述推測：**
 
 ```bash
-gh pr view <N> --json author --jq '.author.login'
+gh pr view <N> --json author,headRefName --jq '"\(.author.login) \(.headRefName)"'
 ```
 
 規格書在 `docs/specs/`，實作回報寫到 `docs/reports/`。
@@ -112,7 +130,8 @@ git update-index --chmod=+x backend/mvnw scripts/build.sh start-demo.sh
 ### Pull Request
 
 - **base 一律是 `feature/init-project`**，不要開工作分支 → 工作分支的 PR，也不要把 base 設成 `main`
-- 標題 `<type>: <做了什麼>`
+- 標題 `<type>: <做了什麼>`。Claude 發的 PR 額外在最前面加 `[Claude] ` 前綴
+  （因為它與 PO 共用 `choka1227` 帳號，需要一眼分得出來）；Codex 不加前綴
 - **描述必須誠實列出所有變更**，包含刪除的檔案、權限變更、相依更新。不要只寫你想強調的那一項
 - 描述要含：對應的規格書編號、驗收條件對照、**沒做到的部分與原因**
 - 開 PR 前先確認 CI 會過。**CI 紅的 PR 不要開**
@@ -149,14 +168,16 @@ gh api "repos/choka1227/coffee_GPT6/commits/<headSHA>/check-runs" --jq '.check_r
 ### 互審規則
 
 ```
-Claude 發的 PR（author: ge179357-claude）  →  Codex 審
-Codex  發的 PR（author: iisihsin-codex）   →  Claude 審
+Claude 發的 PR（author: choka1227 且 head 分支 claude/*）  →  Codex 審
+Codex  發的 PR（author: iisihsin-codex）                   →  Claude 審
+HSIN 本人的 PR（author: choka1227，分支不是 claude/*）      →  雙方都不用自動審
 ```
 
 - **不要審自己發的 PR。** GitHub 會擋，而且違背互相偵測變更的目的
+- Claude 用 `choka1227` 帳號操作，所以 **Claude 不審 `claude/*` 分支的 PR**——那是它自己發的
 - 結論用正式 review（`APPROVE` / `REQUEST_CHANGES`），不要只留 comment ——
   只有正式 review 才算數，comment 擋不住也放不行
-- 審查前先確認 PR 的 GitHub author 是不是對方
+- 審查前先確認 PR 的 GitHub author **與 head 分支**符合上表
 
 ### 開 PR 時啟用 auto-merge
 
