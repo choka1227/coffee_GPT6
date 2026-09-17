@@ -144,6 +144,36 @@ G01 §12 要求「該訂單隨後出現在對應台灣日期的報表營業額�
 
 ---
 
+## 4a. 施工階段
+
+本規格分兩個階段，**每個階段獨立 CI 綠、獨立可合併**。依 `AGENTS.md`「施工階段與中斷續作」推進。
+
+### S1 — 兩項必修（第 2、3 節）
+
+| 項目 | 內容 |
+| --- | --- |
+| 動到 | `ReconciliationService.java`（重排 `TradeAmt` / `TradeNo` 的驗證位置）、`ReconciliationTest.java`（新增 `STILL_UNPAID` 案例、拆開 CSRF 與跨店斷言） |
+| 規格章節 | 第 2 節、第 3 節 |
+| 規模 | 小。一個方法內的順序調整，加上測試 |
+
+驗收子集：第 2 節六條 + 第 3 節三條。
+
+**這一階段就足以把 G01 的正確性問題解決掉。** 如果只跑得完一個階段，做這個。
+
+### S2 — 三項體質改善（第 4 節）
+
+| 項目 | 內容 |
+| --- | --- |
+| 動到 | `ReconciliationService.java`（時鐘偏移 fallback、`pending()` 改寫）、`Reconciliation.java`（api，`truncated` 欄位）、`ReconciliationView.vue`、`ReconciliationTest.java` |
+| 規格章節 | 第 4.1、4.2、4.3 節 |
+| 規模 | 中。4.2 的 `pending()` 改寫牽涉一支 `group by` 查詢與一個 API 回應欄位 |
+
+驗收子集：第 4 節各小節的勾選項。
+
+> 三個子項彼此獨立，S2 內部若做不完，**以 4.1 → 4.3 → 4.2 的順序做**（4.1 影響正確性最直接，4.2 動到 API 回應最大）。做到哪裡就在進度檢查表寫到哪裡。
+
+---
+
 ## 5. 範圍限制
 
 - **不改 `EcpayService.callback()`**，既有回呼行為完全不動

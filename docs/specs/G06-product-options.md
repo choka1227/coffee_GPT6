@@ -462,6 +462,52 @@ sum((i.unit_cost+i.options_cost)*i.quantity) as cost
 
 ---
 
+## 10a. 施工階段
+
+本規格分三個階段，**每個階段獨立 CI 綠、獨立可合併**。依 `AGENTS.md`「施工階段與中斷續作」，一次執行以推進一個階段為目標，階段完成就 commit + push。
+
+三個階段可以合在同一支 `codex/g06-product-options` 分支、同一個 PR 逐步推進（推薦，審查時看得到完整脈絡），也可以一階段一個 PR。**但未完成的階段不得標記 ready for review，也不得啟用 auto-merge。**
+
+### S1 — 資料層與初始化
+
+| 項目 | 內容 |
+| --- | --- |
+| 動到 | `db/migration/V3__product_options.sql`（新增）、`InitialData.java` |
+| 規格章節 | 第 4 節、第 4.3 節 |
+| 為什麼可獨立合併 | 只建表與 seed 資料，沒有任何 Java API 變更，沒有任何程式讀這些新表。既有行為與售價完全不變 |
+
+驗收子集：第 11 節「資料層」整段。
+
+> 這一階段就把 `InitialData` 的兩個坑一起修掉（第 4.3 節）。**不要留到後面** —— `ALTER TABLE` 一旦進去，`order_items` 的位置式 INSERT 立刻壞，demo 環境會啟動失敗。兩者必須同一個 commit。
+
+### S2 — Catalog 的選項讀取與維護
+
+| 項目 | 內容 |
+| --- | --- |
+| 動到 | `Catalog.java`（api，新增 record 與方法）、`CatalogService.java`、`CatalogController.java`、`frontend/src/modules/catalog/MenuAdminView.vue`、`frontend/src/shared/types.ts` |
+| 規格章節 | 第 5 節、第 5.1 節、第 6 節、第 8.2 節、第 8.3 節、第 9 節 |
+| 為什麼可獨立合併 | `Catalog.Product` 新增 `optionGroups` 是**加法**，`GET /api/menu` 多回一個欄位不影響任何既有呼叫端。`coffee-orders` 完全沒動，既有測試全綠 |
+
+驗收子集：第 11 節「選項模型」「成本保護」兩段，以及第 12 節的「成本不外洩測試」與第 6 節七條驗證規則的單元測試。
+
+> `resolveOptions` 在這一階段就要完整實作並測到 —— 它是後端重算的唯一入口，S3 只是呼叫它。把驗證邏輯的測試留在這一階段，S3 就只剩整合。
+
+### S3 — 點餐整合與報表
+
+| 項目 | 內容 |
+| --- | --- |
+| 動到 | `Orders.java`（api）、`OrderService.java`、`ReportService.java`、`frontend/src/modules/ordering/MenuView.vue`、既有測試 |
+| 規格章節 | 第 7 節、第 8.1 節、第 10 節 |
+| 為什麼不能再切 | 第 8.1 節的 `LineInput` 是**破壞性變更**：後端 record 一改，前端與既有測試同時編譯失敗。三者必須同一個 commit 才會綠 |
+
+驗收子集：第 11 節其餘各段，以及第 12 節其餘測試。
+
+**這是三個階段中最大的一個。** 如果一次執行做不完，依 `AGENTS.md` 推一個能編譯的中間狀態並維持 draft，下次續作 —— 不要為了收尾而把 S3 拆成半綠的兩半推上去。
+
+> 有考慮過讓 `LineInput` 同時接受舊的 `temperature`/`sugar` 與新的 `optionIds`，把 S3 再切成三個小階段。**不採用**：過渡期的雙路徑程式碼會長期留著沒人清，而且「兩條路徑算出不同金額」正是本規格要消滅的那類問題。寧可有一個大階段，靠中斷續作機制處理。
+
+---
+
 ## 11. 驗收條件
 
 **資料層**
