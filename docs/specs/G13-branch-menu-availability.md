@@ -4,7 +4,7 @@
 | --- | --- |
 | 缺口編號 | G13 |
 | 優先順序 | P0（僅次於 G06） |
-| 規格版本 | v1.1（依 PR #12 上 Codex 的 `REQUEST_CHANGES` 修正兩項：§7.1 稽核 `target_id` 長度溢位、§5.5 `fromUnlisted` 的授權競態） |
+| 規格版本 | v1.2（依 PR #12 上 Codex 的兩輪 `REQUEST_CHANGES` 修正：§7.1 稽核 `target_id` 長度溢位、§5.5 `fromUnlisted` 的授權競態、§5.3／§5.4 商品不存在的狀態碼矛盾） |
 | 撰寫 | Claude（PM / SA），2026-09-17 |
 | 實作 | Codex（PG / SD） |
 | 基準 commit | `7b09f4b`（PR #10 合併後的 `feature/init-project`） |
@@ -269,6 +269,8 @@ void setAvailability(Actor a, String branchId, String productId, String availabi
 | 403 | `沒有此功能的操作權限` | 缺 `MENU_AVAILABILITY`（沿用 `Actor.require()` 既有訊息） |
 | 404 | `找不到商品` | `productId` 不存在 |
 
+> **`Problem.check` 只能用在 400 的那幾列。** 它固定拋 `Problem(400, ...)`（`Problem.java:11-13`），非 400 的狀態一律要寫成 `throw new Problem(<狀態>, "<訊息>")`。本表唯一的 404 就是這樣寫（見 §5.4 的實作形狀）；三個 403 則分別來自 `Actor.require()`、`Actor.branch()` 與明寫的 `throw`。
+
 ### 5.4 權限與資料範圍
 
 **新增權限常數 `MENU_AVAILABILITY`**，加進 `Identity.PERMISSIONS`（`Identity.java:7-18`）。
@@ -288,9 +290,10 @@ public void setAvailability(Actor a, String branchId, String productId, String a
   Problem.check(
       Set.of("AVAILABLE", "SOLD_OUT", "UNLISTED").contains(availability), "供應狀態不正確");
   // 先取 products 的行鎖，序列化「讀現況 → 決定授權 → 寫入」整段（見 5.5）
-  Problem.check(
-      !db.queryForList("select id from products where id=? for update", productId).isEmpty(),
-      "找不到商品");
+  // 注意：這裡不能用 Problem.check —— 它固定拋 400（Problem.java:11-13），
+  // 但第 5.3 節的錯誤碼表與第 10.4 節的驗收要求商品不存在時回 404
+  if (db.queryForList("select id from products where id=? for update", productId).isEmpty())
+    throw new Problem(404, "找不到商品");
   boolean toUnlisted = "UNLISTED".equals(availability);
   boolean fromUnlisted = "UNLISTED".equals(currentAvailability(branchId, productId));
   if (toUnlisted || fromUnlisted) {
@@ -324,7 +327,7 @@ public void setAvailability(Actor a, String branchId, String productId, String a
 
 - 一律在 `setAvailability` 進入時、讀 `currentAvailability` **之前**取得 `select id from products where id=? for update`
 - 所有分店對同一商品的可用性變更因此排成一列。這不影響點餐（`sellable()` 是純讀，不取鎖），只序列化低頻的可用性切換
-- 順帶解決「商品不存在」的 404：鎖不到列就是查不到商品
+- 順帶解決「商品不存在」的 404：鎖不到列就是查不到商品。**必須寫成 `throw new Problem(404, "找不到商品")`，不能用 `Problem.check`** —— 後者固定拋 400（`Problem.java:11-13`），會與第 5.3 節錯誤碼表和第 10.4 節的驗收互相矛盾
 - 只取這一個鎖，沒有第二個鎖，不會有鎖順序造成的死結
 
 這與第 6 節「兩位顧客同時下單最後一杯、兩單都成立」**不是同一件事，不能套用那裡的免鎖理由**：那邊是刻意接受的業務競態（人工標記不是庫存扣減），這邊是**授權邊界被繞過**，屬於資安缺陷。`AGENTS.md` 的授權章節要求新端點決定資料範圍並驗證越權會被擋，這個競態就是越權的一種形式。
