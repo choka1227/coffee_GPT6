@@ -4,11 +4,11 @@
 | --- | --- |
 | 缺口編號 | G11（稽核紀錄的查詢與涵蓋範圍）+ G15（現金日結與交班） |
 | 優先順序 | P1 —— 金錢控管，不依賴任何外部服務 |
-| 規格版本 | v1 |
+| 規格版本 | **v1.1**（v1 → v1.1：依 PR #17 的 review 修正稽核交易邊界與現金班別鎖順序，見第 5.3、5.12、8.7 節） |
 | 撰寫 | Claude（PM / SA），2026-09-18 |
 | 實作 | Codex（PG / SD） |
 | 基準 commit | `cf7c38c`（PR #15 合併後的 `feature/init-project`） |
-| 前置 | 無。與 G13 動到完全不同的檔案，可並行（見第 12 節） |
+| 前置 | 無。與 G13 動到完全不同的檔案，可並行（見第 10 節） |
 
 ---
 
@@ -68,7 +68,7 @@ audit(a, "ROLE_SAVE", r.code()); // IdentityService.java:198
 ### 不是目標
 
 - **不做班別排程、排班表、工時計算。** 這裡的「班」是現金抽屜的一段區間，不是人資概念
-- **不做多抽屜／多收銀台。** 一個分店同時最多一個開啟中的班別（見第 11.3 節設計決策）
+- **不做多抽屜／多收銀台。** 一個分店同時最多一個開啟中的班別（見第 8.3 節設計決策）
 - **不做稽核紀錄的匯出、保留期限清理與告警。** 保留期限沿用 G01a §6 的決定（不清理，資料量成為問題時併入 G09 的資料生命週期）
 - **不做稽核紀錄的修改或刪除端點。** 稽核軌跡只增不改，沒有任何寫後修改的路徑
 - 不做現金以外的付款方式日結（ECPAY 的對帳是 G01，已完成）
@@ -235,11 +235,11 @@ INSERT INTO role_permissions(role_code,permission)
 
 所以：
 
-> **實作時先在 H2 上驗證這一行。** 如果 H2 拒絕，改成不帶 `WHERE` 的一般索引，並在 `openSession()` 用 `select ... for update` 鎖 `branches` 該列來序列化開班（見第 5.6 節）。**兩種做法都要保留 service 層的檢查**，不要把唯一性只交給索引。PR 描述請註明實際採用哪一種、H2 的實際行為是什麼。
+> **實作時先在 H2 上驗證這一行。** 如果 H2 拒絕，改成不帶 `WHERE` 的一般索引。**不論哪一種，`branches` 那道行鎖與 service 層的檢查都要在**（第 5.6、5.12 節）——正確性由鎖負責，索引只是第二道保險，不要把唯一性只交給索引。PR 描述請註明實際採用哪一種、H2 的實際行為是什麼。
 
 `closed_by` / `closed_at` / `counted_amount` / `expected_amount` / `variance` 在 `OPEN` 期間為 null，交班時一次寫入。
 
-`orders.cash_session_id` **可為 null**，理由見第 11.2 節設計決策。
+`orders.cash_session_id` **可為 null**，理由見第 8.2 節設計決策。
 
 ### 4.5 角色權限 migration 與 `InitialData` 的關係（容易搞混，寫清楚）
 
@@ -301,15 +301,66 @@ public interface Audit {
 
 稽核是附加價值，業務動作是本體。一筆現金收款不可以因為「稽核字串太長」或「稽核索引衝突」而回滾——那等於為了記帳把收銀機弄壞了，比不記帳嚴重得多（G13 已經真的踩過一次，見第 4.3 節）。
 
-`AuditService.record()` 的實作要求：
+#### 為什麼「同交易內 try/catch」達不到這個目的（v1.1 修正）
 
-- 寫入前**自行截斷** `summary` 至 200 字元、`targetId` 至 80 字元、`actorName` 至 80 字元
-- 整個寫入包在 `try/catch (RuntimeException)` 內，**吞掉例外**，不向外拋
-- 例外發生時不要記錄任何金額或個資，只留一行不含 payload 的痕跡（沿用 `ReconciliationService.scheduled()` 的註解式處理風格）
+v1 原本寫「把寫入包在 `try/catch (RuntimeException)` 內吞掉例外」。**那是錯的**，PR #17 的 review 指出後確認成立：
+
+- PostgreSQL 在同一個交易內只要有任何一句 SQL 失敗，整個交易就進入 **aborted 狀態**。之後的每一句 SQL 都會回 `25P02 current transaction is aborted`，外層 `commit` 也一定失敗
+- Java 層把例外 catch 掉，只是讓呼叫端看不到例外，**攔不住 DB 端已經發生的 abort**。業務交易照樣回滾
+- 反過來，若在業務交易還沒提交時就用 `REQUIRES_NEW` 另開交易寫稽核，外層稍後回滾時，稽核表會留下「一筆根本沒發生的業務動作」的紀錄，方向相反但一樣錯
+
+換句話說，**光靠 try/catch 無法同時成立「稽核失敗不影響業務」與「業務回滾不留稽核」**。要成立必須把稽核寫入移出業務交易的邊界。
+
+#### 定案的交易邊界：afterCommit + 獨立新交易
+
+`AuditService.record()` 不直接寫 DB，改成登記一個交易同步器，在**業務交易成功提交之後**才用一個全新的交易寫入：
+
+```java
+// coffee-audit/internal/AuditService.java
+@Override
+public void record(Actor actor, String action, String targetId, String branchId, String summary) {
+  Audit.Entry e = build(actor, action, targetId, branchId, summary);   // 含截斷，見下
+  if (TransactionSynchronizationManager.isSynchronizationActive()) {
+    TransactionSynchronizationManager.registerSynchronization(
+        new TransactionSynchronization() {
+          @Override public void afterCommit() { writer.write(e); }     // 只在 COMMIT 後跑
+        });
+  } else {
+    writer.write(e);                                                   // 不在交易內，直接寫
+  }
+}
+
+// coffee-audit/internal/AuditWriter.java —— 必須是另一個 bean
+@Transactional(propagation = Propagation.REQUIRES_NEW)
+public void write(Audit.Entry e) {
+  try {
+    jdbc.update("insert into audit_log(...) values(...)", ...);
+  } catch (RuntimeException ex) {
+    // 吞掉：稽核是附加價值，不得影響任何業務結果
+  }
+}
+```
+
+四個實作細節，每一個少做都會讓上面的保證失效：
+
+1. **`AuditWriter` 必須是獨立的 Spring bean**，不能是 `AuditService` 的私有方法。`@Transactional` 走 proxy，self-invocation 不會生效，`REQUIRES_NEW` 會被靜默忽略
+2. **`REQUIRES_NEW` 不能省。** `afterCommit` 執行時業務交易雖已提交，但它的 connection 仍然綁在 `TransactionSynchronizationManager` 上；直接用 `JdbcTemplate` 會拿到那條已提交的 connection。`REQUIRES_NEW` 會掛起它並取得一條新的
+3. **`try/catch` 留在 `AuditWriter` 裡面。** `afterCommit` 拋出的例外會由 Spring 傳播給 `commit()` 的呼叫端——業務明明已經提交，呼叫端卻收到例外，比不記帳更糟
+4. **`Entry` 在 `record()` 當下就建好**（含 `createdAt` 與截斷），不要留到 `afterCommit` 才取值。同步器是在交易結束後跑的，那時 `Actor` 相關的 request scope 可能已經消失
+
+`Entry` 建構時**自行截斷**：`summary` 至 200 字元、`targetId` 至 80 字元、`actorName` 至 80 字元。**但截斷不是藉口：** 呼叫端要自己確保 `summary` 在正常情況下就在 200 字元內，截斷是最後一道防線，不是常態路徑。
+
+#### 這個設計換來與換掉的東西
+
+| 保證 | 成立嗎 | 為什麼 |
+| --- | --- | --- |
+| 稽核寫入失敗 → 業務仍然提交 | ✅ | 寫入發生在 commit 之後，業務結果已經落地 |
+| 業務回滾 → 不留稽核紀錄 | ✅ | `afterCommit` 在回滾時根本不會被呼叫 |
+| 稽核紀錄永不遺漏 | ❌ | commit 後、寫稽核前行程掛掉就會少一筆 |
+
+第三列是**刻意放掉的**。要它就得上 outbox 表加重送，那是合規等級稽核的規格，不在本次範圍（見 8.5、8.7）。
 
 > 這與 `AGENTS.md`「不確定不要默默猜」不衝突：這裡不是猜，是明確決定「稽核失敗時優先保住業務」。
-
-**但截斷不是藉口：** 呼叫端要自己確保 `summary` 在正常情況下就在 200 字元內，截斷是最後一道防線，不是常態路徑。
 
 ### 5.4 稽核查詢端點
 
@@ -354,10 +405,9 @@ POST /api/cash-sessions  {"branchId":"taipei","openingFloat":2000,"note":"早班
 4. 寫入 `cash_sessions`，`status='OPEN'`，`opened_by = a.id()`，`opened_at = now`
 5. 寫稽核：`action="CASH_OPEN"`、`targetId=` 班別 id、`branchId=` 分店、`summary="開班準備金 2000 元"`
 
-**第 3 步的競態**：兩個收銀員同時按開班，兩邊的檢查都看到「沒有開啟中的班別」，然後各插一列。防法依第 4.4 節：
+**第 3 步的競態**：兩個收銀員同時按開班，兩邊的檢查都看到「沒有開啟中的班別」，然後各插一列。
 
-- H2 支援部分唯一索引 → 靠索引擋，第二筆插入失敗，捕捉後轉成 `409`
-- H2 不支援 → 在檢查前 `select id from branches where id=? for update` 鎖住該分店列，把同一分店的開班序列化
+**防法（v1.1 定案）：第 3 步之前一律先 `select id from branches where id=? for update` 鎖住該分店列。** 這不是「H2 不支援部分索引時才用」的備案——第 5.12 節的全域鎖順序要求開班、收現金、交班三條流程都以 `branches` 該列為序列化點，所以無論 H2 行為如何都要有這道鎖。部分唯一索引（第 4.4 節）是**第二道**保險：能建就建，建不起來也不影響正確性。
 
 **不要只靠 service 層的 if 判斷。** 這是先讀後寫，沒有鎖就一定有競態窗口（G13 規格 §5.5 記過同型的問題）。
 
@@ -371,11 +421,17 @@ POST /api/cash-sessions  {"branchId":"taipei","openingFloat":2000,"note":"早班
 
 改為在同一個 `update` 內帶上 `cash_session_id`，取值為「該訂單分店當下 `status='OPEN'` 的班別 id，沒有則 `null`」。
 
-**這一查詢在 `cash()` 已持有訂單行鎖（`lock(id)`）之後執行**，且只讀 `cash_sessions`，不會與開班互鎖（開班鎖的是 `branches`）。
+**取這個值之前必須先鎖住該分店列。** v1 原本寫「只讀 `cash_sessions`，不會與開班互鎖」，那句話漏掉了與**交班**的競態——PR #17 的 review 指出後確認成立，修法見第 5.12 節。`cash()` 的步驟因此改為：
+
+1. 不加鎖讀出該訂單的 `branch_id`（`branch_id` 建立後不再變動，這一讀不需要鎖）
+2. `select id from branches where id=? for update` —— **在鎖訂單列之前**
+3. 既有的 `lock(id)` 訂單行鎖與狀態、金額檢查（順序、內容都不變）
+4. 讀該分店 `status='OPEN'` 的班別 id（此時已被第 2 步序列化）
+5. 既有的 `update orders set status='PAID',...`，同一句帶上 `cash_session_id`
 
 追加稽核：`action="ORDER_CASH"`、`targetId=` 訂單 id、`branchId=` 訂單分店、`summary="現金收款 320 元，實收 500 元，找零 180 元"`。
 
-**沒有開啟中的班別時 `cash()` 照樣成功**，`cash_session_id` 留 null。理由見第 11.2 節。
+**沒有開啟中的班別時 `cash()` 照樣成功**，`cash_session_id` 留 null。理由見第 8.2 節。
 
 ### 5.8 交班
 
@@ -384,7 +440,7 @@ POST /api/cash-sessions/{id}/close  {"countedAmount":8450,"note":""}
 ```
 
 1. 權限與範圍檢查同 5.6
-2. `select ... for update` 鎖住該班別列
+2. `select id from branches where id=? for update` 鎖住該分店列，**再** `select ... for update` 鎖住該班別列。順序不可對調，理由見第 5.12 節
 3. `Problem.check(status.equals("OPEN"), "此班別已交班")` → 409
 4. `countedAmount` 驗證：`0 <= countedAmount <= 10000000`
 5. **後端計算**（見 5.9），寫入 `expected_amount`、`variance`、`counted_amount`、`closed_by`、`closed_at`、`status='CLOSED'`
@@ -437,6 +493,54 @@ variance       = countedAmount - expectedAmount      // 負數為短少，正數
 
 > **`Problem.check` 只能用在回 400 的那幾列。** `Problem.check` 固定丟 400，404 與 409 要寫成 `throw new Problem(404, "...")` / `throw new Problem(409, "...")`。這一條是 G13 規格 v1.2 修正過的實際錯誤，不要再犯。
 
+### 5.12 鎖順序與併發不變式（v1.1 新增）
+
+#### 漏掉的競態
+
+v1 讓 `cash()` 不加鎖讀 `OPEN` 班別，`close()` 只鎖班別列再 `SUM`。這組合有一個會**永久低估日結金額**的交錯，PR #17 的 review 指出後確認成立：
+
+```
+T1 cash()                      T2 close()
+--------------------------     --------------------------
+讀到班別 S（status=OPEN）
+                               鎖 S、SUM(orders) → 不含 T1 的訂單
+                               寫 expected_amount、status='CLOSED'、COMMIT
+update orders set
+  cash_session_id = S
+COMMIT
+```
+
+結束後那筆訂單掛在**已交班**的 S 底下，卻不在 S 已經定稿的 `expected_amount` 裡。`variance` 平白短少一筆，而且 `expected_amount` 已經落地，之後怎麼查都對不回來。這不是「機率很低所以算了」的問題——**日結對不上帳正是 G15 要解決的那件事**，留著這個洞等於白做。
+
+#### 全域鎖順序（三張表都適用）
+
+> **`branches` → `cash_sessions` → `orders`。不論哪條流程，一律照這個順序取鎖，不得對調、不得跳過中間層去搶後面的。**
+
+| 流程 | 取鎖順序 |
+| --- | --- |
+| 開班 5.6 | `branches`（該店）→ 插入 `cash_sessions` |
+| 收現金 5.7 | `branches`（訂單所屬店）→ 讀 `OPEN` 班別 → `orders`（該訂單） |
+| 交班 5.8 | `branches`（該店）→ `cash_sessions`（該班別）→ `SUM(orders)`（唯讀，不取鎖） |
+
+`branches` 那一列在這裡的角色是**該分店現金流程的序列化點**，不是因為要改它。三條流程都先搶它，所以同一分店的開班、收現金、交班彼此互斥；不同分店完全不互相阻擋（鎖的是不同列）。
+
+**`cash()` 現行碼是先鎖訂單列的，要把 `branches` 的鎖插到它前面**（第 5.7 節已寫出完整步驟）。留著「先鎖 order 再鎖 branch」會出現與交班流程相反的取鎖順序，那正是死結的成因。
+
+#### 要守住的不變式
+
+> **任何 `cash_session_id` 指向 `status='CLOSED'` 班別的訂單，都必須已經被計入該班別的 `expected_amount`。**
+
+照上面的鎖順序，交錯只剩兩種結果，兩種都正確：
+
+- `cash()` 先拿到 branch 鎖 → 它綁上 S 並提交後，`close()` 才 `SUM`，該筆被計入
+- `close()` 先拿到 branch 鎖 → 它提交後 `cash()` 才重讀，此時 S 已是 `CLOSED`，**讀不到任何 `OPEN` 班別**，該筆的 `cash_session_id` 留 null（歸入 5.10 的「未歸班現金」）
+
+**第 4 步一定要在拿到 branch 鎖之後重新讀班別**，不可以沿用鎖之前讀到的值——沿用的話就退回原本那個錯的交錯。
+
+#### `OPEN` 班別的即時金額不在此限
+
+第 5.10 節讓 `OPEN` 班別即時算 `cashRevenue` / `expectedAmount`，那是**唯讀估值**，不取任何鎖，也允許在讀取當下就已經不準。它不會被寫進 DB，不影響上面的不變式。只有 `close()` 寫進 `expected_amount` 的那一次需要被鎖保護。
+
 ---
 
 ## 6. 施工階段
@@ -463,7 +567,9 @@ variance       = countedAmount - expectedAmount      // 負數為短少，正數
 - [ ] V5 在空資料庫與有資料的資料庫上都能執行
 - [ ] `ACCOUNT_SAVE` / `ROLE_SAVE` 仍然寫得進去，`action` 字串不變
 - [ ] `summary` 超過 200 字元時被截斷，**且業務動作照常成功**
-- [ ] `AuditService.record()` 內部丟例外時，呼叫端的業務交易不回滾（用一個會爆的 stub 驗）
+- [ ] **稽核寫入 SQL 失敗時，業務仍然成功提交**（讓 `AuditWriter` 的 insert 必定失敗，斷言業務資料確實落地）
+- [ ] **業務交易回滾時，不留下任何稽核紀錄**（在 `record()` 之後讓業務丟例外，斷言 `audit_log` 沒有該筆）
+- [ ] 稽核寫入確實走獨立交易（第 5.3 節四個實作細節都做到，特別是 `AuditWriter` 是獨立 bean）
 
 ### S2 — 稽核涵蓋範圍與查詢 API（G11 完成）
 
@@ -496,6 +602,8 @@ variance       = countedAmount - expectedAmount      // 負數為短少，正數
 - [ ] 交班：`expected = openingFloat + SUM(total)`，`variance = counted - expected`，短少為負、溢收為正
 - [ ] 交班用 `SUM(total)` 而非 `SUM(tendered)`（造一筆 `tendered > total` 的訂單，斷言金額不受找零影響）
 - [ ] 重複交班回 409
+- [ ] **`cash()` 與 `close()` 併發**（latch 型，見第 7 節第 7 項）：結束後不得出現「訂單掛在 `CLOSED` 班別、卻不在該班別 `expected_amount` 內」
+- [ ] 三條流程都先鎖 `branches` 該列，順序符合第 5.12 節
 - [ ] **越權測試**：跨店開班／交班 → 403；顧客 → 403；無 `CASH_SESSION` → 403
 - [ ] 既有的 `cash()` 相關測試全部原封不動通過
 
@@ -530,7 +638,14 @@ variance       = countedAmount - expectedAmount      // 負數為短少，正數
 3. **稽核不可拖垮業務**：注入一個 `record()` 必定丟例外的 `Audit`，斷言 `cash()` 仍然成功且訂單確實變成 `PAID`
 4. **游標分頁**：寫入 > `limit` 筆資料後連續翻頁，把所有頁的 id 收集起來，斷言「沒有重複」且「等於全集」
 5. **資料範圍**：`MANAGER` 查稽核時，結果集合中不得出現 `branch_id` 為 null 或別店的列。用 `assertThat(...).allMatch(...)`，不要只斷言筆數
-6. 既有 `CoffeeIntegrationTest` / `HttpWorkflowTest` / `ModuleBoundariesTest` / `CheckMacTest` / `ReconciliationTest` / `CatalogOptionsTest` 必須全數通過
+6. **稽核的交易邊界**（第 5.3 節，兩條都要，缺一條等於沒驗）：
+   - **(a) 稽核失敗不影響業務**：讓 `AuditWriter` 的 insert 必定失敗（stub 丟例外，或餵一筆違反 DB 約束的值），斷言業務**確實提交**——重新查一次 DB，訂單是 `PAID`，不是只看 HTTP 回 200
+   - **(b) 業務回滾不留稽核**：安排一個「`record()` 之後才失敗」的業務流程，斷言 `audit_log` 裡沒有該筆。這一條是專門釘住「不可在業務提交前就用 `REQUIRES_NEW` 寫稽核」的
+7. **`cash()` 與 `close()` 的併發**（第 5.12 節）：用 `CountDownLatch` 讓兩條流程真的同時進入，跑完後斷言不變式——
+   `select * from orders where cash_session_id = S` 的每一筆，都必須被 S 的 `expected_amount` 涵蓋（`openingFloat + SUM(total)` 等於已落地的 `expected_amount`）。
+   兩種合法結果（訂單綁上 S 並被計入／訂單 `cash_session_id` 為 null）都要接受，**只有「綁上 CLOSED 班別卻沒被計入」是 fail**。
+   重複跑 20 次仍需穩定通過；只跑一次的併發測試等於沒測
+8. 既有 `CoffeeIntegrationTest` / `HttpWorkflowTest` / `ModuleBoundariesTest` / `CheckMacTest` / `ReconciliationTest` / `CatalogOptionsTest` 必須全數通過
 
 ---
 
@@ -576,11 +691,13 @@ variance       = countedAmount - expectedAmount      // 負數為短少，正數
 
 ### 8.5 稽核寫入失敗時吞掉例外
 
-**決定**：`AuditService.record()` 捕捉所有 `RuntimeException` 並吞掉。
+**決定**：`AuditWriter.write()` 捕捉所有 `RuntimeException` 並吞掉。
 
 **理由**：見第 5.3 節。G13 已經有一次「稽核字串超長導致業務整筆回滾」的實際事故。
 
 **推翻的代價**：低。但推翻前要先想清楚「稽核寫不進去時，業務應該停擺嗎」——對咖啡廳的現金收款，答案明確是否。若之後要做合規等級的稽核（不可遺漏），正確做法是加 outbox 表與重送，不是讓業務失敗。
+
+> **v1.1 修正**：這一項單獨**不足以**達成目的。吞例外只處理 Java 層，處理不了 PostgreSQL 的交易 abort，必須配合 8.7 的交易邊界才成立。
 
 ### 8.6 不做稽核紀錄的保留期限清理
 
@@ -590,13 +707,31 @@ variance       = countedAmount - expectedAmount      // 負數為短少，正數
 
 **推翻的代價**：低。資料量成為問題時併入 G09 的資料生命週期一起處理。
 
+### 8.7 稽核在 afterCommit 以獨立交易寫入，接受「極少數情況下少一筆」（v1.1 新增）
+
+**決定**：稽核寫入掛在 `afterCommit`，用 `REQUIRES_NEW` 的新交易執行；換來的代價是「commit 成功但行程隨即掛掉」時會遺漏該筆稽核。
+
+**理由**：三個候選只有這一個能同時成立兩項要求。
+
+| 做法 | 稽核失敗不影響業務 | 業務回滾不留稽核 |
+| --- | --- | --- |
+| 同交易 + try/catch（v1 的寫法） | ❌ PostgreSQL 交易已 abort，外層 commit 必失敗 | ✅ |
+| 業務提交前就 `REQUIRES_NEW` | ✅ | ❌ 回滾後留下幽靈紀錄 |
+| **afterCommit + `REQUIRES_NEW`** | ✅ | ✅ |
+
+遺漏的窗口只有「commit 成功 → 寫稽核」之間的毫秒級空檔，且需要行程在該瞬間死亡。拿它換「收銀機不會因為稽核而收不了錢」，對咖啡廳營運是明確划算的。
+
+**推翻的代價**：中。要做到不可遺漏必須引入 outbox 表（業務交易內寫 outbox、背景程序重送）。那會讓稽核從「兩個檔案」變成「一張表 + 一個排程 + 重送冪等性」，而且 outbox 寫入失敗一樣會弄垮業務交易——等於把今天這個問題換一個位置重演。要做的話應該是獨立一份規格，不是在本規格加一節。
+
+**這一項是 PR #17 的 review 推翻 v1 的直接結果。** 記在這裡是為了讓下一輪知道 v1 的寫法為什麼不能退回去。
+
 ---
 
 ## 9. 待驗證的風險（不是待決事項）
 
-**H2 對部分唯一索引（`CREATE UNIQUE INDEX ... WHERE`）的支援情況未經驗證。** 第 4.4 節已給出兩條路與判斷方式，實作時實測一次即可，不需要回報等待。PR 描述請寫明實際採用哪一條。
+**H2 對部分唯一索引（`CREATE UNIQUE INDEX ... WHERE`）的支援情況未經驗證。** 第 4.4 節已給出兩條路與判斷方式，實作時實測一次即可，不需要回報等待。PR 描述請寫明實際採用哪一條。v1.1 之後這一項的風險更低了：正確性已經由第 5.12 節的行鎖負責，索引建不起來只是少一道保險。
 
-這是本規格唯一的技術未知。其餘都是既有模式的延伸。
+**`afterCommit` 同步器在既有測試環境（H2 + Spring Boot test）的行為未經驗證。** 第 5.3 節的四個實作細節都是標準 Spring 語意，但 `@Transactional` 測試預設會回滾——這代表**測試裡的 `afterCommit` 根本不會觸發**。寫第 7 節第 6 項的測試時，要用真的會提交的路徑（`TestRestTemplate` 打真實 HTTP，或測試方法不標 `@Transactional`），不要在會回滾的測試裡驗稽核有沒有寫進去然後困惑。這一點請在實作回報裡寫明實際怎麼處理。
 
 ---
 
@@ -606,7 +741,7 @@ variance       = countedAmount - expectedAmount      // 負數為短少，正數
 - **一次推進一個階段，做完就 push**。四個階段都獨立可合併，不要等全部做完才推
 - 本規格與 `docs/specs/G13-branch-menu-availability.md` **動到的檔案幾乎不重疊**，唯一的交集是 `Identity.PERMISSIONS`、`InitialData` 的角色清單與 migration 版號。真的要並行時：**先確認 G13 用掉的版號**，本規格往後取；`PERMISSIONS` 那一行合併時注意不要覆蓋對方新增的常數
 - 第 3 節末的「`cash_sessions` 為什麼放 `coffee-orders`」請先讀完再動手。放錯會直接造成循環相依，`ModuleBoundariesTest` 會 build fail，而且要退回來重做
-- 第 5.3 節（稽核不可拖垮業務）與第 5.9 節（金額後端算）是本規格的兩條硬規則，其餘都可以依你的判斷調整實作形狀
+- 第 5.3 節（稽核的交易邊界）、第 5.9 節（金額後端算）與第 5.12 節（鎖順序）是本規格的三條硬規則，其餘都可以依你的判斷調整實作形狀。**這三節在 v1.1 有實質改動，看過 v1 的話請重讀**
 - 規格有錯或不完整時**先講出來再繼續做**，寫在設計摘要與 PR 描述裡。不要停下來等回覆
 - 實作回報寫到 `docs/reports/`
 
