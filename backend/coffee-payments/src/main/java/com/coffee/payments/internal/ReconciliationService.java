@@ -83,35 +83,58 @@ public class ReconciliationService implements Reconciliation {
     return o;
   }
 
-  public List<Pending> pending(Actor actor) {
+  private record PendingSummary(String lastOutcome, Long lastQueriedAt, int attempts) {}
+
+  public PendingPage pending(Actor actor) {
     authorize(actor);
     long now = System.currentTimeMillis();
-    List<Pending> result = new ArrayList<>();
-    int offset = 0;
-    while (true) {
-      var page = orders.reconciliationCandidates(actor, now - maxAge, now - minAge, 200, offset);
-      for (var o : page) {
-        var history = attempts(o.id());
-        var last = history.isEmpty() ? null : history.get(0);
-        int count =
-            db.queryForObject(
-                "select count(*) from payment_reconciliations where order_id=?",
-                Integer.class,
-                o.id());
-        result.add(
-            new Pending(
-                o.id(),
-                o.branchId(),
-                o.branchName(),
-                o.total(),
-                o.createdAt(),
-                last == null ? null : last.outcome(),
-                last == null ? null : last.queriedAt(),
-                count));
-      }
-      if (page.size() < 200) return result;
-      offset += page.size();
-    }
+    var candidates = orders.reconciliationCandidates(actor, now - maxAge, now - minAge, 201, 0);
+    boolean truncated = candidates.size() > 200;
+    var visible = candidates.stream().limit(200).toList();
+    var summaries = pendingSummaries(visible.stream().map(Orders.Order::id).toList());
+    var items =
+        visible.stream()
+            .map(
+                o -> {
+                  var summary = summaries.get(o.id());
+                  return new Pending(
+                      o.id(),
+                      o.branchId(),
+                      o.branchName(),
+                      o.total(),
+                      o.createdAt(),
+                      summary == null ? null : summary.lastOutcome(),
+                      summary == null ? null : summary.lastQueriedAt(),
+                      summary == null ? 0 : summary.attempts());
+                })
+            .toList();
+    return new PendingPage(items, truncated);
+  }
+
+  private Map<String, PendingSummary> pendingSummaries(List<String> orderIds) {
+    // Keep the number of database round trips constant even when there are no candidates.
+    var queryIds = orderIds.isEmpty() ? List.of("") : orderIds;
+    String placeholders = String.join(",", Collections.nCopies(queryIds.size(), "?"));
+    return db.query(
+        "select order_id,max(case when rn=1 then outcome end) last_outcome,"
+            + " max(queried_at) last_queried_at,count(*) attempts from ("
+            + " select order_id,outcome,queried_at,row_number() over (partition by order_id"
+            + " order by queried_at desc,id desc) rn from payment_reconciliations"
+            + " where order_id in ("
+            + placeholders
+            + ")) ranked group by order_id",
+        rs -> {
+          Map<String, PendingSummary> result = new HashMap<>();
+          while (rs.next())
+            result.put(
+                rs.getString("order_id"),
+                new PendingSummary(
+                    rs.getString("last_outcome"),
+                    rs.getObject("last_queried_at", Long.class),
+                    rs.getInt("attempts")));
+          return result;
+        },
+        queryIds.toArray());
   }
 
   private List<Attempt> attempts(String id) {
@@ -183,19 +206,28 @@ public class ReconciliationService implements Reconciliation {
             || !id.equals(p.get("MerchantTradeNo"))) throw new IllegalArgumentException();
         status = p.get("TradeStatus");
         if (status == null || !status.matches("[0-9]{1,20}")) throw new IllegalArgumentException();
-        amount = Integer.valueOf(p.get("TradeAmt"));
+        try {
+          amount = Integer.valueOf(p.get("TradeAmt"));
+        } catch (NumberFormatException e) {
+          // Non-credit outcomes can legitimately omit an amount.
+          amount = null;
+        }
         trade = p.getOrDefault("TradeNo", "");
-        if (!trade.matches("[A-Za-z0-9]{1,64}")) throw new IllegalArgumentException();
+        if (!trade.isEmpty() && !trade.matches("[A-Za-z0-9]{1,64}"))
+          throw new IllegalArgumentException();
         if (!"1".equals(status)) {
           outcome = "STILL_UNPAID";
           detail = "綠界尚未確認付款";
         } else if ("1".equals(p.get("SimulatePaid"))) {
           outcome = "SIMULATED";
           detail = "綠界模擬付款，不予入帳";
+        } else if (amount == null) {
+          throw new IllegalArgumentException();
         } else if (amount != o.total()) {
           outcome = "AMOUNT_MISMATCH";
           detail = "綠界金額 " + amount + " 元與訂單 " + o.total() + " 元不符";
         } else {
+          if (trade.isEmpty()) throw new IllegalArgumentException();
           outcome = "CONFIRMED";
           detail = "綠界回報已付款，訂單已更新為已付款";
           try {
@@ -207,7 +239,10 @@ public class ReconciliationService implements Reconciliation {
                     .atZone(ZoneId.of("Asia/Taipei"))
                     .toInstant()
                     .toEpochMilli();
-            if (paidAt <= 0 || paidAt > now) throw new IllegalArgumentException();
+            if (paidAt <= 0 || paidAt > now) {
+              paidAt = now;
+              detail = "綠界付款時間超出有效範圍，以查核時間入帳";
+            }
           } catch (DateTimeParseException e) {
             paidAt = now;
             detail = "綠界未提供付款時間，以查核時間入帳";

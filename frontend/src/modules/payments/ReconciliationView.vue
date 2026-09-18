@@ -5,6 +5,7 @@ import { money } from "../../shared/format";
 import type { ReconciliationPending, ReconciliationAttempt } from "../../shared/types";
 
 const items = ref<ReconciliationPending[]>([]);
+const truncated = ref(false);
 const attempts = ref<ReconciliationAttempt[]>([]);
 const selected = ref("");
 const busy = ref(false);
@@ -16,7 +17,11 @@ const labels: Record<string, string> = {
 const date = (value: number | null) => value == null ? "尚未查核" : new Date(value).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
 async function load() {
   busy.value = true;
-  try { items.value = (await api<{ items: ReconciliationPending[] }>("/payments/reconciliation/pending")).items; }
+  try {
+    const result = await api<{ items: ReconciliationPending[]; truncated: boolean }>("/payments/reconciliation/pending");
+    items.value = result.items;
+    truncated.value = result.truncated;
+  }
   catch (e) { message.value = (e as Error).message; }
   finally { busy.value = false; }
 }
@@ -44,6 +49,7 @@ onMounted(load);
     <h1>金流對帳</h1>
     <p>查核逾靜默期的線上付款訂單；金額不符或查核失敗不會入帳，也不會自動取消訂單。</p>
     <button :disabled="busy" @click="load">重新整理</button>
+    <p v-if="truncated">僅顯示前 200 筆。</p>
     <p role="status">{{ message }}</p>
     <p v-if="!busy && !items.length">目前沒有待查核訂單。</p>
     <div style="overflow-x:auto">

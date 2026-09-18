@@ -240,17 +240,29 @@ public class OrderService implements Orders {
     }
     params.add(limit);
     params.add(offset);
-    return db
-        .queryForList(
-            "select id from orders where payment_method='ECPAY'"
-                + " and status='PENDING_PAYMENT' and created_at>=? and created_at<=?"
-                + scope
-                + " order by created_at,id limit ? offset ?",
-            String.class,
-            params.toArray())
-        .stream()
-        .map(this::snapshot)
-        .toList();
+    return db.query(
+        "select o.*,b.name branch_name from orders o join branches b on b.id=o.branch_id"
+            + " where o.payment_method='ECPAY' and o.status='PENDING_PAYMENT'"
+            + " and o.created_at>=? and o.created_at<=?"
+            + scope.replace("branch_id", "o.branch_id")
+            + " order by o.created_at,o.id limit ? offset ?",
+        (r, n) ->
+            new Order(
+                r.getString("id"),
+                r.getString("branch_id"),
+                r.getString("branch_name"),
+                r.getString("account_id"),
+                r.getString("status"),
+                r.getString("fulfillment"),
+                r.getString("payment_method"),
+                r.getInt("total"),
+                r.getString("note"),
+                r.getLong("created_at"),
+                r.getObject("paid_at", Long.class),
+                r.getObject("tendered", Integer.class),
+                r.getObject("change_amount", Integer.class),
+                List.of()),
+        params.toArray());
   }
 
   @Transactional
