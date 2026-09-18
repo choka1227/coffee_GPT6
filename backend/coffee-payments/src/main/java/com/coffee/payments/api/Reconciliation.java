@@ -14,6 +14,8 @@ public interface Reconciliation {
       Long lastQueriedAt,
       int attempts) {}
 
+  record PendingPage(List<Pending> items, boolean truncated) {}
+
   record Attempt(
       String outcome,
       String triggerSource,
@@ -24,7 +26,7 @@ public interface Reconciliation {
 
   record Result(String orderId, String outcome, String detail, long queriedAt) {}
 
-  List<Pending> pending(Actor actor);
+  PendingPage pending(Actor actor);
 
   List<Attempt> history(Actor actor, String orderId);
 

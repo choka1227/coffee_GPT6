@@ -47,3 +47,12 @@ S2 §4.3 台北日期報表與 §4.2 pending 上限／固定查詢數尚未實�
 僅新增測試與本報告，不修改報表實作、schema 或模組依賴。
 前一 head e6817ec 的 CI #78 completed/success；新 head 須重新確認 CI。
 下一步為 §4.2 pending 200 筆上限、固定查詢數及 truncated API/UI。
+
+## S2 續作：pending 上限與批次摘要
+`pending()` 一次只取 201 筆候選，以第 201 筆判斷 `truncated`，回傳最多 200 筆；
+訂單候選改為單次投影查詢，最近查核結果、時間與次數改為單次 window/group 查詢，
+查詢往返次數不隨候選數增加。API 回傳 `items` 與 `truncated`，前端在截斷時顯示
+「僅顯示前 200 筆」。新增 201 筆積壓驗收，確認上限與截斷旗標。
+
+本地 frontend build 通過；backend verify 仍因 Maven Central DNS 解析失敗而未啟動，
+未跳過或放寬測試，需由本次新 head 的遠端 CI 補足驗證。

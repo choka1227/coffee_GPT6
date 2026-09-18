@@ -15,8 +15,8 @@ class ReconciliationController {
   }
 
   @GetMapping("/pending")
-  Map<String, ?> pending(@RequestAttribute Actor actor) {
-    return Map.of("items", service.pending(actor));
+  Reconciliation.PendingPage pending(@RequestAttribute Actor actor) {
+    return service.pending(actor);
   }
 
   @GetMapping("/{id}")

@@ -83,35 +83,58 @@ public class ReconciliationService implements Reconciliation {
     return o;
   }
 
-  public List<Pending> pending(Actor actor) {
+  private record PendingSummary(String lastOutcome, Long lastQueriedAt, int attempts) {}
+
+  public PendingPage pending(Actor actor) {
     authorize(actor);
     long now = System.currentTimeMillis();
-    List<Pending> result = new ArrayList<>();
-    int offset = 0;
-    while (true) {
-      var page = orders.reconciliationCandidates(actor, now - maxAge, now - minAge, 200, offset);
-      for (var o : page) {
-        var history = attempts(o.id());
-        var last = history.isEmpty() ? null : history.get(0);
-        int count =
-            db.queryForObject(
-                "select count(*) from payment_reconciliations where order_id=?",
-                Integer.class,
-                o.id());
-        result.add(
-            new Pending(
-                o.id(),
-                o.branchId(),
-                o.branchName(),
-                o.total(),
-                o.createdAt(),
-                last == null ? null : last.outcome(),
-                last == null ? null : last.queriedAt(),
-                count));
-      }
-      if (page.size() < 200) return result;
-      offset += page.size();
-    }
+    var candidates = orders.reconciliationCandidates(actor, now - maxAge, now - minAge, 201, 0);
+    boolean truncated = candidates.size() > 200;
+    var visible = candidates.stream().limit(200).toList();
+    var summaries = pendingSummaries(visible.stream().map(Orders.Order::id).toList());
+    var items =
+        visible.stream()
+            .map(
+                o -> {
+                  var summary = summaries.get(o.id());
+                  return new Pending(
+                      o.id(),
+                      o.branchId(),
+                      o.branchName(),
+                      o.total(),
+                      o.createdAt(),
+                      summary == null ? null : summary.lastOutcome(),
+                      summary == null ? null : summary.lastQueriedAt(),
+                      summary == null ? 0 : summary.attempts());
+                })
+            .toList();
+    return new PendingPage(items, truncated);
+  }
+
+  private Map<String, PendingSummary> pendingSummaries(List<String> orderIds) {
+    // Keep the number of database round trips constant even when there are no candidates.
+    var queryIds = orderIds.isEmpty() ? List.of("") : orderIds;
+    String placeholders = String.join(",", Collections.nCopies(queryIds.size(), "?"));
+    return db.query(
+        "select order_id,max(case when rn=1 then outcome end) last_outcome,"
+            + " max(queried_at) last_queried_at,count(*) attempts from ("
+            + " select order_id,outcome,queried_at,row_number() over (partition by order_id"
+            + " order by queried_at desc,id desc) rn from payment_reconciliations"
+            + " where order_id in ("
+            + placeholders
+            + ")) ranked group by order_id",
+        rs -> {
+          Map<String, PendingSummary> result = new HashMap<>();
+          while (rs.next())
+            result.put(
+                rs.getString("order_id"),
+                new PendingSummary(
+                    rs.getString("last_outcome"),
+                    rs.getObject("last_queried_at", Long.class),
+                    rs.getInt("attempts")));
+          return result;
+        },
+        queryIds.toArray());
   }
 
   private List<Attempt> attempts(String id) {

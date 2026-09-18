@@ -314,9 +314,10 @@ class ReconciliationTest {
         "update orders set created_at=? where id=?",
         System.currentTimeMillis() - 8 * 86400000L,
         old.id());
-    assertThat(service.pending(manager()))
+    assertThat(service.pending(manager()).items())
         .extracting(Reconciliation.Pending::orderId)
         .containsExactly(eligible.id());
+    assertThat(service.pending(manager()).truncated()).isFalse();
     when(query.query(anyString()))
         .thenAnswer(inv -> sign(response(orders.paymentSnapshot(inv.getArgument(0)))));
     service.scheduled();
@@ -324,6 +325,27 @@ class ReconciliationTest {
     assertThat(orders.paymentSnapshot(other.id()).status()).isEqualTo("PAID");
     for (var o : List.of(fresh, old, cash))
       assertThat(orders.paymentSnapshot(o.id()).paidAt()).isNull();
+  }
+
+  @Test
+  void pendingIsCappedAtTwoHundredAndMarksTruncation() {
+    long createdAt = System.currentTimeMillis() - 3600000;
+    String accountId = identity.find("customer").id();
+    for (int i = 0; i < 201; i++) {
+      String id = String.format("P%019d", i);
+      db.update(
+          "insert into orders(id,branch_id,account_id,status,fulfillment,payment_method,total,note,created_at,idempotency_key,request_hash)"
+              + " values(?,?,?,'PENDING_PAYMENT','TAKEAWAY','ECPAY',100,'',?,?,?)",
+          id,
+          "taipei",
+          accountId,
+          createdAt + i,
+          "pending-" + i,
+          "hash-" + i);
+    }
+    var page = service.pending(manager());
+    assertThat(page.items()).hasSize(200);
+    assertThat(page.truncated()).isTrue();
   }
 
   @Test
