@@ -8,6 +8,8 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/menu")
 class CatalogController {
+  record GroupBinding(List<String> groupIds) {}
+
   private final Catalog s;
 
   CatalogController(Catalog s) {
@@ -23,5 +25,30 @@ class CatalogController {
   @PostMapping
   Catalog.Product save(@RequestAttribute Actor actor, @RequestBody Catalog.Product p) {
     return s.save(actor, p);
+  }
+
+  @GetMapping("/options")
+  List<Catalog.OptionGroup> options(@RequestAttribute Actor actor) {
+    return s.optionGroups(actor);
+  }
+
+  @PostMapping("/options/groups")
+  Catalog.OptionGroup saveGroup(
+      @RequestAttribute Actor actor, @RequestBody Catalog.OptionGroup group) {
+    return s.saveOptionGroup(actor, group);
+  }
+
+  @PostMapping("/options/items")
+  Catalog.OptionItem saveItem(
+      @RequestAttribute Actor actor, @RequestBody Catalog.OptionItem item) {
+    return s.saveOptionItem(actor, item);
+  }
+
+  @PostMapping("/{productId}/options")
+  void bind(
+      @RequestAttribute Actor actor,
+      @PathVariable String productId,
+      @RequestBody GroupBinding binding) {
+    s.bindProductOptions(actor, productId, binding.groupIds());
   }
 }

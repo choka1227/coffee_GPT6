@@ -13,11 +13,51 @@ public interface Catalog {
       int cost,
       String image,
       String badge,
-      boolean active) {}
+      boolean active,
+      List<OptionGroup> optionGroups) {}
+
+  record OptionItem(
+      String id,
+      String groupId,
+      String name,
+      int priceDelta,
+      int costDelta,
+      boolean active,
+      int sortOrder) {}
+
+  record OptionGroup(
+      String id,
+      String name,
+      String selection,
+      int minSelect,
+      int maxSelect,
+      boolean active,
+      int sortOrder,
+      List<OptionItem> items) {}
+
+  record ResolvedOption(
+      String groupId,
+      String groupName,
+      String optionId,
+      String optionName,
+      int priceDelta,
+      int costDelta) {}
 
   List<Product> list(Actor a, boolean manage);
 
   Product sellable(String id);
 
   Product save(Actor a, Product p);
+
+  List<OptionGroup> productOptions(String productId);
+
+  List<ResolvedOption> resolveOptions(String productId, List<String> optionIds);
+
+  List<OptionGroup> optionGroups(Actor a);
+
+  OptionGroup saveOptionGroup(Actor a, OptionGroup group);
+
+  OptionItem saveOptionItem(Actor a, OptionItem item);
+
+  void bindProductOptions(Actor a, String productId, List<String> groupIds);
 }
