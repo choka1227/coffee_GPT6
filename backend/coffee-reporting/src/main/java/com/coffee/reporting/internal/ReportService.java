@@ -81,7 +81,7 @@ public class ReportService {
     var products =
         db.queryForList(
             "select i.product_id as id,i.name as name,i.category as category,sum(i.quantity) as"
-                + " quantity,sum(i.unit_price*i.quantity) as revenue,sum(i.unit_cost*i.quantity) as"
+                + " quantity,sum((i.unit_price+i.options_price)*i.quantity) as revenue,sum((i.unit_cost+i.options_cost)*i.quantity) as"
                 + " cost from order_items i join orders o on o.id=i.order_id where o.paid_at>=? and"
                 + " o.paid_at<?"
                 + filter
@@ -98,7 +98,7 @@ public class ReportService {
     var topToday =
         db.queryForList(
             "select i.product_id as id,max(i.name) as name,sum(i.quantity) as"
-                + " quantity,sum(i.unit_price*i.quantity) as revenue from order_items i join orders"
+                + " quantity,sum((i.unit_price+i.options_price)*i.quantity) as revenue from order_items i join orders"
                 + " o on o.id=i.order_id where o.paid_at>=? and o.paid_at<?"
                 + filter
                 + " group by i.product_id order by quantity desc,revenue desc limit 5",

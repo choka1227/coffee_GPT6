@@ -37,9 +37,9 @@
   "paymentMethod": "CASH",
   "note": "請稍後一起出餐",
   "items": [
-    {"productId": "latte", "quantity": 2, "temperature": "熱", "sugar": "無糖"}
+    {"productId": "latte", "quantity": 2, "optionIds": ["temp-hot", "sugar-none"]}
   ]
 }
 ```
 
-非飲料使用 temperature / sugar = `不適用`。價格、成本、總金額均由後端決定。服務契約與完整欄位定義位於各後端模組的 `api` package 及前端 `shared/types.ts`。
+`optionIds` 只傳選項識別碼，不接受任何加價欄位。每份選項加價、成本與訂單總額均由後端依有效菜單重算；回應的 `items[].options` 僅含群組名、選項名與加價，不含成本。服務契約與完整欄位定義位於各後端模組的 `api` package 及前端 `shared/types.ts`。

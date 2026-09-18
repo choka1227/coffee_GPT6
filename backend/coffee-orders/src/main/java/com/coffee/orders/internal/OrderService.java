@@ -36,6 +36,7 @@ public class OrderService implements Orders {
         q.paymentMethod() != null && Set.of("CASH", "ECPAY").contains(q.paymentMethod()),
         "付款方式不正確");
     Problem.check(q.note() != null && q.note().length() <= 200, "備註最多 200 字");
+    q = normalize(q);
     String fingerprint = fingerprint(q);
     var existing =
         db.queryForList(
@@ -53,13 +54,18 @@ public class OrderService implements Orders {
     }
     String id = Ids.order();
     List<Catalog.Product> products = new ArrayList<>();
+    List<List<Catalog.ResolvedOption>> resolved = new ArrayList<>();
     int total = 0;
     for (LineInput l : q.items()) {
       Problem.check(l != null && l.quantity() >= 1 && l.quantity() <= 50, "單品數量需為 1–50");
       var p = catalog.sellable(l.productId());
-      validateOptions(p, l);
+      var options = catalog.resolveOptions(p.id(), l.optionIds());
+      int optionPrice = options.stream().mapToInt(Catalog.ResolvedOption::priceDelta).sum();
+      int unitPrice = Math.addExact(p.price(), optionPrice);
+      Problem.check(unitPrice > 0, "商品金額不正確");
       products.add(p);
-      total = Math.addExact(total, Math.multiplyExact(p.price(), l.quantity()));
+      resolved.add(options);
+      total = Math.addExact(total, Math.multiplyExact(unitPrice, l.quantity()));
     }
     Problem.check(total <= 1000000, "單筆訂單金額超過上限");
     db.update(
@@ -79,11 +85,15 @@ public class OrderService implements Orders {
     for (int i = 0; i < q.items().size(); i++) {
       var l = q.items().get(i);
       var p = products.get(i);
+      var options = resolved.get(i);
+      int optionsPrice = options.stream().mapToInt(Catalog.ResolvedOption::priceDelta).sum();
+      int optionsCost = options.stream().mapToInt(Catalog.ResolvedOption::costDelta).sum();
+      String itemId = Ids.next();
       db.update(
           "insert into"
-              + " order_items(id,order_id,product_id,name,category,unit_price,unit_cost,quantity,temperature,sugar)"
-              + " values(?,?,?,?,?,?,?,?,?,?)",
-          Ids.next(),
+              + " order_items(id,order_id,product_id,name,category,unit_price,unit_cost,quantity,temperature,sugar,options_price,options_cost)"
+              + " values(?,?,?,?,?,?,?,?,null,null,?,?)",
+          itemId,
           id,
           p.id(),
           p.name(),
@@ -91,22 +101,26 @@ public class OrderService implements Orders {
           p.price(),
           p.cost(),
           l.quantity(),
-          l.temperature(),
-          l.sugar());
+          optionsPrice,
+          optionsCost);
+      for (var option : options)
+        db.update(
+            "insert into order_item_options(id,order_item_id,group_id,group_name,option_id,option_name,price_delta,cost_delta) values(?,?,?,?,?,?,?,?)",
+            Ids.next(), itemId, option.groupId(), option.groupName(), option.optionId(),
+            option.optionName(), option.priceDelta(), option.costDelta());
     }
     return snapshot(id);
   }
 
-  private void validateOptions(Catalog.Product p, LineInput l) {
-    if (p.category().equals("手作烘焙"))
-      Problem.check("不適用".equals(l.temperature()) && "不適用".equals(l.sugar()), "烘焙商品不提供冰量甜度");
-    else {
-      Problem.check(
-          Set.of("熱", "正常冰", "少冰", "去冰").contains(l.temperature() == null ? "" : l.temperature()),
-          "溫度不正確");
-      Problem.check(
-          Set.of("無糖", "微糖", "半糖", "正常糖").contains(l.sugar() == null ? "" : l.sugar()), "甜度不正確");
-    }
+  private Create normalize(Create q) {
+    if (q.items() == null) return q;
+    return new Create(
+        q.branchId(), q.fulfillment(), q.paymentMethod(), q.note(),
+        q.items().stream()
+            .map(l -> l == null ? null : new LineInput(
+                l.productId(), l.quantity(),
+                l.optionIds() == null ? null : l.optionIds().stream().sorted().toList()))
+            .toList());
   }
 
   private String fingerprint(Create q) {
@@ -294,7 +308,17 @@ public class OrderService implements Orders {
                                 x.getInt("unit_price"),
                                 x.getInt("quantity"),
                                 x.getString("temperature"),
-                                x.getString("sugar")),
+                                x.getString("sugar"),
+                                x.getInt("options_price"),
+                                Math.multiplyExact(
+                                    Math.addExact(x.getInt("unit_price"), x.getInt("options_price")),
+                                    x.getInt("quantity")),
+                                db.query(
+                                    "select group_name,option_name,price_delta from order_item_options where order_item_id=? order by id",
+                                    (z, j) -> new LineOption(
+                                        z.getString("group_name"), z.getString("option_name"),
+                                        z.getInt("price_delta")),
+                                    x.getString("id"))),
                         id)),
             id);
     if (rows.isEmpty()) throw new Problem(404, "找不到訂單");

@@ -25,6 +25,26 @@ export interface Product {
   image: string;
   badge: string;
   active: boolean;
+  optionGroups: OptionGroup[];
+}
+export interface OptionItem {
+  id: string | null;
+  groupId: string;
+  name: string;
+  priceDelta: number;
+  costDelta: number;
+  active: boolean;
+  sortOrder: number;
+}
+export interface OptionGroup {
+  id: string | null;
+  name: string;
+  selection: "SINGLE" | "MULTI";
+  minSelect: number;
+  maxSelect: number;
+  active: boolean;
+  sortOrder: number;
+  items: OptionItem[];
 }
 export interface Line {
   productId: string;
@@ -32,8 +52,19 @@ export interface Line {
   category: string;
   unitPrice: number;
   quantity: number;
-  temperature: string;
-  sugar: string;
+  temperature: string | null;
+  sugar: string | null;
+  optionsPrice: number;
+  lineTotal: number;
+  options: OrderOption[];
+}
+export interface CartLine extends Omit<Line, "temperature" | "sugar"> {
+  optionIds: string[];
+}
+export interface OrderOption {
+  groupName: string;
+  optionName: string;
+  priceDelta: number;
 }
 export interface Order {
   id: string;

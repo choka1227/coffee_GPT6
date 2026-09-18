@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { Plus, Search, Pencil, BookOpen } from "lucide-vue-next";
+import { Plus, Search, Pencil, Settings2 } from "lucide-vue-next";
 import { api, send } from "../../shared/api";
-import type { Product } from "../../shared/types";
+import type { OptionGroup, OptionItem, Product } from "../../shared/types";
 import { money } from "../../shared/format";
 import { notify } from "../../shared/notice";
 import Modal from "../../shared/Modal.vue";
@@ -12,7 +12,12 @@ const products = ref<Product[]>([]),
   category = ref("全部分類"),
   loading = ref(true),
   error = ref(""),
-  saving = ref(false);
+  saving = ref(false),
+  optionGroups = ref<OptionGroup[]>([]),
+  editingGroup = ref<OptionGroup | null>(null),
+  editingItem = ref<OptionItem | null>(null),
+  bindingProduct = ref<Product | null>(null),
+  selectedGroupIds = ref<string[]>([]);
 const categories = ["經典咖啡", "風味特調", "茶與其他", "手作烘焙"];
 const visible = computed(() =>
   products.value.filter(
@@ -25,7 +30,10 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    products.value = await api<Product[]>("/menu?manage=true");
+    [products.value, optionGroups.value] = await Promise.all([
+      api<Product[]>("/menu?manage=true"),
+      api<OptionGroup[]>("/menu/options"),
+    ]);
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
@@ -44,6 +52,7 @@ function add() {
     image: "latte",
     badge: "",
     active: true,
+    optionGroups: [],
   };
 }
 async function save() {
@@ -58,6 +67,79 @@ async function save() {
   } finally {
     saving.value = false;
   }
+}
+function addGroup() {
+  editingGroup.value = {
+    id: null,
+    name: "",
+    selection: "SINGLE",
+    minSelect: 0,
+    maxSelect: 1,
+    active: true,
+    sortOrder: optionGroups.value.length + 1,
+    items: [],
+  };
+}
+function addItem(group: OptionGroup) {
+  editingItem.value = {
+    id: null,
+    groupId: group.id!,
+    name: "",
+    priceDelta: 0,
+    costDelta: 0,
+    active: true,
+    sortOrder: group.items.length + 1,
+  };
+}
+async function saveGroup() {
+  saving.value = true;
+  try {
+    await send("/menu/options/groups", editingGroup.value);
+    editingGroup.value = null;
+    notify("選項群組已儲存");
+    await load();
+  } catch (e) {
+    notify((e as Error).message);
+  } finally {
+    saving.value = false;
+  }
+}
+async function saveItem() {
+  saving.value = true;
+  try {
+    await send("/menu/options/items", editingItem.value);
+    editingItem.value = null;
+    notify("選項項目已儲存");
+    await load();
+  } catch (e) {
+    notify((e as Error).message);
+  } finally {
+    saving.value = false;
+  }
+}
+function openBinding(product: Product) {
+  bindingProduct.value = product;
+  selectedGroupIds.value = product.optionGroups.map((group) => group.id!);
+}
+async function saveBinding() {
+  saving.value = true;
+  try {
+    await send(`/menu/${bindingProduct.value!.id}/options`, {
+      groupIds: selectedGroupIds.value,
+    });
+    bindingProduct.value = null;
+    notify("商品選項已更新");
+    await load();
+  } catch (e) {
+    notify((e as Error).message);
+  } finally {
+    saving.value = false;
+  }
+}
+function usageCount(groupId: string | null) {
+  return products.value.filter((product) =>
+    product.optionGroups.some((group) => group.id === groupId),
+  ).length;
 }
 </script>
 <template>
@@ -138,6 +220,13 @@ async function save() {
               <td>
                 <button
                   class="icon-btn"
+                  :aria-label="'設定' + p.name + '選項'"
+                  @click="openBinding(p)"
+                >
+                  <Settings2 :size="18" />
+                </button>
+                <button
+                  class="icon-btn"
                   :aria-label="'編輯' + p.name"
                   @click="editing = { ...p }"
                 >
@@ -153,6 +242,64 @@ async function save() {
       </div>
       <div class="table-foot">
         價格以新台幣整數計價。修改價格與成本只影響之後建立的訂單。
+      </div>
+    </section>
+    <section class="panel">
+      <div class="table-toolbar">
+        <div>
+          <h2>商品選項</h2>
+          <p class="muted">管理全鏈共用的選項、加價與成本。</p>
+        </div>
+        <button class="btn primary" @click="addGroup">
+          <Plus :size="18" />新增群組
+        </button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>群組</th>
+              <th>選擇規則</th>
+              <th>商品使用數</th>
+              <th>項目</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="group in optionGroups" :key="group.id!">
+              <td>
+                <b>{{ group.name }}</b>
+                <small>{{ group.active ? "啟用" : "停用" }}</small>
+              </td>
+              <td>
+                {{ group.selection === "SINGLE" ? "單選" : "複選" }}，
+                {{ group.minSelect }}–{{ group.maxSelect }} 項
+              </td>
+              <td>{{ usageCount(group.id) }} 個商品使用</td>
+              <td>
+                <span v-for="item in group.items" :key="item.id!" class="status">
+                  {{ item.name }}（+{{ money(item.priceDelta) }}）
+                </span>
+              </td>
+              <td>
+                <button class="icon-btn" :aria-label="'編輯' + group.name" @click="editingGroup = { ...group }">
+                  <Pencil :size="18" />
+                </button>
+                <button class="icon-btn" :aria-label="'新增' + group.name + '項目'" @click="addItem(group)">
+                  <Plus :size="18" />
+                </button>
+                <button
+                  v-for="item in group.items"
+                  :key="'edit-' + item.id"
+                  class="btn secondary"
+                  @click="editingItem = { ...item }"
+                >
+                  編輯 {{ item.name }}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </section>
   </div>
@@ -210,4 +357,39 @@ async function save() {
       </button>
     </form></Modal
   >
+  <Modal v-if="editingGroup" title="編輯選項群組" @close="!saving && (editingGroup = null)">
+    <form class="form-stack" @submit.prevent="saveGroup">
+      <label>群組名稱<input v-model="editingGroup.name" required maxlength="40" /></label>
+      <div class="form-grid">
+        <label>選擇方式<select v-model="editingGroup.selection"><option value="SINGLE">單選</option><option value="MULTI">複選</option></select></label>
+        <label>最少選擇<input v-model.number="editingGroup.minSelect" type="number" min="0" required /></label>
+        <label>最多選擇<input v-model.number="editingGroup.maxSelect" type="number" min="1" required /></label>
+        <label>排序<input v-model.number="editingGroup.sortOrder" type="number" required /></label>
+      </div>
+      <label class="checkbox-label"><input v-model="editingGroup.active" type="checkbox" />啟用群組</label>
+      <p v-if="editingGroup.id" class="muted">{{ usageCount(editingGroup.id) }} 個商品使用；停用前需先解除全部綁定。</p>
+      <button class="btn primary" :disabled="saving">{{ saving ? "儲存中…" : "儲存群組" }}</button>
+    </form>
+  </Modal>
+  <Modal v-if="editingItem" title="編輯選項項目" @close="!saving && (editingItem = null)">
+    <form class="form-stack" @submit.prevent="saveItem">
+      <label>項目名稱<input v-model="editingItem.name" required maxlength="40" /></label>
+      <div class="form-grid">
+        <label>加價（元）<input v-model.number="editingItem.priceDelta" type="number" min="0" max="10000" required /></label>
+        <label>成本增量（元）<input v-model.number="editingItem.costDelta" type="number" min="0" max="10000" required /></label>
+        <label>排序<input v-model.number="editingItem.sortOrder" type="number" required /></label>
+      </div>
+      <label class="checkbox-label"><input v-model="editingItem.active" type="checkbox" />啟用項目</label>
+      <button class="btn primary" :disabled="saving">{{ saving ? "儲存中…" : "儲存項目" }}</button>
+    </form>
+  </Modal>
+  <Modal v-if="bindingProduct" :title="'設定「' + bindingProduct.name + '」選項'" @close="!saving && (bindingProduct = null)">
+    <form class="form-stack" @submit.prevent="saveBinding">
+      <label v-for="group in optionGroups" :key="group.id!" class="checkbox-label">
+        <input v-model="selectedGroupIds" type="checkbox" :value="group.id" />
+        {{ group.name }}（{{ usageCount(group.id) }} 個商品使用）
+      </label>
+      <button class="btn primary" :disabled="saving">{{ saving ? "儲存中…" : "儲存商品選項" }}</button>
+    </form>
+  </Modal>
 </template>
