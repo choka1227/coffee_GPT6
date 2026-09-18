@@ -43,6 +43,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @ActiveProfiles("dev")
 @AutoConfigureMockMvc
 class ReconciliationTest {
+  @Autowired com.coffee.reporting.internal.ReportService reports;
   @Autowired Orders orders;
   @Autowired Identity identity;
   @Autowired ReconciliationService service;
@@ -163,6 +164,79 @@ class ReconciliationTest {
   }
 
   @Test
+  void optionalFieldsRespectOutcomePriorityAndNeverCredit() {
+    for (String scenario :
+        List.of(
+            "unpaid-empty",
+            "unpaid-zero",
+            "unpaid-missing",
+            "simulated-empty",
+            "simulated-missing",
+            "mismatch-empty",
+            "paid-empty",
+            "paid-missing",
+            "invalid-trade",
+            "invalid-amount",
+            "overflow-amount")) {
+      var o = create("taipei", "ECPAY");
+      var p = response(o);
+      p.put("TradeNo", "");
+      Integer expectedAmount = null;
+      String expected = "QUERY_FAILED";
+      switch (scenario) {
+        case "unpaid-empty", "unpaid-zero", "unpaid-missing" -> {
+          p.put("TradeStatus", "0");
+          p.put("TradeAmt", scenario.equals("unpaid-zero") ? "0" : "");
+          if (scenario.equals("unpaid-missing")) p.remove("TradeAmt");
+          expectedAmount = scenario.equals("unpaid-zero") ? 0 : null;
+          expected = "STILL_UNPAID";
+        }
+        case "simulated-empty", "simulated-missing" -> {
+          p.put("SimulatePaid", "1");
+          p.remove("TradeAmt");
+          if (scenario.equals("simulated-empty")) p.put("TradeAmt", "");
+          expected = "SIMULATED";
+        }
+        case "mismatch-empty" -> {
+          p.put("TradeAmt", "1");
+          expectedAmount = 1;
+          expected = "AMOUNT_MISMATCH";
+        }
+        case "paid-missing" -> p.remove("TradeAmt");
+        case "invalid-trade" -> p.put("TradeNo", "bad/trade");
+        case "invalid-amount", "overflow-amount" -> {
+          p.put("TradeNo", "T" + o.id());
+          p.put("TradeAmt", scenario.equals("invalid-amount") ? "invalid" : "2147483648");
+        }
+      }
+      stub(p);
+      var result = service.reconcile(manager(), o.id());
+      assertThat(result.outcome()).as(scenario).isEqualTo(expected);
+      if (expected.equals("AMOUNT_MISMATCH"))
+        assertThat(result.detail()).contains("1 元", o.total() + " 元");
+      assertThat(orders.paymentSnapshot(o.id()).status()).isEqualTo("PENDING_PAYMENT");
+      assertThat(
+              db.queryForObject(
+                  "select provider_trade_no from orders where id=?", String.class, o.id()))
+          .isNull();
+      assertThat(
+              db.queryForObject(
+                  "select provider_trade_no from payment_reconciliations where order_id=?",
+                  String.class,
+                  o.id()))
+          .isEmpty();
+      assertThat(service.history(manager(), o.id()))
+          .singleElement()
+          .extracting(Reconciliation.Attempt::tradeAmount)
+          .isEqualTo(expectedAmount);
+    }
+    assertThat(
+            db.queryForObject(
+                "select count(*) from orders where provider_trade_no=''", Integer.class))
+        .isZero();
+  }
+
+  @Test
   void missingDateUsesDocumentedFallbackAndThrottleWorks() {
     var o = create("taipei", "ECPAY");
     var p = response(o);
@@ -176,6 +250,51 @@ class ReconciliationTest {
     service.reconcile(manager(), unpaid.id());
     assertThatThrownBy(() -> service.reconcile(manager(), unpaid.id()))
         .isInstanceOfSatisfying(Problem.class, e -> assertThat(e.status).isEqualTo(429));
+  }
+
+  @Test
+  void outOfRangePaymentDateFallsBackWithoutRejectingConfirmedPayment() {
+    for (String date :
+        List.of("2999/01/01 00:00:00", "1970/01/01 08:00:00", "1969/12/31 23:59:59")) {
+      var o = create("taipei", "ECPAY");
+      var p = response(o);
+      p.put("PaymentDate", date);
+      stub(p);
+      long before = System.currentTimeMillis();
+      var result = service.reconcile(manager(), o.id());
+      long after = System.currentTimeMillis();
+      assertThat(result.outcome()).as(date).isEqualTo("CONFIRMED");
+      assertThat(result.detail()).contains("以查核時間入帳");
+      assertThat(orders.paymentSnapshot(o.id()).status()).isEqualTo("PAID");
+      assertThat(orders.paymentSnapshot(o.id()).paidAt()).isBetween(before, after);
+      assertThat(orders.paymentSnapshot(o.id()).paidAt()).isEqualTo(result.queriedAt());
+      assertThat(service.history(manager(), o.id()))
+          .singleElement()
+          .extracting(Reconciliation.Attempt::detail)
+          .isEqualTo(result.detail());
+    }
+  }
+
+  @Test
+  void reconciliationRevenueBelongsToTaipeiPaymentDayNotQueryDay() {
+    var o = create("taipei", "ECPAY");
+    var p = response(o);
+    // Taipei March 1 is still February in UTC: catch both day and month errors.
+    p.put("PaymentDate", "2021/03/01 00:30:00");
+    stub(p);
+    assertThat(service.reconcile(manager(), o.id()).outcome()).isEqualTo("CONFIRMED");
+    var march = json.valueToTree(reports.report(manager(), "2021-03", "taipei"));
+    assertThat(march.path("revenue").asLong()).isEqualTo(o.total());
+    assertThat(march.path("daily").get(0).path("day").asText()).isEqualTo("01");
+    assertThat(march.path("daily").get(0).path("revenue").asLong()).isEqualTo(o.total());
+    assertThat(march.path("daily").get(0).path("orders").asInt()).isEqualTo(1);
+    var february = json.valueToTree(reports.report(manager(), "2021-02", "taipei"));
+    assertThat(february.path("revenue").asLong()).isZero();
+    var today = LocalDate.now(ZoneId.of("Asia/Taipei"));
+    var current =
+        json.valueToTree(reports.report(manager(), YearMonth.from(today).toString(), "taipei"));
+    assertThat(current.path("daily").get(today.getDayOfMonth() - 1).path("revenue").asLong())
+        .isZero();
   }
 
   @Test
@@ -195,9 +314,10 @@ class ReconciliationTest {
         "update orders set created_at=? where id=?",
         System.currentTimeMillis() - 8 * 86400000L,
         old.id());
-    assertThat(service.pending(manager()))
+    assertThat(service.pending(manager()).items())
         .extracting(Reconciliation.Pending::orderId)
         .containsExactly(eligible.id());
+    assertThat(service.pending(manager()).truncated()).isFalse();
     when(query.query(anyString()))
         .thenAnswer(inv -> sign(response(orders.paymentSnapshot(inv.getArgument(0)))));
     service.scheduled();
@@ -205,6 +325,27 @@ class ReconciliationTest {
     assertThat(orders.paymentSnapshot(other.id()).status()).isEqualTo("PAID");
     for (var o : List.of(fresh, old, cash))
       assertThat(orders.paymentSnapshot(o.id()).paidAt()).isNull();
+  }
+
+  @Test
+  void pendingIsCappedAtTwoHundredAndMarksTruncation() {
+    long createdAt = System.currentTimeMillis() - 3600000;
+    String accountId = identity.find("customer").id();
+    for (int i = 0; i < 201; i++) {
+      String id = String.format("P%019d", i);
+      db.update(
+          "insert into orders(id,branch_id,account_id,status,fulfillment,payment_method,total,note,created_at,idempotency_key,request_hash)"
+              + " values(?,?,?,'PENDING_PAYMENT','TAKEAWAY','ECPAY',100,'',?,?,?)",
+          id,
+          "taipei",
+          accountId,
+          createdAt + i,
+          "pending-" + i,
+          "hash-" + i);
+    }
+    var page = service.pending(manager());
+    assertThat(page.items()).hasSize(200);
+    assertThat(page.truncated()).isTrue();
   }
 
   @Test
@@ -234,11 +375,19 @@ class ReconciliationTest {
                 .andReturn()
                 .getRequest()
                 .getSession();
-    mvc.perform(post("/api/payments/reconciliation/" + o.id()).session(session))
+    var own = create("taipei", "ECPAY");
+    var p = response(own);
+    p.put("TradeStatus", "0");
+    stub(p);
+    mvc.perform(post("/api/payments/reconciliation/" + own.id()).session(session))
         .andExpect(status().isForbidden());
     mvc.perform(post("/api/payments/reconciliation/" + o.id()).session(session).with(csrf()))
         .andExpect(status().isForbidden());
     verifyNoInteractions(query);
+    mvc.perform(post("/api/payments/reconciliation/" + own.id()).session(session).with(csrf()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.outcome").value("STILL_UNPAID"));
+    verify(query, times(1)).query(own.id());
   }
 
   @Test
