@@ -43,6 +43,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @ActiveProfiles("dev")
 @AutoConfigureMockMvc
 class ReconciliationTest {
+  @Autowired com.coffee.reporting.internal.ReportService reports;
   @Autowired Orders orders;
   @Autowired Identity identity;
   @Autowired ReconciliationService service;
@@ -272,6 +273,28 @@ class ReconciliationTest {
           .extracting(Reconciliation.Attempt::detail)
           .isEqualTo(result.detail());
     }
+  }
+
+  @Test
+  void reconciliationRevenueBelongsToTaipeiPaymentDayNotQueryDay() {
+    var o = create("taipei", "ECPAY");
+    var p = response(o);
+    // Taipei March 1 is still February in UTC: catch both day and month errors.
+    p.put("PaymentDate", "2021/03/01 00:30:00");
+    stub(p);
+    assertThat(service.reconcile(manager(), o.id()).outcome()).isEqualTo("CONFIRMED");
+    var march = json.valueToTree(reports.report(manager(), "2021-03", "taipei"));
+    assertThat(march.path("revenue").asLong()).isEqualTo(o.total());
+    assertThat(march.path("daily").get(0).path("day").asText()).isEqualTo("01");
+    assertThat(march.path("daily").get(0).path("revenue").asLong()).isEqualTo(o.total());
+    assertThat(march.path("daily").get(0).path("orders").asInt()).isEqualTo(1);
+    var february = json.valueToTree(reports.report(manager(), "2021-02", "taipei"));
+    assertThat(february.path("revenue").asLong()).isZero();
+    var today = LocalDate.now(ZoneId.of("Asia/Taipei"));
+    var current =
+        json.valueToTree(reports.report(manager(), YearMonth.from(today).toString(), "taipei"));
+    assertThat(current.path("daily").get(today.getDayOfMonth() - 1).path("revenue").asLong())
+        .isZero();
   }
 
   @Test
