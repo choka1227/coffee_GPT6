@@ -34,8 +34,8 @@
 
 | 編號 | 缺口 | 狀態 | 規格書 |
 | --- | --- | --- | --- |
-| G06 | 商品選項模型與加價 | **規格書已完成，待實作** | [`specs/G06-product-options.md`](specs/G06-product-options.md) |
-| G13 | 分店菜單可用性與售罄 | **規格書已完成，待實作（排在 G06 之後）** | [`specs/G13-branch-menu-availability.md`](specs/G13-branch-menu-availability.md) |
+| G06 | 商品選項模型與加價 | 實作已合併（PR #14，2026-09-18） | [`specs/G06-product-options.md`](specs/G06-product-options.md) |
+| G13 | 分店菜單可用性與售罄 | **規格書已完成，G06 已合併，可開工** | [`specs/G13-branch-menu-availability.md`](specs/G13-branch-menu-availability.md) |
 
 **G06 商品選項模型與加價** —— `order_items.temperature` / `sugar` 是 `VARCHAR(12)` 自由字串，**完全不影響金額**（`OrderService.java:62` 的單價就是 `products.price`）。系統賣不了「加珍珠 +10」「換燕麥奶 +20」這類每天都在賣的加價品項，是唯一直接造成營收短收的缺口，且不依賴任何外部服務。另外 `validateOptions()`（`OrderService.java:100-111`）把分類字串 `"手作烘焙"` 與溫度／甜度的可選集合寫死在 `coffee-orders` 裡，但分類清單其實歸 `coffee-catalog` 管，總部新增分類就會讓點餐端的驗證默默失準。完整規格見 [`specs/G06-product-options.md`](specs/G06-product-options.md)。
 
@@ -43,7 +43,7 @@
 
 規格採「全鏈一份主檔 + 分店覆寫表（`branch_products`）」，沒有覆寫列時行為與現在完全相同，既有資料零遷移。售完標記記在台北營業日上，隔日自動失效，**不需要引入任何排程作業**。**區域定價（分店各自售價）刻意排除**，它會同時動到金額重算、成本快照與報表毛利，且與 G06 的加價計算相撞 —— 另立 **G18**（`G17` 已由 G06 第 13.6 節的「常用組合快捷」占用），排在 G06 與 G13 都合併之後。規格書第 11.3 節有完整理由。
 
-**排程注意：G06 與 G13 都會修改 `Catalog.sellable()` 的簽章與 `OrderService.create()` 的品項迴圈，不要同時開工。** G06 先實作合併，G13 再從最新主線開分支（G06 用 V3，G13 用 V4）。
+**排程注意：G06 與 G13 都會修改 `Catalog.sellable()` 的簽章與 `OrderService.create()` 的品項迴圈，不要同時開工。** G06 已於 2026-09-18 隨 PR #14 合併，這道閘門解除：**G13 現在可以從最新主線開分支開工**。G06 已占用 Flyway `V3__product_options.sql`，G13 用 **V4**。G13 規格書寫作時 `Catalog.sellable()` 尚未帶選項，實作前請以主線上 PR #14 之後的簽章為準。
 
 ### P3 — 金流（PO 決定延後，最後才串接）
 
@@ -126,9 +126,9 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 
 ## 排定的工作順序
 
-1. **Codex 依 `specs/G06-product-options.md` 實作選項模型與加價** —— 規格第 13 節六項設計決策已定案，直接開工，不需等任何確認
-2. **Codex 依 `specs/G01a-reconciliation-fixes.md` 修正 G01 留在主線的兩項缺陷** —— 與第 1 項動到不同模組（`coffee-payments` vs `coffee-orders` / `coffee-catalog`），可並行
-3. **Codex 依 `specs/G13-branch-menu-availability.md` 實作分店可用性與售罄** —— **G06 合併後**才開工，兩者的 S3 會撞 `Catalog.sellable()` 簽章與 `OrderService.create()` 的品項迴圈
+1. ~~**Codex 依 `specs/G06-product-options.md` 實作選項模型與加價**~~ —— 已完成，PR #14 於 2026-09-18 合併（S1/S2/S3 三階段，進度報告見 [`reports/G06-product-options-progress.md`](reports/G06-product-options-progress.md)）
+2. **Codex 依 `specs/G01a-reconciliation-fixes.md` 修正 G01 留在主線的兩項缺陷** —— 進行中，draft PR #15（`codex/g01-fixes`）：S1 完成且 CI 綠，S2 進行中
+3. **Codex 依 `specs/G13-branch-menu-availability.md` 實作分店可用性與售罄** —— 閘門已解除（G06 已合併），可從最新主線開分支開工。Flyway 用 V4
 4. Claude 產出 G11 + G15 合併規格書（稽核軌跡與現金日結）
 5. G10 訂單分頁與 N+1（小、確定，可穿插）
 6. 金流那條線（G01–G04 其餘部分）待進入綠界串接階段再排
@@ -143,6 +143,7 @@ G01 留在主線的缺陷已寫成獨立規格 [`specs/G01a-reconciliation-fixes
 
 | 日期 | 變更 |
 | --- | --- |
+| 2026-09-18 | G06 實作隨 PR #14 合併，狀態由「待實作」改為「已合併」；工作順序第 1 項標為完成、第 2 項標註 draft PR #15 進度；G13 的「等 G06 合併」閘門解除並註明 Flyway 用 V4、`Catalog.sellable()` 簽章以 PR #14 後的主線為準 |
 | 2026-09-17 | 建立本檔；完成 G01 規格書 |
 | 2026-09-17 | PO 授權設計決策給 Claude，規格書的「待 PO 決定」改為「設計決策」；G06 六項設計決策定案（負加價改為**不允許**）；新增 G17；完成 G01a 缺陷修正規格書 |
 | 2026-09-17 | 完成 G13 規格書（分店菜單可用性與售罄）；記錄 G06 / G13 的施工順序相依；登記 G18（區域定價） |
