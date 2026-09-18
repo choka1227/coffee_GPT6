@@ -32,3 +32,11 @@
 
 本次實作：G01a。尚待實作：G01a S2、G13（依 GAP 工作順序）。
 PR 維持 draft，不啟用 auto-merge。
+
+## S2 續作：付款時間 fallback
+已依 §4.1 修正未來、epoch 零值及負值付款時間，保留 CONFIRMED 並以查核時間入帳，
+detail 明確註記。新增測試驗證狀態、時間範圍與歷史紀錄。
+不改 schema、API、依賴、callback；既有缺漏日期測試保留。
+S1 已由 head 585222d 的 CI #76 verify 補足一般測試；手動 CSRF 反向驗證仍未執行。
+S2 §4.3 台北日期報表與 §4.2 pending 上限／固定查詢數尚未實作。
+本地 Maven Central DNS 仍失敗，新增修改須以新 head 遠端 CI 驗證，不能沿用 #76。

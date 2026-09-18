@@ -216,7 +216,10 @@ public class ReconciliationService implements Reconciliation {
                     .atZone(ZoneId.of("Asia/Taipei"))
                     .toInstant()
                     .toEpochMilli();
-            if (paidAt <= 0 || paidAt > now) throw new IllegalArgumentException();
+            if (paidAt <= 0 || paidAt > now) {
+              paidAt = now;
+              detail = "綠界付款時間超出有效範圍，以查核時間入帳";
+            }
           } catch (DateTimeParseException e) {
             paidAt = now;
             detail = "綠界未提供付款時間，以查核時間入帳";

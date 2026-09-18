@@ -252,6 +252,29 @@ class ReconciliationTest {
   }
 
   @Test
+  void outOfRangePaymentDateFallsBackWithoutRejectingConfirmedPayment() {
+    for (String date :
+        List.of("2999/01/01 00:00:00", "1970/01/01 08:00:00", "1969/12/31 23:59:59")) {
+      var o = create("taipei", "ECPAY");
+      var p = response(o);
+      p.put("PaymentDate", date);
+      stub(p);
+      long before = System.currentTimeMillis();
+      var result = service.reconcile(manager(), o.id());
+      long after = System.currentTimeMillis();
+      assertThat(result.outcome()).as(date).isEqualTo("CONFIRMED");
+      assertThat(result.detail()).contains("以查核時間入帳");
+      assertThat(orders.paymentSnapshot(o.id()).status()).isEqualTo("PAID");
+      assertThat(orders.paymentSnapshot(o.id()).paidAt()).isBetween(before, after);
+      assertThat(orders.paymentSnapshot(o.id()).paidAt()).isEqualTo(result.queriedAt());
+      assertThat(service.history(manager(), o.id()))
+          .singleElement()
+          .extracting(Reconciliation.Attempt::detail)
+          .isEqualTo(result.detail());
+    }
+  }
+
+  @Test
   void pendingScopeAgeAndScheduler() {
     var eligible = create("taipei", "ECPAY");
     var other = create("banqiao", "ECPAY");
