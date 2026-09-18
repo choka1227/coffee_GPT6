@@ -37,8 +37,7 @@ const auth = useAuth(),
   busy = ref(false),
   mobileCart = ref(false),
   selected = ref<Product | null>(null),
-  temperature = ref("熱"),
-  sugar = ref("無糖"),
+  selectedOptionIds = ref<string[]>([]),
   quantity = ref(1),
   receipt = ref<Order | null>(null),
   config = ref({ enabled: false, environment: "stage" });
@@ -53,9 +52,20 @@ const visible = computed(() =>
   ),
 );
 const total = computed(() =>
-  cart.value.reduce((s, l) => s + l.unitPrice * l.quantity, 0),
+  cart.value.reduce((s, l) => s + (l.unitPrice + l.optionsPrice) * l.quantity, 0),
 );
 const count = computed(() => cart.value.reduce((s, l) => s + l.quantity, 0));
+const selectedOptionsPrice = computed(() =>
+  (selected.value?.optionGroups || []).flatMap((g) => g.items)
+    .filter((i) => selectedOptionIds.value.includes(i.id!))
+    .reduce((sum, i) => sum + i.priceDelta, 0),
+);
+const optionsValid = computed(() =>
+  (selected.value?.optionGroups || []).every((g) => {
+    const count = g.items.filter((i) => selectedOptionIds.value.includes(i.id!)).length;
+    return count >= g.minSelect && count <= g.maxSelect && (g.selection !== "SINGLE" || count <= 1);
+  }),
+);
 const branch = computed(() =>
   branches.value.find((b) => b.id === branchId.value),
 );
@@ -87,9 +97,20 @@ onMounted(load);
 function choose(p: Product) {
   if (busy.value) return;
   selected.value = p;
-  temperature.value = p.category === "手作烘焙" ? "不適用" : "熱";
-  sugar.value = p.category === "手作烘焙" ? "不適用" : "無糖";
+  selectedOptionIds.value = p.optionGroups
+    .filter((g) => g.minSelect > 0)
+    .flatMap((g) => g.items.slice(0, g.minSelect).map((i) => i.id!));
   quantity.value = 1;
+}
+function toggleOption(groupId: string | null, itemId: string | null, single: boolean) {
+  if (!itemId) return;
+  const group = selected.value?.optionGroups.find((g) => g.id === groupId);
+  if (single && group) {
+    const ids = new Set(group.items.map((i) => i.id));
+    selectedOptionIds.value = selectedOptionIds.value.filter((id) => !ids.has(id));
+  }
+  if (!selectedOptionIds.value.includes(itemId)) selectedOptionIds.value.push(itemId);
+  else if (!single) selectedOptionIds.value = selectedOptionIds.value.filter((id) => id !== itemId);
 }
 function add() {
   const p = selected.value;
@@ -97,8 +118,7 @@ function add() {
   const existing = cart.value.find(
     (l) =>
       l.productId === p.id &&
-      l.temperature === temperature.value &&
-      l.sugar === sugar.value,
+      [...l.optionIds].sort().join(",") === [...selectedOptionIds.value].sort().join(","),
   );
   if (existing) {
     if (existing.quantity + quantity.value > 50) {
@@ -113,8 +133,14 @@ function add() {
       category: p.category,
       unitPrice: p.price,
       quantity: quantity.value,
-      temperature: temperature.value,
-      sugar: sugar.value,
+      optionIds: [...selectedOptionIds.value].sort(),
+      optionsPrice: p.optionGroups.flatMap((g) => g.items)
+        .filter((i) => selectedOptionIds.value.includes(i.id!))
+        .reduce((sum, i) => sum + i.priceDelta, 0),
+      lineTotal: 0,
+      options: p.optionGroups.flatMap((g) => g.items
+        .filter((i) => selectedOptionIds.value.includes(i.id!))
+        .map((i) => ({ groupName: g.name, optionName: i.name, priceDelta: i.priceDelta }))),
     });
   selected.value = null;
   notify("已加入 " + p.name);
@@ -148,11 +174,10 @@ async function checkout() {
       fulfillment: fulfillment.value,
       paymentMethod: payment.value,
       note: note.value,
-      items: cart.value.map(({ productId, quantity, temperature, sugar }) => ({
+      items: cart.value.map(({ productId, quantity, optionIds }) => ({
         productId,
         quantity,
-        temperature,
-        sugar,
+        optionIds,
       })),
     };
     const serialized = JSON.stringify(body);
@@ -351,18 +376,14 @@ async function checkout() {
         <div v-else class="cart-items">
           <article
             v-for="(l, i) in cart"
-            :key="l.productId + l.temperature + l.sugar"
+            :key="l.productId + l.optionIds.join(',')"
             class="cart-item"
           >
             <div class="cart-item-title">
               <b>{{ l.name }}</b
-              ><strong>{{ money(l.unitPrice * l.quantity) }}</strong>
+              ><strong>{{ money((l.unitPrice + l.optionsPrice) * l.quantity) }}</strong>
             </div>
-            <small>{{
-              l.temperature === "不適用"
-                ? "現烤烘焙"
-                : l.temperature + " / " + l.sugar
-            }}</small>
+            <small>{{ l.options.length ? l.options.map((o) => o.optionName).join(" / ") : "無選項" }}</small>
             <div class="quantity-control">
               <button :aria-label="'減少' + l.name" @click="adjust(i, -1)">
                 <Minus :size="13" /></button
@@ -449,21 +470,18 @@ async function checkout() {
           :alt="selected.category + '示意照片'"
         />
         <p class="muted">{{ selected.subtitle }}</p>
-        <template v-if="selected.category !== '手作烘焙'"
-          ><label
-            >溫度<select v-model="temperature">
-              <option v-for="t in ['熱', '正常冰', '少冰', '去冰']" :key="t">
-                {{ t }}
-              </option>
-            </select></label
-          ><label
-            >甜度<select v-model="sugar">
-              <option v-for="s in ['無糖', '微糖', '半糖', '正常糖']" :key="s">
-                {{ s }}
-              </option>
-            </select></label
-          ></template
-        ><label
+        <fieldset v-for="g in selected.optionGroups" :key="g.id!">
+          <legend>{{ g.name }} <small>選擇 {{ g.minSelect }}–{{ g.maxSelect }} 項</small></legend>
+          <label v-for="item in g.items" :key="item.id!">
+            <input
+              :type="g.selection === 'SINGLE' ? 'radio' : 'checkbox'"
+              :name="'option-' + g.id"
+              :checked="selectedOptionIds.includes(item.id!)"
+              @change="toggleOption(g.id, item.id, g.selection === 'SINGLE')"
+            />{{ item.name }}<span v-if="item.priceDelta"> +{{ money(item.priceDelta) }}</span>
+          </label>
+        </fieldset>
+        <label
           >數量<input
             v-model.number="quantity"
             type="number"
@@ -473,11 +491,11 @@ async function checkout() {
         ><button
           class="btn primary"
           :disabled="
-            !Number.isInteger(quantity) || quantity < 1 || quantity > 50
+            !Number.isInteger(quantity) || quantity < 1 || quantity > 50 || !optionsValid
           "
           @click="add"
         >
-          加入點餐單 <span>{{ money(selected.price * quantity) }}</span>
+          加入點餐單 <span>{{ money((selected.price + selectedOptionsPrice) * quantity) }}</span>
         </button>
       </div></Modal
     ><Modal v-if="receipt" title="收款完成" @close="receipt = null"
@@ -487,11 +505,11 @@ async function checkout() {
         <p class="muted">{{ receipt.branchName }} · {{ receipt.id }}</p>
         <div
           v-for="l in receipt.items"
-          :key="l.productId + l.temperature + l.sugar"
+          :key="l.productId + l.optionIds.join(',')"
           class="receipt-row"
         >
           <span>{{ l.name }} × {{ l.quantity }}</span
-          ><b>{{ money(l.unitPrice * l.quantity) }}</b>
+          ><b>{{ money(l.lineTotal) }}</b>
         </div>
         <div class="receipt-row">
           <span>合計</span><b>{{ money(receipt.total) }}</b>

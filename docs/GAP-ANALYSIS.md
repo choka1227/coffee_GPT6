@@ -35,11 +35,15 @@
 | 編號 | 缺口 | 狀態 | 規格書 |
 | --- | --- | --- | --- |
 | G06 | 商品選項模型與加價 | **規格書已完成，待實作** | [`specs/G06-product-options.md`](specs/G06-product-options.md) |
-| G13 | 分店菜單可用性與售罄 | 未開始 | — |
+| G13 | 分店菜單可用性與售罄 | **規格書已完成，待實作（排在 G06 之後）** | [`specs/G13-branch-menu-availability.md`](specs/G13-branch-menu-availability.md) |
 
 **G06 商品選項模型與加價** —— `order_items.temperature` / `sugar` 是 `VARCHAR(12)` 自由字串，**完全不影響金額**（`OrderService.java:62` 的單價就是 `products.price`）。系統賣不了「加珍珠 +10」「換燕麥奶 +20」這類每天都在賣的加價品項，是唯一直接造成營收短收的缺口，且不依賴任何外部服務。另外 `validateOptions()`（`OrderService.java:100-111`）把分類字串 `"手作烘焙"` 與溫度／甜度的可選集合寫死在 `coffee-orders` 裡，但分類清單其實歸 `coffee-catalog` 管，總部新增分類就會讓點餐端的驗證默默失準。完整規格見 [`specs/G06-product-options.md`](specs/G06-product-options.md)。
 
-**G13 分店菜單可用性與售罄**（第二次盤點新增）—— `products` 表沒有 `branch_id`，`CatalogService.sellable()`（`CatalogService.java:55-59`）只看全域 `active`。三家分店共用同一份菜單與同一組售價。後果：中山店可頌賣完，只能把可頌從**全鏈**下架；也無法做分店限定品項或區域定價。「今天這項賣完」是咖啡廳每天都在做的動作，目前系統做不到。
+**G13 分店菜單可用性與售罄**（第二次盤點新增）—— `products` 表沒有 `branch_id`，`CatalogService.sellable()`（`CatalogService.java:55-59`）只看全域 `active`。三家分店共用同一份菜單與同一組售價。後果：中山店可頌賣完，只能把可頌從**全鏈**下架；也無法做分店限定品項或區域定價。「今天這項賣完」是咖啡廳每天都在做的動作，目前系統做不到。完整規格見 [`specs/G13-branch-menu-availability.md`](specs/G13-branch-menu-availability.md)。
+
+規格採「全鏈一份主檔 + 分店覆寫表（`branch_products`）」，沒有覆寫列時行為與現在完全相同，既有資料零遷移。售完標記記在台北營業日上，隔日自動失效，**不需要引入任何排程作業**。**區域定價（分店各自售價）刻意排除**，它會同時動到金額重算、成本快照與報表毛利，且與 G06 的加價計算相撞 —— 另立 **G18**（`G17` 已由 G06 第 13.6 節的「常用組合快捷」占用），排在 G06 與 G13 都合併之後。規格書第 11.3 節有完整理由。
+
+**排程注意：G06 與 G13 都會修改 `Catalog.sellable()` 的簽章與 `OrderService.create()` 的品項迴圈，不要同時開工。** G06 先實作合併，G13 再從最新主線開分支（G06 用 V3，G13 用 V4）。
 
 ### P3 — 金流（PO 決定延後，最後才串接）
 
@@ -123,8 +127,8 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 ## 排定的工作順序
 
 1. **Codex 依 `specs/G06-product-options.md` 實作選項模型與加價** —— 規格第 13 節六項設計決策已定案，直接開工，不需等任何確認
-2. **Codex 依 `specs/G01a-reconciliation-fixes.md` 修正 G01 留在主線的兩項缺陷** —— 與第 1 項不衝突（不同檔案），可並行
-3. Claude 產出 G13 分店菜單可用性與售罄規格書
+2. **Codex 依 `specs/G01a-reconciliation-fixes.md` 修正 G01 留在主線的兩項缺陷** —— 與第 1 項動到不同模組（`coffee-payments` vs `coffee-orders` / `coffee-catalog`），可並行
+3. **Codex 依 `specs/G13-branch-menu-availability.md` 實作分店可用性與售罄** —— **G06 合併後**才開工，兩者的 S3 會撞 `Catalog.sellable()` 簽章與 `OrderService.create()` 的品項迴圈
 4. Claude 產出 G11 + G15 合併規格書（稽核軌跡與現金日結）
 5. G10 訂單分頁與 N+1（小、確定，可穿插）
 6. 金流那條線（G01–G04 其餘部分）待進入綠界串接階段再排
@@ -141,4 +145,8 @@ G01 留在主線的缺陷已寫成獨立規格 [`specs/G01a-reconciliation-fixes
 | --- | --- |
 | 2026-09-17 | 建立本檔；完成 G01 規格書 |
 | 2026-09-17 | PO 授權設計決策給 Claude，規格書的「待 PO 決定」改為「設計決策」；G06 六項設計決策定案（負加價改為**不允許**）；新增 G17；完成 G01a 缺陷修正規格書 |
+| 2026-09-17 | 完成 G13 規格書（分店菜單可用性與售罄）；記錄 G06 / G13 的施工順序相依；登記 G18（區域定價） |
+| 2026-09-18 | G13 規格書 v1.2（依 PR #12 上 Codex 第二輪 `REQUEST_CHANGES`）：§5.4 的鎖定範例用 `Problem.check` 會固定回 400，與 §5.3 錯誤碼表、§10.4 驗收要求的 404 矛盾；改為明寫 `throw new Problem(404, ...)`，並在 §5.3 補上「`Problem.check` 只能用在 400 那幾列」的通則 |
+| 2026-09-17 | G13 規格書修正兩項（v1.1，依 PR #12 上 Codex 的 `REQUEST_CHANGES`）：§7.1 稽核 `target_id` 以 UUID 計長為 83 字元、超出 `VARCHAR(80)` 會讓設定整筆回滾，狀態改由 `action` 承載；§5.5 `fromUnlisted` 是先讀後寫的授權判斷，需鎖 `products` 行以序列化，鎖 `branch_products` 在尚無覆寫列時無效 |
+| 2026-09-17 | G13 規格書補上「施工階段」（S1/S2/S3）；第 11 節由「待 PO 決定」改為「設計決策」四項定案；區域定價編號由 G17 更正為 G18（G17 已由 G06 第 13.6 節占用） |
 | 2026-09-17 | 第二次盤點。PO 決定金流整批延後至最後階段，G01–G04 降為 P3；新增 G13（分店菜單與售罄）、G14（營業時間）、G15（現金日結）、G16（顧客自助註冊）四項；G16 自 G12 拆出；G06 升為 P0 並完成規格書；補正 G10 的 N+1 問題與 G11 的實際涵蓋範圍 |

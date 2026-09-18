@@ -52,8 +52,15 @@ export interface Line {
   category: string;
   unitPrice: number;
   quantity: number;
-  temperature: string;
-  sugar: string;
+  optionIds: string[];
+  optionsPrice: number;
+  lineTotal: number;
+  options: OrderOption[];
+}
+export interface OrderOption {
+  groupName: string;
+  optionName: string;
+  priceDelta: number;
 }
 export interface Order {
   id: string;

@@ -4,7 +4,7 @@ import com.coffee.shared.Actor;
 import java.util.List;
 
 public interface Orders {
-  record LineInput(String productId, int quantity, String temperature, String sugar) {}
+  record LineInput(String productId, int quantity, List<String> optionIds) {}
 
   record Create(
       String branchId,
@@ -13,6 +13,8 @@ public interface Orders {
       String note,
       List<LineInput> items) {}
 
+  record LineOption(String groupName, String optionName, int priceDelta) {}
+
   record Line(
       String productId,
       String name,
@@ -20,7 +22,10 @@ public interface Orders {
       int unitPrice,
       int quantity,
       String temperature,
-      String sugar) {}
+      String sugar,
+      int optionsPrice,
+      int lineTotal,
+      List<LineOption> options) {}
 
   record Order(
       String id,

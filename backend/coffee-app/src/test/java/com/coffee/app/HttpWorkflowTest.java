@@ -139,7 +139,7 @@ class HttpWorkflowTest {
             + branch
             + "\",\"fulfillment\":\"TAKEAWAY\",\"paymentMethod\":\"CASH\",\"note\":\"\",\"items\":[{\"productId\":\""
             + product
-            + "\",\"quantity\":2,\"temperature\":\"熱\",\"sugar\":\"無糖\"}]}";
+            + "\",\"quantity\":2,\"optionIds\":[\"temp-hot\",\"sugar-none\"]}]}";
     var created =
         customer.request(
             "POST", "/api/orders", body, Map.of("Idempotency-Key", UUID.randomUUID().toString()));

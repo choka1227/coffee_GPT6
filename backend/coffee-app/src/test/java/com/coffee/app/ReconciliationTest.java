@@ -55,6 +55,7 @@ class ReconciliationTest {
   void resetOrders() {
     db.update("delete from payment_reconciliations");
     db.update("delete from payment_events");
+    db.update("delete from order_item_options");
     db.update("delete from order_items");
     db.update("delete from orders");
   }
@@ -67,7 +68,11 @@ class ReconciliationTest {
     return orders.create(
         identity.find("customer"),
         new Orders.Create(
-            branch, "TAKEAWAY", method, "", List.of(new Orders.LineInput("latte", 1, "熱", "無糖"))),
+            branch,
+            "TAKEAWAY",
+            method,
+            "",
+            List.of(new Orders.LineInput("latte", 1, List.of("temp-hot", "sugar-none")))),
         UUID.randomUUID().toString());
   }
 

@@ -27,8 +27,8 @@ import org.springframework.transaction.annotation.Transactional;
       "ecpay.enabled=true",
       "ecpay.environment=stage",
       "ecpay.merchant-id=3002607",
-      "ecpay.hash-key=pwFHCqoQZGmho4w6",
-      "ecpay.hash-iv=EkRm7iFT261dpevs",
+      "ecpay.hash-key=test-key-not-a-secret",
+      "ecpay.hash-iv=test-iv-not-a-secret",
       "app.public-url=https://coffee.example.test"
     })
 @ActiveProfiles("dev")
@@ -78,10 +78,8 @@ class CoffeeIntegrationTest {
                     "latte",
                     "quantity",
                     quantity,
-                    "temperature",
-                    "熱",
-                    "sugar",
-                    "無糖",
+                    "optionIds",
+                    List.of("temp-hot", "sugar-none"),
                     "unitPrice",
                     1))));
   }
@@ -104,6 +102,16 @@ class CoffeeIntegrationTest {
 
   JsonNode create(MockHttpSession session, String branch, String payment) throws Exception {
     return create(session, branch, payment, 2, UUID.randomUUID().toString());
+  }
+
+  String optionBody(List<String> optionIds) throws Exception {
+    return json.writeValueAsString(
+        Map.of(
+            "branchId", "taipei",
+            "fulfillment", "TAKEAWAY",
+            "paymentMethod", "CASH",
+            "note", "選項整合測試",
+            "items", List.of(Map.of("productId", "latte", "quantity", 1, "optionIds", optionIds))));
   }
 
   @Test
@@ -142,6 +150,50 @@ class CoffeeIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body("taipei", "CASH", 3)))
         .andExpect(status().isBadRequest());
+  }
+
+  @Test
+  void optionPricesAreServerCalculatedSnapshottedReportedAndOrderInsensitive() throws Exception {
+    db.update("update option_items set price_delta=20,cost_delta=12 where id='temp-hot'");
+    var customer = login("customer");
+    String key = UUID.randomUUID().toString();
+    var first =
+        json.readTree(
+            mvc.perform(
+                    post("/api/orders")
+                        .session(customer)
+                        .with(csrf())
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(optionBody(List.of("sugar-none", "temp-hot"))))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString());
+    var replay =
+        json.readTree(
+            mvc.perform(
+                    post("/api/orders")
+                        .session(customer)
+                        .with(csrf())
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(optionBody(List.of("temp-hot", "sugar-none"))))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString());
+    assertThat(first.get("total").asInt()).isEqualTo(160);
+    assertThat(first.at("/items/0/optionsPrice").asInt()).isEqualTo(20);
+    assertThat(first.at("/items/0/lineTotal").asInt()).isEqualTo(160);
+    assertThat(first.at("/items/0/options/0").has("costDelta")).isFalse();
+    assertThat(replay.get("id").asText()).isEqualTo(first.get("id").asText());
+    assertThat(db.queryForObject("select options_price from order_items where order_id=?", Integer.class,
+            first.get("id").asText())).isEqualTo(20);
+    assertThat(db.queryForObject("select options_cost from order_items where order_id=?", Integer.class,
+            first.get("id").asText())).isEqualTo(12);
+    assertThat(db.queryForObject("select count(*) from order_item_options where order_item_id in (select id from order_items where order_id=?)",
+            Integer.class, first.get("id").asText())).isEqualTo(2);
   }
 
   @Test
@@ -294,7 +346,7 @@ class CoffeeIntegrationTest {
     p.put("TradeAmt", amount);
     p.put("RtnCode", "1");
     p.put("SimulatePaid", simulate);
-    p.put("CheckMacValue", CheckMac.sign(p, "pwFHCqoQZGmho4w6", "EkRm7iFT261dpevs"));
+    p.put("CheckMacValue", CheckMac.sign(p, "test-key-not-a-secret", "test-iv-not-a-secret"));
     return p;
   }
 
