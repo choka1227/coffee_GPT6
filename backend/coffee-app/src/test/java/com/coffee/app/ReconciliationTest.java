@@ -163,6 +163,79 @@ class ReconciliationTest {
   }
 
   @Test
+  void optionalFieldsRespectOutcomePriorityAndNeverCredit() {
+    for (String scenario :
+        List.of(
+            "unpaid-empty",
+            "unpaid-zero",
+            "unpaid-missing",
+            "simulated-empty",
+            "simulated-missing",
+            "mismatch-empty",
+            "paid-empty",
+            "paid-missing",
+            "invalid-trade",
+            "invalid-amount",
+            "overflow-amount")) {
+      var o = create("taipei", "ECPAY");
+      var p = response(o);
+      p.put("TradeNo", "");
+      Integer expectedAmount = null;
+      String expected = "QUERY_FAILED";
+      switch (scenario) {
+        case "unpaid-empty", "unpaid-zero", "unpaid-missing" -> {
+          p.put("TradeStatus", "0");
+          p.put("TradeAmt", scenario.equals("unpaid-zero") ? "0" : "");
+          if (scenario.equals("unpaid-missing")) p.remove("TradeAmt");
+          expectedAmount = scenario.equals("unpaid-zero") ? 0 : null;
+          expected = "STILL_UNPAID";
+        }
+        case "simulated-empty", "simulated-missing" -> {
+          p.put("SimulatePaid", "1");
+          p.remove("TradeAmt");
+          if (scenario.equals("simulated-empty")) p.put("TradeAmt", "");
+          expected = "SIMULATED";
+        }
+        case "mismatch-empty" -> {
+          p.put("TradeAmt", "1");
+          expectedAmount = 1;
+          expected = "AMOUNT_MISMATCH";
+        }
+        case "paid-missing" -> p.remove("TradeAmt");
+        case "invalid-trade" -> p.put("TradeNo", "bad/trade");
+        case "invalid-amount", "overflow-amount" -> {
+          p.put("TradeNo", "T" + o.id());
+          p.put("TradeAmt", scenario.equals("invalid-amount") ? "invalid" : "2147483648");
+        }
+      }
+      stub(p);
+      var result = service.reconcile(manager(), o.id());
+      assertThat(result.outcome()).as(scenario).isEqualTo(expected);
+      if (expected.equals("AMOUNT_MISMATCH"))
+        assertThat(result.detail()).contains("1 元", o.total() + " 元");
+      assertThat(orders.paymentSnapshot(o.id()).status()).isEqualTo("PENDING_PAYMENT");
+      assertThat(
+              db.queryForObject(
+                  "select provider_trade_no from orders where id=?", String.class, o.id()))
+          .isNull();
+      assertThat(
+              db.queryForObject(
+                  "select provider_trade_no from payment_reconciliations where order_id=?",
+                  String.class,
+                  o.id()))
+          .isEmpty();
+      assertThat(service.history(manager(), o.id()))
+          .singleElement()
+          .extracting(Reconciliation.Attempt::tradeAmount)
+          .isEqualTo(expectedAmount);
+    }
+    assertThat(
+            db.queryForObject(
+                "select count(*) from orders where provider_trade_no=''", Integer.class))
+        .isZero();
+  }
+
+  @Test
   void missingDateUsesDocumentedFallbackAndThrottleWorks() {
     var o = create("taipei", "ECPAY");
     var p = response(o);
@@ -234,11 +307,19 @@ class ReconciliationTest {
                 .andReturn()
                 .getRequest()
                 .getSession();
-    mvc.perform(post("/api/payments/reconciliation/" + o.id()).session(session))
+    var own = create("taipei", "ECPAY");
+    var p = response(own);
+    p.put("TradeStatus", "0");
+    stub(p);
+    mvc.perform(post("/api/payments/reconciliation/" + own.id()).session(session))
         .andExpect(status().isForbidden());
     mvc.perform(post("/api/payments/reconciliation/" + o.id()).session(session).with(csrf()))
         .andExpect(status().isForbidden());
     verifyNoInteractions(query);
+    mvc.perform(post("/api/payments/reconciliation/" + own.id()).session(session).with(csrf()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.outcome").value("STILL_UNPAID"));
+    verify(query, times(1)).query(own.id());
   }
 
   @Test

@@ -183,19 +183,28 @@ public class ReconciliationService implements Reconciliation {
             || !id.equals(p.get("MerchantTradeNo"))) throw new IllegalArgumentException();
         status = p.get("TradeStatus");
         if (status == null || !status.matches("[0-9]{1,20}")) throw new IllegalArgumentException();
-        amount = Integer.valueOf(p.get("TradeAmt"));
+        try {
+          amount = Integer.valueOf(p.get("TradeAmt"));
+        } catch (NumberFormatException e) {
+          // Non-credit outcomes can legitimately omit an amount.
+          amount = null;
+        }
         trade = p.getOrDefault("TradeNo", "");
-        if (!trade.matches("[A-Za-z0-9]{1,64}")) throw new IllegalArgumentException();
+        if (!trade.isEmpty() && !trade.matches("[A-Za-z0-9]{1,64}"))
+          throw new IllegalArgumentException();
         if (!"1".equals(status)) {
           outcome = "STILL_UNPAID";
           detail = "綠界尚未確認付款";
         } else if ("1".equals(p.get("SimulatePaid"))) {
           outcome = "SIMULATED";
           detail = "綠界模擬付款，不予入帳";
+        } else if (amount == null) {
+          throw new IllegalArgumentException();
         } else if (amount != o.total()) {
           outcome = "AMOUNT_MISMATCH";
           detail = "綠界金額 " + amount + " 元與訂單 " + o.total() + " 元不符";
         } else {
+          if (trade.isEmpty()) throw new IllegalArgumentException();
           outcome = "CONFIRMED";
           detail = "綠界回報已付款，訂單已更新為已付款";
           try {
