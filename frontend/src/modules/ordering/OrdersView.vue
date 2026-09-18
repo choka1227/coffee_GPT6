@@ -264,7 +264,11 @@ async function pay(o: Order) {
       <div v-for="(l, i) in selected.items" :key="i" class="receipt-row">
         <span
           >{{ l.name }} × {{ l.quantity
-          }}<small>{{ l.options.length ? l.options.map((o) => o.optionName).join(" / ") : "無選項" }}</small></span
+          }}<small>{{
+            l.options.length
+              ? l.options.map((o) => o.optionName).join(" / ")
+              : [l.temperature, l.sugar].filter(Boolean).join(" / ") || "無選項"
+          }}</small></span
         ><b>{{ money(l.lineTotal) }}</b>
       </div>
       <div class="receipt-row">

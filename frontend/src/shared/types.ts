@@ -52,10 +52,14 @@ export interface Line {
   category: string;
   unitPrice: number;
   quantity: number;
-  optionIds: string[];
+  temperature: string | null;
+  sugar: string | null;
   optionsPrice: number;
   lineTotal: number;
   options: OrderOption[];
+}
+export interface CartLine extends Omit<Line, "temperature" | "sugar"> {
+  optionIds: string[];
 }
 export interface OrderOption {
   groupName: string;

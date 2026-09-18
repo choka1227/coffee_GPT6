@@ -15,7 +15,7 @@ import {
 } from "lucide-vue-next";
 import { useAuth } from "../identity/store";
 import { api, send } from "../../shared/api";
-import type { Product, Branch, Line, Order } from "../../shared/types";
+import type { Product, Branch, CartLine, Order } from "../../shared/types";
 import { money } from "../../shared/format";
 import { notify } from "../../shared/notice";
 import Modal from "../../shared/Modal.vue";
@@ -29,7 +29,7 @@ const auth = useAuth(),
   error = ref(""),
   query = ref(""),
   category = ref("全部餐點"),
-  cart = ref<Line[]>([]),
+  cart = ref<CartLine[]>([]),
   fulfillment = ref("TAKEAWAY"),
   payment = ref("CASH"),
   note = ref(""),
@@ -504,11 +504,16 @@ async function checkout() {
         <h2>謝謝光臨！</h2>
         <p class="muted">{{ receipt.branchName }} · {{ receipt.id }}</p>
         <div
-          v-for="l in receipt.items"
-          :key="l.productId + l.optionIds.join(',')"
+          v-for="(l, i) in receipt.items"
+          :key="i"
           class="receipt-row"
         >
-          <span>{{ l.name }} × {{ l.quantity }}</span
+          <span>{{ l.name }} × {{ l.quantity
+            }}<small>{{
+              l.options.length
+                ? l.options.map((o) => o.optionName).join(" / ")
+                : [l.temperature, l.sugar].filter(Boolean).join(" / ") || "無選項"
+            }}</small></span
           ><b>{{ money(l.lineTotal) }}</b>
         </div>
         <div class="receipt-row">
