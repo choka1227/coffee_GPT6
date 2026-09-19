@@ -241,6 +241,8 @@ class CoffeeIntegrationTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$[?(@.id == 'latte' && @.availability == 'AVAILABLE')]").isNotEmpty());
 
+    int ordersBeforeRejectedRequest =
+        db.queryForObject("select count(*) from orders", Integer.class);
     mvc.perform(
             post("/api/orders")
                 .session(customer)
@@ -250,7 +252,8 @@ class CoffeeIntegrationTest {
                 .content(body("taipei", "CASH", 1)))
         .andExpect(status().isBadRequest())
         .andExpect(jsonPath("$.message").value("本店今日已售完此商品，請調整餐點"));
-    assertThat(db.queryForObject("select count(*) from orders", Integer.class)).isEqualTo(1);
+    assertThat(db.queryForObject("select count(*) from orders", Integer.class))
+        .isEqualTo(ordersBeforeRejectedRequest);
 
     var replay = create(customer, "taipei", "CASH", 1, key);
     assertThat(replay.get("id").asText()).isEqualTo(original.get("id").asText());
