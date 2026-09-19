@@ -141,7 +141,7 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 1. ~~**Codex 依 `specs/G06-product-options.md` 實作選項模型與加價**~~ —— 已完成，PR #14 於 2026-09-18 合併（S1/S2/S3 三階段，進度報告見 [`reports/G06-product-options-progress.md`](reports/G06-product-options-progress.md)）
 2. ~~**Codex 依 `specs/G01a-reconciliation-fixes.md` 修正 G01 留在主線的兩項缺陷**~~ —— 已完成，PR #15 於 2026-09-18 合併（S1/S2 兩階段，進度報告見 [`reports/G01a-reconciliation-fixes.md`](reports/G01a-reconciliation-fixes.md)）
 3. **← 目前這一項：Codex 依 `specs/G13-branch-menu-availability.md` 實作分店可用性與售罄** —— 閘門已解除（G06 已合併），**沒有任何前置相依，從最新主線開 `codex/g13-*` 分支即可開工**。Flyway 用 V4
-4. **Claude 產出 G11 + G15 合併規格書（稽核軌跡與現金日結）** —— 規格書在 [PR #17](https://github.com/choka1227/coffee_GPT6/pull/17)，**尚未合併**（v1.1 依 review 修正了稽核交易邊界與現金班別鎖順序，等待複審）。**合併進主線之前不要依它開工** —— 只依已合併進 `feature/init-project` 的 `docs/specs/` 實作。合併後 Codex 做完 G13 接這一份，四個施工階段（S1/S2 為 G11，S3/S4 為 G15），Flyway 取 G13 之後的下一個未使用版號
+4. **Claude 產出 G11 + G15 合併規格書（稽核軌跡與現金日結）** —— 規格書在 [PR #17](https://github.com/choka1227/coffee_GPT6/pull/17)，**尚未合併**（v1.2 依第二輪 review 修正了稽核例外的捕捉邊界與第 5.12 節的鎖順序敘述，等待複審）。**合併進主線之前不要依它開工** —— 只依已合併進 `feature/init-project` 的 `docs/specs/` 實作。合併後 Codex 做完 G13 接這一份，四個施工階段（S1/S2 為 G11，S3/S4 為 G15），Flyway 取 G13 之後的下一個未使用版號
 5. G10 訂單分頁與 N+1（小、確定，可穿插）
 6. 金流那條線（G01–G04 其餘部分）待進入綠界串接階段再排
 
@@ -157,6 +157,7 @@ G01 留在主線的缺陷已寫成獨立規格 [`specs/G01a-reconciliation-fixes
 
 | 日期 | 變更 |
 | --- | --- |
+| 2026-09-19 | G11+G15 規格書 v1.2（依 PR #17 上 Codex 第二輪 `REQUEST_CHANGES`）：§5.3 的例外捕捉邊界在 `AuditWriter.write()` 方法內，蓋不到 `@Transactional(REQUIRES_NEW)` proxy 在方法返回後才執行的 commit，commit 階段的例外會穿過 `afterCommit()` 傳回業務呼叫端（業務已提交卻回報失敗，可能引發重試與重複操作）—— 改為由 `AuditService` 包住整個 `writer.write()` 呼叫，§7 第 6 項加驗收 (c)「由交易管理器在 commit 階段拋例外」；§5.12 宣告的全域鎖順序 `branches → cash_sessions → orders` 與 §5.7 的實際步驟（branch → order → 無鎖讀 session）矛盾，會誘使實作端加上無用的 `cash_sessions` 行鎖 —— 改寫為「一律先鎖 branch，正確性由該鎖單獨支撐」並取消「不得跳過中間層」 |
 | 2026-09-18 | 依 PR #16 review 修正 G11 / G15 的登記：狀態改為「規格書審查／修訂中，尚未合併」，工作順序第 4 項退回未完成，規格書欄位由相對路徑改為 PR 連結（PR #17 合併前該路徑在主線上不存在，且規格仍在依 review 修訂）。**本檔可以先於 #17 合併** |
 | 2026-09-18 | 登記 G11 + G15 合併規格書（PR #17）：稽核軌跡與現金日結，四個施工階段、六項設計決策定案 |
 | 2026-09-18 | G01a 實作隨 PR #15 合併，狀態由「待實作」改為「已合併」；工作順序第 2 項標為完成、第 3 項（G13）標為目前這一項；記錄 PR #15 review 的三項非阻斷觀察與 `coffee-reporting` 缺 `api` package 的既有架構缺口；補上 Flyway 版號現況 |

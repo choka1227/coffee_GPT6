@@ -4,10 +4,10 @@
 | --- | --- |
 | 缺口編號 | G11（稽核紀錄的查詢與涵蓋範圍）+ G15（現金日結與交班） |
 | 優先順序 | P1 —— 金錢控管，不依賴任何外部服務 |
-| 規格版本 | **v1.1**（v1 → v1.1：依 PR #17 的 review 修正稽核交易邊界與現金班別鎖順序，見第 5.3、5.12、8.7 節） |
+| 規格版本 | **v1.2**（v1 → v1.1：依 PR #17 第一輪 review 修正稽核交易邊界與現金班別鎖順序；v1.1 → v1.2：依第二輪 review 把稽核的例外捕捉邊界移到交易 proxy 外側、並讓第 5.12 節的鎖順序與 5.7 的實際步驟一致。見第 5.3、5.12、7、8.7 節） |
 | 撰寫 | Claude（PM / SA），2026-09-18 |
 | 實作 | Codex（PG / SD） |
-| 基準 commit | `cf7c38c`（PR #15 合併後的 `feature/init-project`） |
+| 基準 commit | `6138ecf`（PR #16 合併後的 `feature/init-project`） |
 | 前置 | 無。與 G13 動到完全不同的檔案，可並行（見第 10 節） |
 
 ---
@@ -323,21 +323,27 @@ public void record(Actor actor, String action, String targetId, String branchId,
   if (TransactionSynchronizationManager.isSynchronizationActive()) {
     TransactionSynchronizationManager.registerSynchronization(
         new TransactionSynchronization() {
-          @Override public void afterCommit() { writer.write(e); }     // 只在 COMMIT 後跑
+          @Override public void afterCommit() { writeQuietly(e); }     // 只在 COMMIT 後跑
         });
   } else {
-    writer.write(e);                                                   // 不在交易內，直接寫
+    writeQuietly(e);                                                   // 不在交易內，直接寫
+  }
+}
+
+// 捕捉邊界必須在交易 proxy 的外側 —— 見下面第 3 點
+private void writeQuietly(Audit.Entry e) {
+  try {
+    writer.write(e);            // 這一呼叫「包含」REQUIRES_NEW 的 commit / rollback
+  } catch (RuntimeException ex) {
+    // 吞掉：稽核是附加價值，不得影響任何業務結果
   }
 }
 
 // coffee-audit/internal/AuditWriter.java —— 必須是另一個 bean
 @Transactional(propagation = Propagation.REQUIRES_NEW)
 public void write(Audit.Entry e) {
-  try {
-    jdbc.update("insert into audit_log(...) values(...)", ...);
-  } catch (RuntimeException ex) {
-    // 吞掉：稽核是附加價值，不得影響任何業務結果
-  }
+  jdbc.update("insert into audit_log(...) values(...)", ...);
+  // 這裡可以再包一層防禦性 catch，但它不是唯一防線（見第 3 點）
 }
 ```
 
@@ -345,7 +351,13 @@ public void write(Audit.Entry e) {
 
 1. **`AuditWriter` 必須是獨立的 Spring bean**，不能是 `AuditService` 的私有方法。`@Transactional` 走 proxy，self-invocation 不會生效，`REQUIRES_NEW` 會被靜默忽略
 2. **`REQUIRES_NEW` 不能省。** `afterCommit` 執行時業務交易雖已提交，但它的 connection 仍然綁在 `TransactionSynchronizationManager` 上；直接用 `JdbcTemplate` 會拿到那條已提交的 connection。`REQUIRES_NEW` 會掛起它並取得一條新的
-3. **`try/catch` 留在 `AuditWriter` 裡面。** `afterCommit` 拋出的例外會由 Spring 傳播給 `commit()` 的呼叫端——業務明明已經提交，呼叫端卻收到例外，比不記帳更糟
+3. **捕捉邊界要在交易 proxy 的外側，不是只在 `write()` 方法裡面（v1.2 修正）。** v1.1 寫「`try/catch` 留在 `AuditWriter` 裡面」，**那道防線不完整**，PR #17 第二輪 review 指出後確認成立：
+
+   `@Transactional` 是 proxy 語意，`REQUIRES_NEW` 的 `commit`／`rollback` 發生在 `write()` **方法返回之後**，由 interceptor 執行。所以方法內的 `catch` 只接得到 `jdbc.update` 當下拋的例外，接不到 commit 階段拋的（`UnexpectedRollbackException`、連線在 insert 時就斷掉導致 `commit` 失敗、PostgreSQL aborted transaction 等）。那個例外會從 proxy 往外拋 → 穿過 `afterCommit()` → 由 Spring 傳播給業務交易 `commit()` 的呼叫端。**業務資料已經提交，呼叫端卻收到錯誤**，可能觸發重試與重複操作——正是本節要防的那件事。
+
+   所以 `catch` 必須包住**整個** `writer.write(e)` 呼叫（即上面的 `writeQuietly`），這樣才涵蓋 proxy 的 commit 階段。等價寫法是用 `TransactionTemplate` 跑獨立交易，並把 `catch` 放在 `execute(...)` **外面**。
+
+   `AuditWriter` 內部保留防禦性 `catch` 可以，但**不得當成唯一防線**。**「不在既有交易內、直接寫」的那條分支要套用同一層外層捕捉**（上面的 `else` 分支同樣走 `writeQuietly`）——它一樣經過 `REQUIRES_NEW` 的 proxy。
 4. **`Entry` 在 `record()` 當下就建好**（含 `createdAt` 與截斷），不要留到 `afterCommit` 才取值。同步器是在交易結束後跑的，那時 `Actor` 相關的 request scope 可能已經消失
 
 `Entry` 建構時**自行截斷**：`summary` 至 200 字元、`targetId` 至 80 字元、`actorName` 至 80 字元。**但截斷不是藉口：** 呼叫端要自己確保 `summary` 在正常情況下就在 200 字元內，截斷是最後一道防線，不是常態路徑。
@@ -512,19 +524,23 @@ COMMIT
 
 結束後那筆訂單掛在**已交班**的 S 底下，卻不在 S 已經定稿的 `expected_amount` 裡。`variance` 平白短少一筆，而且 `expected_amount` 已經落地，之後怎麼查都對不回來。這不是「機率很低所以算了」的問題——**日結對不上帳正是 G15 要解決的那件事**，留著這個洞等於白做。
 
-#### 全域鎖順序（三張表都適用）
+#### 全域鎖順序（v1.2 改寫為與 5.7 一致）
 
-> **`branches` → `cash_sessions` → `orders`。不論哪條流程，一律照這個順序取鎖，不得對調、不得跳過中間層去搶後面的。**
+> **每一條現金流程的第一個鎖一律是 `branches`（該分店那一列）。其後若某條流程同時需要 `cash_sessions` 與 `orders` 的行鎖，固定 `cash_sessions` → `orders`。**
+
+v1.1 原本寫成「`branches` → `cash_sessions` → `orders`，不得跳過中間層」，**與 5.7 的實際步驟矛盾**，PR #17 第二輪 review 指出後確認成立：5.7 根本不鎖 `cash_sessions`（它鎖 `orders`，再無鎖讀班別）。照 v1.1 的字面讀，實作者會為了「不得跳過中間層」在 `cash()` 裡多加一個 `cash_sessions` 的行鎖 —— 那個鎖對正確性沒有貢獻（序列化已由 branch 鎖達成），只是多一道無謂的爭用。**「不得跳過中間層」這條規則取消。**
 
 | 流程 | 取鎖順序 |
 | --- | --- |
 | 開班 5.6 | `branches`（該店）→ 插入 `cash_sessions` |
-| 收現金 5.7 | `branches`（訂單所屬店）→ 讀 `OPEN` 班別 → `orders`（該訂單） |
+| 收現金 5.7 | `branches`（訂單所屬店）→ `orders`（該訂單，既有的 `lock(id)`）→ 讀 `OPEN` 班別（**不取鎖**） |
 | 交班 5.8 | `branches`（該店）→ `cash_sessions`（該班別）→ `SUM(orders)`（唯讀，不取鎖） |
 
-`branches` 那一列在這裡的角色是**該分店現金流程的序列化點**，不是因為要改它。三條流程都先搶它，所以同一分店的開班、收現金、交班彼此互斥；不同分店完全不互相阻擋（鎖的是不同列）。
+**三條流程沒有任何一條同時持有 `cash_sessions` 與 `orders` 的行鎖**，所以那條後備順序目前用不到，寫在這裡只為了日後新增流程時有依據。
 
-**`cash()` 現行碼是先鎖訂單列的，要把 `branches` 的鎖插到它前面**（第 5.7 節已寫出完整步驟）。留著「先鎖 order 再鎖 branch」會出現與交班流程相反的取鎖順序，那正是死結的成因。
+`branches` 那一列在這裡的角色是**該分店現金流程的序列化點**，不是因為要改它。三條流程都先搶它，所以同一分店的開班、收現金、交班彼此互斥；不同分店完全不互相阻擋（鎖的是不同列）。**正確性完全由這一個鎖支撐** —— 下面的不變式推導只用到「同店的 cash 與 close 不可能交錯」，不需要 `cash()` 去鎖班別列。
+
+**`cash()` 現行碼是先鎖訂單列的，要把 `branches` 的鎖插到它前面**（第 5.7 節已寫出完整步驟）。留著「先鎖 order 再鎖 branch」會讓 `cash()` 與其他先鎖 branch 的流程出現相反的取鎖順序，那正是死結的成因。
 
 #### 要守住的不變式
 
@@ -638,9 +654,13 @@ COMMIT
 3. **稽核不可拖垮業務**：注入一個 `record()` 必定丟例外的 `Audit`，斷言 `cash()` 仍然成功且訂單確實變成 `PAID`
 4. **游標分頁**：寫入 > `limit` 筆資料後連續翻頁，把所有頁的 id 收集起來，斷言「沒有重複」且「等於全集」
 5. **資料範圍**：`MANAGER` 查稽核時，結果集合中不得出現 `branch_id` 為 null 或別店的列。用 `assertThat(...).allMatch(...)`，不要只斷言筆數
-6. **稽核的交易邊界**（第 5.3 節，兩條都要，缺一條等於沒驗）：
-   - **(a) 稽核失敗不影響業務**：讓 `AuditWriter` 的 insert 必定失敗（stub 丟例外，或餵一筆違反 DB 約束的值），斷言業務**確實提交**——重新查一次 DB，訂單是 `PAID`，不是只看 HTTP 回 200
+6. **稽核的交易邊界**（第 5.3 節，三條都要，缺一條等於沒驗）：
+   - **(a) 稽核 insert 失敗不影響業務**：讓 `AuditWriter` 的 insert 必定失敗（stub 丟例外，或餵一筆違反 DB 約束的值），斷言業務**確實提交**——重新查一次 DB，訂單是 `PAID`，不是只看 HTTP 回 200
    - **(b) 業務回滾不留稽核**：安排一個「`record()` 之後才失敗」的業務流程，斷言 `audit_log` 裡沒有該筆。這一條是專門釘住「不可在業務提交前就用 `REQUIRES_NEW` 寫稽核」的
+   - **(c) 稽核交易在 commit 階段失敗也不影響業務（v1.2 新增，(a) 蓋不到）**：例外必須由**交易管理器在 commit 階段**拋出，**不可以只用「方法內直接丟例外」的 stub**——那種 stub 連 v1.1 那個有漏洞的寫法都會過，等於沒驗到第 5.3 節第 3 點。
+     做法：包一層 `PlatformTransactionManager`（或 `DataSource` / `Connection`）的 proxy，只讓稽核那個 `REQUIRES_NEW` 交易的 `commit()` 丟 `RuntimeException`（例如 `TransactionSystemException`），業務交易的 commit 照常。
+     斷言兩件事：**業務資料已提交**（重查 DB，訂單是 `PAID`）**且呼叫端沒收到任何例外**（HTTP 200 / 方法正常返回）。
+     `else` 分支（不在既有交易內直接寫稽核）用同一個 proxy 各驗一次
 7. **`cash()` 與 `close()` 的併發**（第 5.12 節）：用 `CountDownLatch` 讓兩條流程真的同時進入，跑完後斷言不變式——
    `select * from orders where cash_session_id = S` 的每一筆，都必須被 S 的 `expected_amount` 涵蓋（`openingFloat + SUM(total)` 等於已落地的 `expected_amount`）。
    兩種合法結果（訂單綁上 S 並被計入／訂單 `cash_session_id` 為 null）都要接受，**只有「綁上 CLOSED 班別卻沒被計入」是 fail**。
@@ -717,13 +737,16 @@ COMMIT
 | --- | --- | --- |
 | 同交易 + try/catch（v1 的寫法） | ❌ PostgreSQL 交易已 abort，外層 commit 必失敗 | ✅ |
 | 業務提交前就 `REQUIRES_NEW` | ✅ | ❌ 回滾後留下幽靈紀錄 |
-| **afterCommit + `REQUIRES_NEW`** | ✅ | ✅ |
+| afterCommit + `REQUIRES_NEW`，catch 在 `write()` **內**（v1.1 的寫法） | ❌ commit 階段的例外接不到，會穿回業務呼叫端 | ✅ |
+| **afterCommit + `REQUIRES_NEW`，catch 在 proxy **外**（v1.2 定案）** | ✅ | ✅ |
+
+第三列是 v1.2 補上的：`catch` 的位置不是風格問題，而是保證成立與否的分界。`@Transactional` 的 commit 發生在方法返回之後，寫在方法內的 `catch` 蓋不到它。完整推導見第 5.3 節第 3 點。
 
 遺漏的窗口只有「commit 成功 → 寫稽核」之間的毫秒級空檔，且需要行程在該瞬間死亡。拿它換「收銀機不會因為稽核而收不了錢」，對咖啡廳營運是明確划算的。
 
 **推翻的代價**：中。要做到不可遺漏必須引入 outbox 表（業務交易內寫 outbox、背景程序重送）。那會讓稽核從「兩個檔案」變成「一張表 + 一個排程 + 重送冪等性」，而且 outbox 寫入失敗一樣會弄垮業務交易——等於把今天這個問題換一個位置重演。要做的話應該是獨立一份規格，不是在本規格加一節。
 
-**這一項是 PR #17 的 review 推翻 v1 的直接結果。** 記在這裡是為了讓下一輪知道 v1 的寫法為什麼不能退回去。
+**這一項是 PR #17 的 review 推翻 v1 與 v1.1 的直接結果。** 記在這裡是為了讓下一輪知道 v1 的寫法、以及 v1.1 把 `catch` 放在方法內的寫法為什麼都不能退回去。
 
 ---
 
@@ -741,7 +764,7 @@ COMMIT
 - **一次推進一個階段，做完就 push**。四個階段都獨立可合併，不要等全部做完才推
 - 本規格與 `docs/specs/G13-branch-menu-availability.md` **動到的檔案幾乎不重疊**，唯一的交集是 `Identity.PERMISSIONS`、`InitialData` 的角色清單與 migration 版號。真的要並行時：**先確認 G13 用掉的版號**，本規格往後取；`PERMISSIONS` 那一行合併時注意不要覆蓋對方新增的常數
 - 第 3 節末的「`cash_sessions` 為什麼放 `coffee-orders`」請先讀完再動手。放錯會直接造成循環相依，`ModuleBoundariesTest` 會 build fail，而且要退回來重做
-- 第 5.3 節（稽核的交易邊界）、第 5.9 節（金額後端算）與第 5.12 節（鎖順序）是本規格的三條硬規則，其餘都可以依你的判斷調整實作形狀。**這三節在 v1.1 有實質改動，看過 v1 的話請重讀**
+- 第 5.3 節（稽核的交易邊界）、第 5.9 節（金額後端算）與第 5.12 節（鎖順序）是本規格的三條硬規則，其餘都可以依你的判斷調整實作形狀。**5.3 與 5.12 在 v1.1、v1.2 各改過一次，看過舊版的話請重讀**：5.3 的重點在「`catch` 要包住整個 `writer.write()` 呼叫，不是只放在 `write()` 方法內」，5.12 的重點在「只有 branch 鎖是必要的，`cash()` 不要去鎖班別列」
 - 規格有錯或不完整時**先講出來再繼續做**，寫在設計摘要與 PR 描述裡。不要停下來等回覆
 - 實作回報寫到 `docs/reports/`
 
