@@ -1,5 +1,6 @@
 package com.coffee.identity.internal;
 
+import com.coffee.audit.api.Audit;
 import com.coffee.branches.api.Branches;
 import com.coffee.identity.api.Identity;
 import com.coffee.shared.*;
@@ -13,12 +14,14 @@ import org.springframework.transaction.annotation.Transactional;
 public class IdentityService implements Identity {
   private final JdbcTemplate db;
   private final Branches branches;
+  private final Audit audit;
   private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder(12);
   private final String dummy = encoder.encode("timing-placeholder");
 
-  public IdentityService(JdbcTemplate db, Branches branches) {
+  public IdentityService(JdbcTemplate db, Branches branches, Audit audit) {
     this.db = db;
     this.branches = branches;
+    this.audit = audit;
   }
 
   public int sessionVersion(String id) {
@@ -137,7 +140,7 @@ public class IdentityService implements Identity {
             hash,
             id);
     }
-    audit(a, "ACCOUNT_SAVE", id);
+    audit.record(a, "ACCOUNT_SAVE", id, null, "儲存帳號 " + i.username());
     return new Account(id, i.username(), i.name(), i.role(), branch, i.active());
   }
 
@@ -195,7 +198,7 @@ public class IdentityService implements Identity {
     db.update("delete from role_permissions where role_code=?", r.code());
     for (String p : r.permissions())
       db.update("insert into role_permissions(role_code,permission) values(?,?)", r.code(), p);
-    audit(a, "ROLE_SAVE", r.code());
+    audit.record(a, "ROLE_SAVE", r.code(), null, "儲存角色 " + r.code());
     return r;
   }
 
@@ -216,13 +219,4 @@ public class IdentityService implements Identity {
         "密碼至少 12 字元、最多 72 UTF-8 位元組");
   }
 
-  private void audit(Actor a, String action, String id) {
-    db.update(
-        "insert into audit_log(id,actor_id,action,target_id,created_at) values(?,?,?,?,?)",
-        Ids.next(),
-        a.id(),
-        action,
-        id,
-        System.currentTimeMillis());
-  }
 }
