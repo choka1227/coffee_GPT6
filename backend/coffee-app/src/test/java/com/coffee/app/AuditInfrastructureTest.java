@@ -134,7 +134,7 @@ class AuditInfrastructureTest {
 
   @Test
   void rolledBackBusinessTransactionDoesNotLeaveAuditRow() {
-    String id = "audit-test-" + UUID.randomUUID();
+    String id = UUID.randomUUID().toString();
 
     assertThatThrownBy(() -> rollbackProbe.changeThenFail(id)).isInstanceOf(IllegalStateException.class);
 
