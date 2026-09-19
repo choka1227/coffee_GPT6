@@ -4,6 +4,9 @@ import com.coffee.catalog.api.Catalog;
 import com.coffee.shared.*;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -23,7 +26,7 @@ public class CatalogService implements Catalog {
     return new Product(
         r.getString("id"), r.getString("name"), r.getString("subtitle"),
         r.getString("category"), r.getInt("price"), r.getInt("cost"),
-        r.getString("image"), r.getString("badge"), r.getBoolean("active"), List.of());
+        r.getString("image"), r.getString("badge"), r.getBoolean("active"), "AVAILABLE", List.of());
   }
 
   private OptionItem itemRow(ResultSet r, int n) throws SQLException {
@@ -71,26 +74,62 @@ public class CatalogService implements Catalog {
   }
 
   @Override
-  public List<Product> list(Actor actor, boolean manage) {
-    if (manage) requireManager(actor);
-    return db.query(
-            "select * from products " + (manage ? "" : "where active=true")
-                + " order by sort_order,name", this::productRow).stream()
+  public List<Product> list(Actor actor, boolean manage, String branchId) {
+    if (manage) {
+      requireManager(actor);
+      return withProductOptions(
+          db.query("select * from products order by sort_order,name", this::productRow), true);
+    }
+    Problem.check(branchId != null && !branchId.isBlank(), "請選擇分店");
+    int today = today();
+    var products = db.query(
+        "select p.*,case when b.availability='UNLISTED' then 'UNLISTED'"
+            + " when b.availability='SOLD_OUT' and b.sold_out_date=? then 'SOLD_OUT'"
+            + " else 'AVAILABLE' end as effective_availability"
+            + " from products p left join branch_products b"
+            + " on b.product_id=p.id and b.branch_id=?"
+            + " where p.active=true and (b.availability is null or b.availability<>'UNLISTED')"
+            + " order by p.sort_order,p.name",
+        (r, n) -> {
+          var p = productRow(r, n);
+          return new Product(
+              p.id(), p.name(), p.subtitle(), p.category(), p.price(), p.cost(), p.image(),
+              p.badge(), p.active(), r.getString("effective_availability"), List.of());
+        }, today, branchId);
+    return withProductOptions(products, false);
+  }
+
+  private List<Product> withProductOptions(List<Product> products, boolean manage) {
+    return products.stream()
         .map(product -> new Product(
             product.id(), product.name(), product.subtitle(), product.category(), product.price(),
             manage ? product.cost() : 0, product.image(), product.badge(), product.active(),
-            productOptions(product.id(), manage)))
+            product.availability(), productOptions(product.id(), manage)))
         .toList();
   }
 
   @Override
-  public Product sellable(String id) {
+  public Product sellable(String branchId, String id) {
     var product = db.query(
             "select * from products where id=? and active=true", this::productRow, id).stream()
         .findFirst().orElseThrow(() -> new Problem(400, "商品已下架，請重新整理菜單"));
+    var override = db.queryForList(
+        "select availability,sold_out_date from branch_products where branch_id=? and product_id=?",
+        branchId, id);
+    String availability = "AVAILABLE";
+    if (!override.isEmpty()) {
+      String value = Objects.toString(override.get(0).get("availability"));
+      if ("UNLISTED".equals(value)) throw new Problem(400, "本店未供應此商品");
+      if ("SOLD_OUT".equals(value)
+          && Objects.equals(((Number) override.get(0).get("sold_out_date")).intValue(), today())) {
+        throw new Problem(400, "本店今日已售完此商品，請調整餐點");
+      }
+      availability = "SOLD_OUT".equals(value) ? "AVAILABLE" : value;
+    }
     return new Product(
         product.id(), product.name(), product.subtitle(), product.category(), product.price(),
-        product.cost(), product.image(), product.badge(), product.active(), productOptions(id, false));
+        product.cost(), product.image(), product.badge(), product.active(), availability,
+        productOptions(id, false));
   }
 
   @Override
@@ -122,7 +161,110 @@ public class CatalogService implements Catalog {
     }
     return new Product(
         id, product.name(), product.subtitle(), product.category(), product.price(), product.cost(),
-        product.image(), product.badge(), product.active(), productOptions(id, true));
+        product.image(), product.badge(), product.active(), "AVAILABLE", productOptions(id, true));
+  }
+
+  @Override
+  public List<BranchAvailability> availability(Actor actor, String branchId) {
+    actor.require("MENU_AVAILABILITY");
+    actor.branch(branchId);
+    int today = today();
+    return db.query(
+        "select p.id,p.name,b.availability,b.sold_out_date,b.updated_at,b.updated_by"
+            + " from products p left join branch_products b"
+            + " on b.product_id=p.id and b.branch_id=? order by p.sort_order,p.name",
+        (r, n) -> {
+          String value = r.getString("availability");
+          Integer soldOutDate = (Integer) r.getObject("sold_out_date");
+          if (value == null || ("SOLD_OUT".equals(value) && !Objects.equals(soldOutDate, today))) {
+            value = "AVAILABLE";
+          }
+          Long updatedAt = (Long) r.getObject("updated_at");
+          return new BranchAvailability(
+              branchId,
+              r.getString("id"),
+              r.getString("name"),
+              value,
+              updatedAt,
+              r.getString("updated_by"));
+        },
+        branchId);
+  }
+
+  @Override
+  @Transactional
+  public BranchAvailability setAvailability(
+      Actor actor, String branchId, String productId, String availability) {
+    Problem.check(
+        availability != null
+            && Set.of("AVAILABLE", "SOLD_OUT", "UNLISTED").contains(availability),
+        "供應狀態不正確");
+    var products = db.queryForList("select id,name from products where id=? for update", productId);
+    if (products.isEmpty()) {
+      throw new Problem(404, "找不到商品");
+    }
+    boolean restricted =
+        "UNLISTED".equals(availability)
+            || "UNLISTED".equals(currentAvailability(branchId, productId));
+    if (restricted) {
+      if (!actor.global()) throw new Problem(403, "分店供應品項限總部設定");
+      actor.require("MENU_MANAGE");
+    } else {
+      actor.require("MENU_AVAILABILITY");
+      actor.branch(branchId);
+    }
+    long now = System.currentTimeMillis();
+    Integer soldOutDate = "SOLD_OUT".equals(availability) ? today() : null;
+    if (db.update(
+            "update branch_products set availability=?,sold_out_date=?,updated_at=?,updated_by=?"
+                + " where branch_id=? and product_id=?",
+            availability,
+            soldOutDate,
+            now,
+            actor.id(),
+            branchId,
+            productId)
+        == 0) {
+      db.update(
+          "insert into branch_products(branch_id,product_id,availability,sold_out_date,updated_at,updated_by)"
+              + " values(?,?,?,?,?,?)",
+          branchId,
+          productId,
+          availability,
+          soldOutDate,
+          now,
+          actor.id());
+    }
+    db.update(
+        "insert into audit_log(id,actor_id,action,target_id,created_at) values(?,?,?,?,?)",
+        Ids.next(),
+        actor.id(),
+        "MENU_AVAILABILITY_" + availability,
+        branchId + ":" + productId,
+        now);
+    return new BranchAvailability(
+        branchId,
+        productId,
+        Objects.toString(products.get(0).get("name")),
+        availability,
+        now,
+        actor.id());
+  }
+
+  private String currentAvailability(String branchId, String productId) {
+    return db.query(
+            "select availability from branch_products where branch_id=? and product_id=?",
+            (r, n) -> r.getString(1),
+            branchId,
+            productId)
+        .stream()
+        .findFirst()
+        .orElse("AVAILABLE");
+  }
+
+  private int today() {
+    return Integer.parseInt(
+        LocalDate.now(ZoneId.of("Asia/Taipei")).format(DateTimeFormatter.BASIC_ISO_DATE));
   }
 
   @Override

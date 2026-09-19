@@ -21,13 +21,14 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 /** Actual HTTP/cookies/CSRF plus production-style empty-database bootstrap. */
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {
-      "spring.datasource.url=jdbc:h2:mem:http-workflow;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
+      "spring.datasource.url=jdbc:h2:mem:http-workflow-${random.uuid};MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
       "spring.datasource.username=sa",
       "spring.datasource.password=",
       "server.servlet.session.cookie.secure=false",
@@ -42,6 +43,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
       "app.bootstrap-username=owner@coffee.local",
       "app.bootstrap-password=BootstrapTest!2026"
     })
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class HttpWorkflowTest {
   @MockitoBean TradeQuery tradeQuery;
   @LocalServerPort int port;
@@ -206,5 +208,61 @@ class HttpWorkflowTest {
                 .get("revenue")
                 .asInt())
         .isEqualTo(580);
+  }
+
+  @Test
+  void availabilityWriteRequiresCsrfOnOtherwiseAuthorizedRequest() throws Exception {
+    var hq = new BrowserSession();
+    hq.login("owner@coffee.local", "BootstrapTest!2026");
+    String suffix = UUID.randomUUID().toString().substring(0, 8);
+    String branch =
+        hq.call(
+                "POST",
+                "/api/branches",
+                "{\"id\":null,\"name\":\"CSRF 門市 "
+                    + suffix
+                    + "\",\"address\":\"台北市\",\"phone\":\"02-12345678\",\"active\":true,\"monthlyTarget\":10000}")
+            .get("id")
+            .asText();
+    String product =
+        hq.call(
+                "POST",
+                "/api/menu",
+                "{\"id\":null,\"name\":\"CSRF 商品 "
+                    + suffix
+                    + "\",\"subtitle\":\"測試\",\"category\":\"經典咖啡\",\"price\":100,\"cost\":10,\"image\":\"latte\",\"badge\":\"\",\"active\":true}")
+            .get("id")
+            .asText();
+    String username = "cashier-" + suffix + "@http.local";
+    hq.call(
+        "POST",
+        "/api/admin/accounts",
+        json.writeValueAsString(
+            Map.of(
+                "username", username,
+                "name", "CSRF 收銀員",
+                "role", "CASHIER",
+                "branchId", branch,
+                "active", true,
+                "password", "WorkflowTest!2026")));
+    var cashier = new BrowserSession();
+    cashier.login(username, "WorkflowTest!2026");
+    String body =
+        json.writeValueAsString(
+            Map.of("branchId", branch, "productId", product, "availability", "SOLD_OUT"));
+    String token = cashier.token;
+    cashier.token = null;
+    assertThat(cashier.request("POST", "/api/menu/availability", body, Map.of()).statusCode())
+        .isEqualTo(403);
+    cashier.token = token;
+    assertThat(cashier.call("POST", "/api/menu/availability", body).get("availability").asText())
+        .isEqualTo("SOLD_OUT");
+
+    var anonymous = new BrowserSession();
+    var csrf = anonymous.call("GET", "/api/auth/csrf", null);
+    anonymous.token = csrf.get("token").asText();
+    anonymous.header = csrf.get("headerName").asText();
+    assertThat(anonymous.request("POST", "/api/menu/availability", body, Map.of()).statusCode())
+        .isEqualTo(401);
   }
 }

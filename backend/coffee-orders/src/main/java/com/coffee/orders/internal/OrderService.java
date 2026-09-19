@@ -58,7 +58,7 @@ public class OrderService implements Orders {
     int total = 0;
     for (LineInput l : q.items()) {
       Problem.check(l != null && l.quantity() >= 1 && l.quantity() <= 50, "單品數量需為 1–50");
-      var p = catalog.sellable(l.productId());
+      var p = catalog.sellable(q.branchId(), l.productId());
       var options = catalog.resolveOptions(p.id(), l.optionIds());
       int optionPrice = options.stream().mapToInt(Catalog.ResolvedOption::priceDelta).sum();
       int unitPrice = Math.addExact(p.price(), optionPrice);

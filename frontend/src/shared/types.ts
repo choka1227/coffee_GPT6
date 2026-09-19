@@ -25,7 +25,16 @@ export interface Product {
   image: string;
   badge: string;
   active: boolean;
+  availability: "AVAILABLE" | "SOLD_OUT";
   optionGroups: OptionGroup[];
+}
+export interface BranchAvailability {
+  branchId: string;
+  productId: string;
+  productName: string;
+  availability: "AVAILABLE" | "SOLD_OUT" | "UNLISTED";
+  updatedAt: number | null;
+  updatedBy: string | null;
 }
 export interface OptionItem {
   id: string | null;
