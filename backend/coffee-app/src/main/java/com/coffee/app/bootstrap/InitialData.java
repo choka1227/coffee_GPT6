@@ -51,7 +51,8 @@ public class InitialData implements ApplicationRunner {
               "ORDER_MANAGE",
               "REPORT_STORE",
               "PAYMENT_RECONCILE",
-              "MENU_AVAILABILITY"));
+              "MENU_AVAILABILITY",
+              "AUDIT_VIEW"));
       role("HQ", "總部人員", "GLOBAL", Identity.PERMISSIONS);
     }
     if (db.queryForObject("select count(*) from accounts", Integer.class) > 0) return;

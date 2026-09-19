@@ -7,6 +7,7 @@ import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import com.coffee.app.bootstrap.InitialData;
 import com.coffee.catalog.api.Catalog;
 import com.coffee.catalog.internal.CatalogService;
+import com.coffee.audit.api.Audit;
 import com.coffee.shared.Actor;
 import com.coffee.shared.Problem;
 import java.util.*;
@@ -35,7 +36,7 @@ class CatalogOptionsTest {
     db = new JdbcTemplate(source);
     new InitialData(db, true, "bootstrap", "TestPassword!2026", "TestPassword!2026")
         .run(new DefaultApplicationArguments());
-    catalog = new CatalogService(db);
+    catalog = new CatalogService(db, org.mockito.Mockito.mock(Audit.class));
     headquarters =
         new Actor("hq", "hq", "總部", "ADMIN", "GLOBAL", null, Set.of("MENU_MANAGE"));
   }

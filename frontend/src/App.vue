@@ -9,6 +9,7 @@ import {
   Store,
   UsersRound,
   ShieldCheck,
+  ScrollText,
   BookOpen,
   LogOut,
   Menu,
@@ -77,6 +78,12 @@ const links = computed(() =>
       label: "角色與權限",
       icon: ShieldCheck,
       show: auth.can("ROLE_MANAGE"),
+    },
+    {
+      path: "/audit",
+      label: "稽核軌跡",
+      icon: ScrollText,
+      show: auth.can("AUDIT_VIEW"),
     },
   ].filter((l) => l.show),
 );

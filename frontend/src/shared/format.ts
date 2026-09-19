@@ -39,6 +39,8 @@ export const permissions: Record<string, string> = {
   ACCOUNT_MANAGE: "帳號管理",
   ROLE_MANAGE: "角色與功能配置",
   MENU_MANAGE: "菜單管理",
+  MENU_AVAILABILITY: "分店供應狀態",
+  AUDIT_VIEW: "稽核軌跡",
 };
 export const roleNames: Record<string, string> = {
   CUSTOMER: "客人",

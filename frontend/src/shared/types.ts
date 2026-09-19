@@ -106,6 +106,20 @@ export interface Account {
   active: boolean;
   password?: string;
 }
+export interface AuditEntry {
+  id: string;
+  actorId: string;
+  actorName: string;
+  action: string;
+  targetId: string;
+  branchId: string | null;
+  summary: string;
+  createdAt: number;
+}
+export interface AuditPage {
+  items: AuditEntry[];
+  nextCursor: string | null;
+}
 export interface Report {
   month: string;
   today: string;

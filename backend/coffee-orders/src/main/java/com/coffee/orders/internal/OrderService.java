@@ -1,5 +1,6 @@
 package com.coffee.orders.internal;
 
+import com.coffee.audit.api.Audit;
 import com.coffee.branches.api.Branches;
 import com.coffee.catalog.api.Catalog;
 import com.coffee.orders.api.Orders;
@@ -16,11 +17,13 @@ public class OrderService implements Orders {
   private final JdbcTemplate db;
   private final Catalog catalog;
   private final Branches branches;
+  private final Audit audit;
 
-  public OrderService(JdbcTemplate db, Catalog catalog, Branches branches) {
+  public OrderService(JdbcTemplate db, Catalog catalog, Branches branches, Audit audit) {
     this.db = db;
     this.catalog = catalog;
     this.branches = branches;
+    this.audit = audit;
   }
 
   @Transactional
@@ -185,6 +188,13 @@ public class OrderService implements Orders {
         tendered,
         tendered - o.total(),
         id);
+    audit.record(
+        a,
+        "ORDER_CASH",
+        id,
+        o.branchId(),
+        "現金收款 " + o.total() + " 元，實收 " + tendered + " 元，找零 "
+            + (tendered - o.total()) + " 元");
     return snapshot(id);
   }
 
@@ -207,6 +217,12 @@ public class OrderService implements Orders {
                     next));
     Problem.check(allowed, "訂單狀態已變更，或不允許此狀態轉換");
     db.update("update orders set status=? where id=?", next, id);
+    audit.record(
+        a,
+        "ORDER_TRANSITION",
+        id,
+        o.branchId(),
+        "訂單狀態 " + o.status() + " → " + next);
     return snapshot(id);
   }
 

@@ -1,17 +1,21 @@
 package com.coffee.branches.internal;
 
+import com.coffee.audit.api.Audit;
 import com.coffee.branches.api.Branches;
 import com.coffee.shared.*;
 import java.util.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class BranchService implements Branches {
   private final JdbcTemplate db;
+  private final Audit audit;
 
-  public BranchService(JdbcTemplate db) {
+  public BranchService(JdbcTemplate db, Audit audit) {
     this.db = db;
+    this.audit = audit;
   }
 
   private Branch row(java.sql.ResultSet r, int n) throws java.sql.SQLException {
@@ -39,6 +43,7 @@ public class BranchService implements Branches {
         .orElseThrow(() -> new Problem(400, "分店不存在或已暫停營業"));
   }
 
+  @Transactional
   public Branch save(Actor a, Branch b) {
     a.require("BRANCH_MANAGE");
     if (!a.global()) throw new Problem(403, "此功能限總部範圍");
@@ -70,6 +75,7 @@ public class BranchService implements Branches {
             b.monthlyTarget(),
             id)
         == 0) throw new Problem(404, "找不到分店");
+    audit.record(a, "BRANCH_SAVE", id, id, "儲存分店 " + b.name());
     return new Branch(id, b.name(), b.address(), b.phone(), b.active(), b.monthlyTarget());
   }
 }

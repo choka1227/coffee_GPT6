@@ -45,6 +45,11 @@ const routes = [
     component: () => import("./modules/identity/RolesView.vue"),
     meta: { permissions: ["ROLE_MANAGE"] },
   },
+  {
+    path: "/audit",
+    component: () => import("./modules/identity/AuditView.vue"),
+    meta: { permissions: ["AUDIT_VIEW"] },
+  },
   { path: "/:pathMatch(.*)*", redirect: "/" },
 ];
 const app = createApp(App);

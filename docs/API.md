@@ -21,6 +21,7 @@
 | GET | /api/orders/{id} | 訂單明細，檢查擁有者或分店權限 |
 | POST | /api/orders/{id}/cash | tendered；POS_ORDER / ORDER_MANAGE + 分店範圍 |
 | PATCH | /api/orders/{id}/status | status；狀態機及分店權限 |
+| GET | /api/audit?action=&actorId=&branchId=&from=&to=&cursor=&limit= | AUDIT_VIEW；GLOBAL 可跨店，BRANCH 強制所屬分店；游標分頁，limit 上限 200 |
 | GET | /api/payments/config | 線上付款是否開放及 stage/production，不回傳金鑰 |
 | POST | /api/payments/ecpay/{id} | 產生付款 action 與 fields，需可存取該訂單 |
 | POST | /api/payments/ecpay/callback | 綠界通知，form-urlencoded、驗證簽章，純文字 1\|OK |

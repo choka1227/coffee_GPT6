@@ -140,7 +140,7 @@ public class IdentityService implements Identity {
             hash,
             id);
     }
-    audit.record(a, "ACCOUNT_SAVE", id, null, "儲存帳號 " + i.username());
+    audit.record(a, "ACCOUNT_SAVE", id, branch, "儲存帳號 " + i.username());
     return new Account(id, i.username(), i.name(), i.role(), branch, i.active());
   }
 
