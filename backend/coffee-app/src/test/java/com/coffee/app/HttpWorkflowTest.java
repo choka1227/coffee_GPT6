@@ -21,6 +21,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 /** Actual HTTP/cookies/CSRF plus production-style empty-database bootstrap. */
@@ -42,6 +43,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
       "app.bootstrap-username=owner@coffee.local",
       "app.bootstrap-password=BootstrapTest!2026"
     })
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class HttpWorkflowTest {
   @MockitoBean TradeQuery tradeQuery;
   @LocalServerPort int port;
