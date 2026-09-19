@@ -43,11 +43,24 @@ public interface Catalog {
       int priceDelta,
       int costDelta) {}
 
+  record BranchAvailability(
+      String branchId,
+      String productId,
+      String productName,
+      String availability,
+      Long updatedAt,
+      String updatedBy) {}
+
   List<Product> list(Actor a, boolean manage);
 
   Product sellable(String id);
 
   Product save(Actor a, Product p);
+
+  List<BranchAvailability> availability(Actor a, String branchId);
+
+  BranchAvailability setAvailability(
+      Actor a, String branchId, String productId, String availability);
 
   List<OptionGroup> productOptions(String productId);
 

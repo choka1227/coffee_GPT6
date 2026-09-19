@@ -17,7 +17,7 @@
 ## 施工進度
 
 - [x] S1 資料層與權限常數
-- [ ] S2 可用性維護 API
+- [x] S2 可用性維護 API
 - [ ] S3 菜單查詢與下單套用
 
 ## S1 測試計畫與驗收
@@ -26,3 +26,12 @@
 - V3 既有資料庫升級：migration 補齊三個角色權限，重跑 migrate 不重複。
 - `branch_products`：驗證主鍵、外鍵、狀態列舉與 `SOLD_OUT`／`sold_out_date` 關聯限制。
 - 執行 frontend build、backend verify；遠端 CI 以本階段最新 head 為準。
+
+## S2 設計與驗收
+
+- 新增可用性查詢與設定端點；設定流程先鎖定一定存在的 `products` 列，再讀取現況、判斷授權、upsert 與寫入稽核，全部位於同一交易。
+- `UNLISTED` 的設定與解除僅允許具 `MENU_MANAGE` 的 GLOBAL actor；一般售完切換需 `MENU_AVAILABILITY` 且限所屬分店。
+- 稽核以 `MENU_AVAILABILITY_{狀態}` 記錄狀態，`target_id` 僅存 `{branchId}:{productId}`，支援兩個 36 字元識別碼。
+- 查詢用單一台北日期 helper 將昨日 `SOLD_OUT` 視為 `AVAILABLE`；S3 會沿用同一 helper 套用於菜單與下單。
+- `setAvailability` 回傳寫入後的 record，讓只具 GLOBAL `MENU_MANAGE` 的合法呼叫者不必再通過查詢端點的 `MENU_AVAILABILITY` 權限才能取得 POST 回應。
+- 測試涵蓋跨店、顧客、店端停供、停供解除、HQ、無效狀態、404、最大識別碼、稽核原子性、CSRF 與受控併發。

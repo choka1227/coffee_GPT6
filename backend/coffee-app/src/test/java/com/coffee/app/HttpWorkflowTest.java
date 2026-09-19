@@ -207,4 +207,60 @@ class HttpWorkflowTest {
                 .asInt())
         .isEqualTo(580);
   }
+
+  @Test
+  void availabilityWriteRequiresCsrfOnOtherwiseAuthorizedRequest() throws Exception {
+    var hq = new BrowserSession();
+    hq.login("owner@coffee.local", "BootstrapTest!2026");
+    String suffix = UUID.randomUUID().toString().substring(0, 8);
+    String branch =
+        hq.call(
+                "POST",
+                "/api/branches",
+                "{\"id\":null,\"name\":\"CSRF 門市 "
+                    + suffix
+                    + "\",\"address\":\"台北市\",\"phone\":\"02-12345678\",\"active\":true,\"monthlyTarget\":10000}")
+            .get("id")
+            .asText();
+    String product =
+        hq.call(
+                "POST",
+                "/api/menu",
+                "{\"id\":null,\"name\":\"CSRF 商品 "
+                    + suffix
+                    + "\",\"subtitle\":\"測試\",\"category\":\"經典咖啡\",\"price\":100,\"cost\":10,\"image\":\"latte\",\"badge\":\"\",\"active\":true}")
+            .get("id")
+            .asText();
+    String username = "cashier-" + suffix + "@http.local";
+    hq.call(
+        "POST",
+        "/api/admin/accounts",
+        json.writeValueAsString(
+            Map.of(
+                "username", username,
+                "name", "CSRF 收銀員",
+                "role", "CASHIER",
+                "branchId", branch,
+                "active", true,
+                "password", "WorkflowTest!2026")));
+    var cashier = new BrowserSession();
+    cashier.login(username, "WorkflowTest!2026");
+    String body =
+        json.writeValueAsString(
+            Map.of("branchId", branch, "productId", product, "availability", "SOLD_OUT"));
+    String token = cashier.token;
+    cashier.token = null;
+    assertThat(cashier.request("POST", "/api/menu/availability", body, Map.of()).statusCode())
+        .isEqualTo(403);
+    cashier.token = token;
+    assertThat(cashier.call("POST", "/api/menu/availability", body).get("availability").asText())
+        .isEqualTo("SOLD_OUT");
+
+    var anonymous = new BrowserSession();
+    var csrf = anonymous.call("GET", "/api/auth/csrf", null);
+    anonymous.token = csrf.get("token").asText();
+    anonymous.header = csrf.get("headerName").asText();
+    assertThat(anonymous.request("POST", "/api/menu/availability", body, Map.of()).statusCode())
+        .isEqualTo(401);
+  }
 }
