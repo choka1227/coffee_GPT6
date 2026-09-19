@@ -19,8 +19,10 @@ class CatalogController {
 
   @GetMapping
   List<Catalog.Product> list(
-      @RequestAttribute Actor actor, @RequestParam(defaultValue = "false") boolean manage) {
-    return s.list(actor, manage);
+      @RequestAttribute Actor actor,
+      @RequestParam(defaultValue = "false") boolean manage,
+      @RequestParam(required = false) String branchId) {
+    return s.list(actor, manage, branchId);
   }
 
   @PostMapping

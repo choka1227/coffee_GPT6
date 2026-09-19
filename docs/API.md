@@ -11,8 +11,11 @@
 | POST | /api/auth/password | oldPassword, newPassword |
 | GET | /api/branches | 營業中分店清單；manage=true 需 BRANCH_MANAGE |
 | POST | /api/branches | 新增 / 更新分店；BRANCH_MANAGE + GLOBAL |
-| GET | /api/menu | 上架菜單；manage=true 需 MENU_MANAGE，可取得成本及已下架商品 |
+| GET | /api/menu?branchId={id} | 分店點餐菜單；branchId 必填，回傳 AVAILABLE / SOLD_OUT，UNLISTED 不回傳 |
+| GET | /api/menu?manage=true | 全鏈菜單；MENU_MANAGE，可取得成本及已下架商品，忽略 branchId |
 | POST | /api/menu | 新增 / 更新商品；MENU_MANAGE + GLOBAL |
+| GET | /api/menu/availability?branchId={id} | 分店供應狀態；MENU_AVAILABILITY + 分店範圍 |
+| POST | /api/menu/availability | 設定 AVAILABLE / SOLD_OUT / UNLISTED；UNLISTED 僅 MENU_MANAGE + GLOBAL |
 | GET | /api/orders | 本人 / 所屬分店 / 所有分店，依身分授權；最近 100 筆 |
 | POST | /api/orders | 建立訂單；Idempotency-Key header 必填 |
 | GET | /api/orders/{id} | 訂單明細，檢查擁有者或分店權限 |

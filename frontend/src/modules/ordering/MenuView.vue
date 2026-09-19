@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
   Search,
@@ -74,19 +74,39 @@ const permittedBranches = computed(() =>
     ? branches.value
     : branches.value.filter((b) => b.id === auth.user?.branchId),
 );
+const unavailableCart = computed(() => {
+  const menu = new Map(products.value.map((p) => [p.id, p]));
+  return cart.value.filter((line) => menu.get(line.productId)?.availability !== "AVAILABLE");
+});
+let menuReady = false;
+async function loadMenu(showError = true) {
+  if (!branchId.value) {
+    products.value = [];
+    return;
+  }
+  products.value = [];
+  try {
+    products.value = await api<Product[]>(`/menu?branchId=${encodeURIComponent(branchId.value)}`);
+    if (unavailableCart.value.length)
+      notify("切換分店後，點餐單中有商品已售完或未供應，請先移除");
+  } catch (e) {
+    if (showError) error.value = (e as Error).message;
+    else notify((e as Error).message);
+  }
+}
 async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const [p, b, c] = await Promise.all([
-      api<Product[]>("/menu"),
+    const [b, c] = await Promise.all([
       api<Branch[]>("/branches"),
       api<{ enabled: boolean; environment: string }>("/payments/config"),
     ]);
-    products.value = p;
     branches.value = b;
     config.value = c;
-    if (!branchId.value) branchId.value = b[0]?.id || "";
+    if (!b.some((branch) => branch.id === branchId.value)) branchId.value = b[0]?.id || "";
+    await loadMenu();
+    menuReady = true;
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
@@ -94,8 +114,15 @@ async function load() {
   }
 }
 onMounted(load);
+watch(branchId, async () => {
+  if (!menuReady) return;
+  error.value = "";
+  loading.value = true;
+  await loadMenu(false);
+  loading.value = false;
+});
 function choose(p: Product) {
-  if (busy.value) return;
+  if (busy.value || p.availability === "SOLD_OUT") return;
   selected.value = p;
   selectedOptionIds.value = p.optionGroups
     .filter((g) => g.minSelect > 0)
@@ -157,6 +184,10 @@ async function checkout() {
     notify("請先選擇分店");
     return;
   }
+  if (unavailableCart.value.length) {
+    notify("點餐單中有商品已售完或本店未供應，請先移除");
+    return;
+  }
   const cashAtPos = !auth.customer && payment.value === "CASH";
   const cash = tendered.value ?? total.value;
   if (
@@ -209,6 +240,23 @@ async function checkout() {
   } catch (e) {
     notify((e as Error).message);
     if (order) router.push("/orders");
+  } finally {
+    busy.value = false;
+  }
+}
+async function toggleAvailability(p: Product) {
+  if (!p.id || !branchId.value || busy.value) return;
+  busy.value = true;
+  try {
+    await send("/menu/availability", {
+      branchId: branchId.value,
+      productId: p.id,
+      availability: p.availability === "SOLD_OUT" ? "AVAILABLE" : "SOLD_OUT",
+    });
+    notify(p.availability === "SOLD_OUT" ? "已恢復供應" : "已標記今日售完");
+    await loadMenu(false);
+  } catch (e) {
+    notify((e as Error).message);
   } finally {
     busy.value = false;
   }
@@ -300,19 +348,25 @@ async function checkout() {
         </button>
       </div>
       <div v-else class="product-grid">
-        <button
+        <article
           v-for="p in visible"
           :key="p.id!"
           class="product-card"
+          :class="{ unavailable: p.availability === 'SOLD_OUT' }"
+          role="button"
+          tabindex="0"
+          :aria-disabled="busy || p.availability === 'SOLD_OUT'"
           @click="choose(p)"
-          :disabled="busy"
+          @keydown.enter="choose(p)"
+          @keydown.space.prevent="choose(p)"
         >
           <div class="product-photo">
             <img
               :src="'/images/' + p.image + '.jpg'"
               :alt="p.category + '示意照片'"
               loading="lazy"
-            /><span v-if="p.badge" class="product-badge">{{ p.badge }}</span>
+            /><span v-if="p.availability === 'SOLD_OUT'" class="product-badge sold-out">今日售完</span
+            ><span v-else-if="p.badge" class="product-badge">{{ p.badge }}</span>
           </div>
           <div class="product-copy">
             <h3>{{ p.name }}</h3>
@@ -323,8 +377,14 @@ async function checkout() {
                 ><Plus :size="19"
               /></span>
             </div>
+            <button
+              v-if="auth.can('MENU_AVAILABILITY')"
+              class="availability-action"
+              type="button"
+              @click.stop="toggleAvailability(p)"
+            >{{ p.availability === "SOLD_OUT" ? "恢復供應" : "標記售完" }}</button>
           </div>
-        </button>
+        </article>
       </div>
       <p class="menu-footnote">
         商品照片為分類示意，以門市實際餐點為準。飲品可選擇溫度與甜度。
@@ -434,10 +494,13 @@ async function checkout() {
           <span>應找零</span
           ><b>{{ money(Math.max(0, (tendered ?? total) - total)) }}</b>
         </div>
+        <p v-if="unavailableCart.length" class="error-state">
+          點餐單中有 {{ unavailableCart.map((line) => line.name).join("、") }} 已售完或未供應，請先移除。
+        </p>
       </div>
       <button
         class="btn primary checkout"
-        :disabled="!cart.length || busy || !branchId"
+        :disabled="!cart.length || busy || !branchId || !!unavailableCart.length"
         @click="checkout"
       >
         {{

@@ -46,7 +46,7 @@ class CatalogOptionsTest {
 
     var customer = new Actor("c", "c", "顧客", "CUSTOMER", "SELF", null, Set.of());
     var publicLatte =
-        catalog.list(customer, false).stream()
+        catalog.list(customer, false, "taipei").stream()
             .filter(product -> product.id().equals("latte"))
             .findFirst()
             .orElseThrow();
@@ -56,7 +56,7 @@ class CatalogOptionsTest {
         .allMatch(item -> item.costDelta() == 0);
 
     var managedLatte =
-        catalog.list(headquarters, true).stream()
+        catalog.list(headquarters, true, null).stream()
             .filter(product -> product.id().equals("latte"))
             .findFirst()
             .orElseThrow();

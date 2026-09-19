@@ -14,6 +14,7 @@ public interface Catalog {
       String image,
       String badge,
       boolean active,
+      String availability,
       List<OptionGroup> optionGroups) {}
 
   record OptionItem(
@@ -51,9 +52,9 @@ public interface Catalog {
       Long updatedAt,
       String updatedBy) {}
 
-  List<Product> list(Actor a, boolean manage);
+  List<Product> list(Actor a, boolean manage, String branchId);
 
-  Product sellable(String id);
+  Product sellable(String branchId, String id);
 
   Product save(Actor a, Product p);
 
