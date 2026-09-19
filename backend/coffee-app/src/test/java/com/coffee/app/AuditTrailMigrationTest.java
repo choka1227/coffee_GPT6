@@ -47,6 +47,8 @@ class AuditTrailMigrationTest {
     var db = new JdbcTemplate(source);
     new InitialData(db, true, "bootstrap", "TestPassword!2026", "TestPassword!2026")
         .run(new DefaultApplicationArguments());
+    // Simulate the permissions that existed before V5; InitialData reflects the latest code.
+    db.update("delete from role_permissions where permission='AUDIT_VIEW'");
     db.update(
         "insert into audit_log(id,actor_id,action,target_id,created_at) values(?,?,?,?,?)",
         "before-v5",

@@ -47,6 +47,8 @@ class BranchMenuAvailabilityMigrationTest {
     Flyway.configure().dataSource(source).target("3").load().migrate();
     var db = new JdbcTemplate(source);
     seed(db);
+    // Simulate a pre-V5 installation while using the current seed implementation.
+    db.update("delete from role_permissions where permission='AUDIT_VIEW'");
 
     var flyway = Flyway.configure().dataSource(source).load();
     flyway.migrate();
