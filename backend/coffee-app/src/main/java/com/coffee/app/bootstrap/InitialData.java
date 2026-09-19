@@ -36,13 +36,22 @@ public class InitialData implements ApplicationRunner {
   public void run(ApplicationArguments args) {
     if (db.queryForObject("select count(*) from roles", Integer.class) == 0) {
       role("CUSTOMER", "客人", "SELF", List.of("ORDER_CREATE"));
-      role("CASHIER", "收銀員", "BRANCH", List.of("ORDER_CREATE", "POS_ORDER", "ORDER_MANAGE"));
+      role(
+          "CASHIER",
+          "收銀員",
+          "BRANCH",
+          List.of("ORDER_CREATE", "POS_ORDER", "ORDER_MANAGE", "MENU_AVAILABILITY"));
       role(
           "MANAGER",
           "店長",
           "BRANCH",
           List.of(
-              "ORDER_CREATE", "POS_ORDER", "ORDER_MANAGE", "REPORT_STORE", "PAYMENT_RECONCILE"));
+              "ORDER_CREATE",
+              "POS_ORDER",
+              "ORDER_MANAGE",
+              "REPORT_STORE",
+              "PAYMENT_RECONCILE",
+              "MENU_AVAILABILITY"));
       role("HQ", "總部人員", "GLOBAL", Identity.PERMISSIONS);
     }
     if (db.queryForObject("select count(*) from accounts", Integer.class) > 0) return;
