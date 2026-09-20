@@ -141,14 +141,14 @@ public class CashSessionService implements CashSessions {
     int variance = Math.subtractExact(request.countedAmount(), expected);
     db.update(
         "update cash_sessions set status='CLOSED',closed_by=?,closed_at=?,counted_amount=?,"
-            + " expected_amount=?,variance=?,note=? where id=?",
+            + " expected_amount=?,variance=? where id=?",
         actor.id(),
         System.currentTimeMillis(),
         request.countedAmount(),
         expected,
         variance,
-        note,
         id);
+    if (!note.isEmpty()) db.update("update cash_sessions set note=? where id=?", note, id);
     audit.record(
         actor,
         "CASH_CLOSE",

@@ -131,11 +131,12 @@ class CashSessionsTest {
         .isEqualTo(opened.id());
 
     CashSessions.Session closed =
-        sessions.close(cashier, opened.id(), new CashSessions.Close(2130, "交班"));
+        sessions.close(cashier, opened.id(), new CashSessions.Close(2130, ""));
     assertThat(closed.cashRevenue()).isEqualTo(140);
     assertThat(closed.expectedAmount()).isEqualTo(2140);
     assertThat(closed.variance()).isEqualTo(-10);
     assertThat(closed.orderCount()).isEqualTo(1);
+    assertThat(closed.note()).isEqualTo("早班");
     assertProblem(
         409,
         "此班別已交班",
