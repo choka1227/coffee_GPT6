@@ -175,6 +175,9 @@ public class OrderService implements Orders {
   @Transactional
   public Order cash(Actor a, String id, int tendered) {
     a.require("POS_ORDER");
+    String branchId = branchOf(id);
+    a.branch(branchId);
+    lockBranch(branchId);
     lock(id);
     Order o = snapshot(id);
     manage(a, o);
@@ -182,11 +185,21 @@ public class OrderService implements Orders {
     if (o.paidAt() != null) return o;
     Problem.check(o.status().equals("PENDING_PAYMENT"), "訂單目前無法收款");
     Problem.check(tendered >= o.total() && tendered <= 1000000, "實收金額不足或超過上限");
+    String cashSessionId =
+        db.query(
+                "select id from cash_sessions where branch_id=? and status='OPEN'",
+                (r, n) -> r.getString("id"),
+                branchId)
+            .stream()
+            .findFirst()
+            .orElse(null);
     db.update(
-        "update orders set status='PAID',paid_at=?,tendered=?,change_amount=? where id=?",
+        "update orders set status='PAID',paid_at=?,tendered=?,change_amount=?,cash_session_id=?"
+            + " where id=?",
         System.currentTimeMillis(),
         tendered,
         tendered - o.total(),
+        cashSessionId,
         id);
     audit.record(
         a,
@@ -304,6 +317,17 @@ public class OrderService implements Orders {
   private void lock(String id) {
     if (db.queryForList("select id from orders where id=? for update", String.class, id).isEmpty())
       throw new Problem(404, "找不到訂單");
+  }
+
+  private String branchOf(String id) {
+    var rows = db.queryForList("select branch_id from orders where id=?", String.class, id);
+    if (rows.isEmpty()) throw new Problem(404, "找不到訂單");
+    return rows.get(0);
+  }
+
+  private void lockBranch(String branchId) {
+    if (db.queryForList("select id from branches where id=? for update", String.class, branchId)
+        .isEmpty()) throw new Problem(404, "找不到分店");
   }
 
   private Order snapshot(String id) {

@@ -29,3 +29,13 @@
 - 新增寫入點、游標完整性、上限夾取、資料範圍、無權限與 CSRF 反向驗收測試。
 - frontend：`npm run build` 成功。
 - backend：本機 Maven Central DNS 解析失敗，未能啟動測試；程式與測試已推送，由最新 head 的 GitHub Actions 驗證。
+
+## S3 設計與驗證
+
+- 新增 V6 `cash_sessions`、nullable `orders.cash_session_id`、查詢索引及既有角色權限升級；H2 不採 PostgreSQL 部分索引語法，唯一性由分店行鎖與 service 檢查保證。
+- 新增開班、目前班別與交班端點；準備金、實點金額、預期金額與短溢全部由後端驗證或計算。
+- 開班、收現、交班皆先鎖該店 `branches` 列；收現之後才重讀 OPEN 班別，避免交班定稿後仍有訂單掛入。
+- 現金收入以 `SUM(total)` 計算，不採 `tendered`；未開班時既有收現流程仍成功且 `cash_session_id` 為 null。
+- 新增全新／既有資料庫 migration、角色權限、重複與併發開班、收現／交班競態、跨店／無權限、CSRF、金額與重複交班測試。
+- frontend：`npm run build` 成功。
+- backend：本機 Maven Central DNS 解析失敗，verify 未啟動；等待最新 head 的 GitHub Actions 驗證。
