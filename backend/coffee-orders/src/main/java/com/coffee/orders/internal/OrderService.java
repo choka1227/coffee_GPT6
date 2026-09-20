@@ -294,14 +294,15 @@ public class OrderService implements Orders {
     db.query(
         "select order_item_id,group_name,option_name,price_delta from order_item_options"
             + " where order_item_id in (" + placeholders + ") order by order_item_id,id",
-        r ->
+        r -> {
             options
                 .computeIfAbsent(r.getString("order_item_id"), ignored -> new ArrayList<>())
                 .add(
                     new LineOption(
                         r.getString("group_name"),
                         r.getString("option_name"),
-                        r.getInt("price_delta"))),
+                        r.getInt("price_delta")));
+        },
         itemIds.toArray());
     return options;
   }
