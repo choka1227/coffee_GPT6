@@ -50,8 +50,6 @@ public interface Orders {
 
   Order create(Actor a, Create request, String key);
 
-  List<Order> list(Actor a);
-
   Page page(Actor a, Query query);
 
   Order get(Actor a, String id);

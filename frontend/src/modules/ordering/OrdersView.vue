@@ -53,7 +53,7 @@ async function load(reset = true) {
     const keyword = query.value.trim();
     if (keyword) params.set("q", keyword);
     if (!reset && nextCursor.value) params.set("cursor", nextCursor.value);
-    const page = await api<OrderPage>("/orders/page?" + params.toString());
+    const page = await api<OrderPage>("/orders?" + params.toString());
     if (requestId !== requestSequence) return;
     orders.value = reset ? page.items : [...orders.value, ...page.items];
     nextCursor.value = page.nextCursor;

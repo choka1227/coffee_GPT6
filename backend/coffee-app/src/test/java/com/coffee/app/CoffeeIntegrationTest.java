@@ -133,10 +133,10 @@ class CoffeeIntegrationTest {
   @Test
   void orderPageGetDoesNotRequireCsrfAndRejectsBlankCursor() throws Exception {
     var manager = login("manager");
-    mvc.perform(get("/api/orders/page").session(manager))
+    mvc.perform(get("/api/orders").session(manager))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.items").isArray());
-    mvc.perform(get("/api/orders/page").param("cursor", "").session(manager))
+    mvc.perform(get("/api/orders").param("cursor", "").session(manager))
         .andExpect(status().isBadRequest())
         .andExpect(jsonPath("$.message").value("查詢游標格式不正確"));
   }

@@ -139,27 +139,6 @@ public class OrderService implements Orders {
     }
   }
 
-  public List<Order> list(Actor a) {
-    String where;
-    Object[] params;
-    if (a.customer()) {
-      where = "account_id=?";
-      params = new Object[] {a.id()};
-    } else {
-      a.require("ORDER_MANAGE");
-      where = a.global() ? "1=1" : "branch_id=?";
-      params = a.global() ? new Object[] {} : new Object[] {a.branchId()};
-    }
-    return db
-        .queryForList(
-            "select id from orders where " + where + " order by created_at desc limit 100",
-            String.class,
-            params)
-        .stream()
-        .map(this::snapshot)
-        .toList();
-  }
-
   public Page page(Actor a, Query query) {
     Query q = query == null ? new Query(null, null, null, null, null, null, 0) : query;
     Problem.check(q.status() == null || ORDER_STATUSES.contains(q.status()), "訂單狀態不正確");

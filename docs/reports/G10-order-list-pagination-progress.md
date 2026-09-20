@@ -2,14 +2,14 @@
 
 - 來源規格：`docs/specs/G10-order-list-pagination.md`
 - 主線來源：`baf1db674bcc25ce410048c1e1b4ad929d93d6f7`
-- 已完成階段：S1 後端分頁查詢與批次載入、S2 前端改用分頁端點
+- 已完成階段：S1 後端分頁查詢與批次載入、S2 前端改用分頁端點、S3 移除舊陣列版本
 
 ## 設計摘要
 
 - 以 `(created_at desc, id desc)` 為穩定排序鍵，游標僅承載排序位置，資料範圍仍由登入者身分強制套用。
 - 先多取一筆判斷下一頁，不另做總筆數查詢。
 - 表頭、品項與選項固定以至多三次查詢批次載入；空頁只查一次。
-- 保留既有 `GET /api/orders` 與 `Orders.list()`，本階段僅新增 `/api/orders/page`。
+- S1／S2 期間保留既有陣列端點；S3 已移除 `Orders.list()`，分頁查詢正式掛回 `GET /api/orders`。
 - 前端狀態與關鍵字改由後端篩選；關鍵字採 300ms debounce，載入更多使用不透明游標 append。
 
 ## 疑點與處理

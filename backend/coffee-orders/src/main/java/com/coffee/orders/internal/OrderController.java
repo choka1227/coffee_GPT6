@@ -2,7 +2,6 @@ package com.coffee.orders.internal;
 
 import com.coffee.orders.api.Orders;
 import com.coffee.shared.Actor;
-import java.util.*;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -27,11 +26,6 @@ class OrderController {
   }
 
   @GetMapping
-  List<Orders.Order> list(@RequestAttribute Actor actor) {
-    return s.list(actor);
-  }
-
-  @GetMapping("/page")
   Orders.Page page(
       @RequestAttribute Actor actor,
       @RequestParam(required = false) String status,
