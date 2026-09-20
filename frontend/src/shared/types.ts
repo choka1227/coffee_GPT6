@@ -120,6 +120,30 @@ export interface AuditPage {
   items: AuditEntry[];
   nextCursor: string | null;
 }
+export interface CashSession {
+  id: string;
+  branchId: string;
+  status: "OPEN" | "CLOSED";
+  openingFloat: number;
+  cashRevenue: number;
+  orderCount: number;
+  expectedAmount: number;
+  countedAmount: number | null;
+  variance: number | null;
+  openedBy: string;
+  openedByName: string;
+  openedAt: number;
+  closedBy: string | null;
+  closedByName: string | null;
+  closedAt: number | null;
+  note: string;
+}
+export interface CashSessionPage {
+  items: CashSession[];
+  nextCursor: string | null;
+  unassignedCashRevenue: number;
+  unassignedOrderCount: number;
+}
 export interface Report {
   month: string;
   today: string;

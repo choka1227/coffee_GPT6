@@ -2,6 +2,7 @@ package com.coffee.app;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -165,6 +166,78 @@ class CashSessionsTest {
                 "select cash_session_id from orders where id=?", String.class, withoutSession.id()))
         .isNull();
     assertThat(sessions.current(cashier, "taipei")).isNull();
+  }
+
+  @Test
+  void detailIsLiveAndHistoryUsesStableCursorWithUnassignedCashVisible() throws Exception {
+    CashSessions.Page before =
+        sessions.search(cashier, new CashSessions.Query("taipei", null, null, null, 2));
+    Orders.Order unassigned = createCashOrder();
+    orders.cash(cashier, unassigned.id(), 200);
+
+    List<String> expectedIds = new ArrayList<>();
+    for (int i = 0; i < 3; i++) {
+      CashSessions.Session opened =
+          sessions.open(cashier, new CashSessions.Open("taipei", 1000 + i, "班別 " + i));
+      expectedIds.add(opened.id());
+      if (i == 0) {
+        Orders.Order assigned = createCashOrder();
+        orders.cash(cashier, assigned.id(), 500);
+        CashSessions.Session detail = sessions.get(cashier, opened.id());
+        assertThat(detail.cashRevenue()).isEqualTo(140);
+        assertThat(detail.expectedAmount()).isEqualTo(1140);
+        assertThat(detail.variance()).isNull();
+        assertThat(detail.closedAt()).isNull();
+      }
+      sessions.close(cashier, opened.id(), new CashSessions.Close(1140 + i, ""));
+    }
+
+    CashSessions.Page first =
+        sessions.search(cashier, new CashSessions.Query("taipei", null, null, null, 2));
+    assertThat(first.items()).hasSize(2);
+    assertThat(first.nextCursor()).isNotNull();
+    assertThat(first.unassignedCashRevenue() - before.unassignedCashRevenue()).isEqualTo(140);
+    assertThat(first.unassignedOrderCount() - before.unassignedOrderCount()).isEqualTo(1);
+    CashSessions.Page second =
+        sessions.search(
+            cashier, new CashSessions.Query("taipei", null, null, first.nextCursor(), 2));
+    assertThat(second.nextCursor()).isNull();
+    assertThat(
+            java.util.stream.Stream.concat(first.items().stream(), second.items().stream())
+                .map(CashSessions.Session::id))
+        .containsExactlyInAnyOrderElementsOf(expectedIds);
+
+    assertProblem(
+        403,
+        "只能存取所屬分店資料",
+        () -> sessions.get(manager2, expectedIds.get(0)));
+    assertProblem(
+        403,
+        "只能存取所屬分店資料",
+        () ->
+            sessions.search(
+                manager2, new CashSessions.Query("taipei", null, null, null, 2)));
+    assertProblem(
+        400,
+        "班別游標格式不正確",
+        () ->
+            sessions.search(
+                cashier, new CashSessions.Query("taipei", null, null, "invalid", 2)));
+
+    MockHttpSession httpSession = loginCashier();
+    mvc.perform(get("/api/cash-sessions/" + expectedIds.get(0)).session(httpSession))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.expectedAmount").isNumber())
+        .andExpect(jsonPath("$.openedByName").isString());
+    mvc.perform(
+            get("/api/cash-sessions")
+                .session(httpSession)
+                .param("branchId", "taipei")
+                .param("limit", "2"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items.length()").value(2))
+        .andExpect(jsonPath("$.nextCursor").isString())
+        .andExpect(jsonPath("$.unassignedCashRevenue").isNumber());
   }
 
   @Test

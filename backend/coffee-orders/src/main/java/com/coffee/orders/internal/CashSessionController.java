@@ -25,6 +25,22 @@ class CashSessionController {
     return sessions.current(actor, branchId);
   }
 
+  @GetMapping("/{id}")
+  CashSessions.Session get(@RequestAttribute Actor actor, @PathVariable String id) {
+    return sessions.get(actor, id);
+  }
+
+  @GetMapping
+  CashSessions.Page search(
+      @RequestAttribute Actor actor,
+      @RequestParam(required = false) String branchId,
+      @RequestParam(required = false) Long from,
+      @RequestParam(required = false) Long to,
+      @RequestParam(required = false) String cursor,
+      @RequestParam(defaultValue = "50") int limit) {
+    return sessions.search(actor, new CashSessions.Query(branchId, from, to, cursor, limit));
+  }
+
   @PostMapping("/{id}/close")
   CashSessions.Session close(
       @RequestAttribute Actor actor,

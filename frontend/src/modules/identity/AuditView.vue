@@ -46,7 +46,18 @@ onMounted(() => load());
     </div>
     <section class="panel">
       <form class="filter-bar" @submit.prevent="load(false)">
-        <label>動作<input v-model="action" placeholder="例如 ORDER_CASH" /></label>
+        <label
+          >動作<select v-model="action">
+            <option value="">全部動作</option>
+            <option value="ORDER_CASH">現金收款</option>
+            <option value="CASH_OPEN">開班</option>
+            <option value="CASH_CLOSE">交班</option>
+            <option value="ORDER_STATUS">訂單狀態</option>
+            <option value="MENU_SAVE">菜單儲存</option>
+            <option value="BRANCH_SAVE">分店儲存</option>
+            <option value="ROLE_SAVE">角色儲存</option>
+          </select></label
+        >
         <label>操作者 ID<input v-model="actorId" placeholder="帳號 ID" /></label>
         <label>分店 ID<input v-model="branchId" placeholder="總部可選填" /></label>
         <button class="btn primary" :disabled="loading"><Search :size="17" />查詢</button>

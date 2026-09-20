@@ -3,6 +3,7 @@ package com.coffee.orders.internal;
 import com.coffee.audit.api.Audit;
 import com.coffee.orders.api.CashSessions;
 import com.coffee.shared.*;
+import java.util.ArrayList;
 import java.util.List;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -64,6 +65,59 @@ public class CashSessionService implements CashSessions {
   }
 
   @Override
+  public Session get(Actor actor, String id) {
+    actor.require("CASH_SESSION");
+    String branchId = branchOf(id);
+    actor.branch(branchId);
+    return session(id, "OPEN".equals(statusOf(id)));
+  }
+
+  @Override
+  public Page search(Actor actor, Query query) {
+    actor.require("CASH_SESSION");
+    if (actor.customer()) throw new Problem(403, "沒有此功能的操作權限");
+    Problem.check(query != null, "班別查詢條件不正確");
+    String branchId = requireBranch(actor, query.branchId());
+    int limit = query.limit() <= 0 ? 50 : Math.min(query.limit(), 200);
+    Cursor cursor = decodeCursor(query.cursor());
+    var where = new StringBuilder(" where branch_id=?");
+    List<Object> params = new ArrayList<>();
+    params.add(branchId);
+    if (query.from() != null) {
+      where.append(" and opened_at>=?");
+      params.add(query.from());
+    }
+    if (query.to() != null) {
+      where.append(" and opened_at<?");
+      params.add(query.to());
+    }
+    if (cursor != null) {
+      where.append(" and (opened_at<? or (opened_at=? and id<?))");
+      params.add(cursor.openedAt());
+      params.add(cursor.openedAt());
+      params.add(cursor.id());
+    }
+    params.add(limit + 1);
+    List<String> ids =
+        db.queryForList(
+            "select id from cash_sessions" + where
+                + " order by opened_at desc,id desc limit ?",
+            String.class,
+            params.toArray());
+    boolean more = ids.size() > limit;
+    List<String> pageIds = more ? ids.subList(0, limit) : ids;
+    List<Session> items =
+        pageIds.stream().map(id -> session(id, "OPEN".equals(statusOf(id)))).toList();
+    Session last = items.isEmpty() ? null : items.get(items.size() - 1);
+    int[] unassigned = unassignedCash(branchId, query.from(), query.to());
+    return new Page(
+        items,
+        more ? last.openedAt() + ":" + last.id() : null,
+        unassigned[0],
+        unassigned[1]);
+  }
+
+  @Override
   @Transactional
   public Session close(Actor actor, String id, Close request) {
     actor.require("CASH_SESSION");
@@ -118,6 +172,48 @@ public class CashSessionService implements CashSessions {
     if (rows.isEmpty()) throw new Problem(404, "找不到這個班別");
     return rows.get(0);
   }
+
+  private String statusOf(String id) {
+    List<String> rows =
+        db.queryForList("select status from cash_sessions where id=?", String.class, id);
+    if (rows.isEmpty()) throw new Problem(404, "找不到這個班別");
+    return rows.get(0);
+  }
+
+  private int[] unassignedCash(String branchId, Long from, Long to) {
+    var sql = new StringBuilder(
+        "select coalesce(sum(total),0) revenue,count(*) orders from orders"
+            + " where branch_id=? and cash_session_id is null"
+            + " and payment_method='CASH' and paid_at is not null");
+    List<Object> params = new ArrayList<>();
+    params.add(branchId);
+    if (from != null) {
+      sql.append(" and paid_at>=?");
+      params.add(from);
+    }
+    if (to != null) {
+      sql.append(" and paid_at<?");
+      params.add(to);
+    }
+    var row = db.queryForMap(sql.toString(), params.toArray());
+    return new int[] {
+      Math.toIntExact(((Number) row.get("revenue")).longValue()),
+      ((Number) row.get("orders")).intValue()
+    };
+  }
+
+  static Cursor decodeCursor(String value) {
+    if (value == null || value.isBlank()) return null;
+    int split = value.indexOf(':');
+    try {
+      Problem.check(split > 0 && split < value.length() - 1, "班別游標格式不正確");
+      return new Cursor(Long.parseLong(value.substring(0, split)), value.substring(split + 1));
+    } catch (NumberFormatException e) {
+      throw new Problem(400, "班別游標格式不正確");
+    }
+  }
+
+  record Cursor(long openedAt, String id) {}
 
   private void lockBranch(String branchId) {
     if (db.queryForList("select id from branches where id=? for update", String.class, branchId)

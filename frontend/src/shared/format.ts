@@ -41,6 +41,7 @@ export const permissions: Record<string, string> = {
   MENU_MANAGE: "菜單管理",
   MENU_AVAILABILITY: "分店供應狀態",
   AUDIT_VIEW: "稽核軌跡",
+  CASH_SESSION: "現金班別",
 };
 export const roleNames: Record<string, string> = {
   CUSTOMER: "客人",

@@ -15,6 +15,7 @@ import {
   Menu,
   X,
   KeyRound,
+  WalletCards,
 } from "lucide-vue-next";
 import { useAuth } from "./modules/identity/store";
 import { notice, notify } from "./shared/notice";
@@ -78,6 +79,12 @@ const links = computed(() =>
       label: "角色與權限",
       icon: ShieldCheck,
       show: auth.can("ROLE_MANAGE"),
+    },
+    {
+      path: "/cash-sessions",
+      label: "現金班別",
+      icon: WalletCards,
+      show: auth.can("CASH_SESSION"),
     },
     {
       path: "/audit",
