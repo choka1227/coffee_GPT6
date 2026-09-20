@@ -40,7 +40,8 @@ public class InitialData implements ApplicationRunner {
           "CASHIER",
           "收銀員",
           "BRANCH",
-          List.of("ORDER_CREATE", "POS_ORDER", "ORDER_MANAGE", "MENU_AVAILABILITY"));
+          List.of(
+              "ORDER_CREATE", "POS_ORDER", "ORDER_MANAGE", "MENU_AVAILABILITY", "CASH_SESSION"));
       role(
           "MANAGER",
           "店長",
@@ -51,7 +52,9 @@ public class InitialData implements ApplicationRunner {
               "ORDER_MANAGE",
               "REPORT_STORE",
               "PAYMENT_RECONCILE",
-              "MENU_AVAILABILITY"));
+              "MENU_AVAILABILITY",
+              "AUDIT_VIEW",
+              "CASH_SESSION"));
       role("HQ", "總部人員", "GLOBAL", Identity.PERMISSIONS);
     }
     if (db.queryForObject("select count(*) from accounts", Integer.class) > 0) return;

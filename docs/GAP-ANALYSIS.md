@@ -35,7 +35,7 @@
 | 編號 | 缺口 | 狀態 | 規格書 |
 | --- | --- | --- | --- |
 | G06 | 商品選項模型與加價 | 實作已合併（PR #14，2026-09-18） | [`specs/G06-product-options.md`](specs/G06-product-options.md) |
-| G13 | 分店菜單可用性與售罄 | **規格書已完成，G06 已合併，可開工** | [`specs/G13-branch-menu-availability.md`](specs/G13-branch-menu-availability.md) |
+| G13 | 分店菜單可用性與售罄 | 實作已合併（PR #20，2026-09-20） | [`specs/G13-branch-menu-availability.md`](specs/G13-branch-menu-availability.md) |
 
 **G06 商品選項模型與加價** —— `order_items.temperature` / `sugar` 是 `VARCHAR(12)` 自由字串，**完全不影響金額**（`OrderService.java:62` 的單價就是 `products.price`）。系統賣不了「加珍珠 +10」「換燕麥奶 +20」這類每天都在賣的加價品項，是唯一直接造成營收短收的缺口，且不依賴任何外部服務。另外 `validateOptions()`（`OrderService.java:100-111`）把分類字串 `"手作烘焙"` 與溫度／甜度的可選集合寫死在 `coffee-orders` 裡，但分類清單其實歸 `coffee-catalog` 管，總部新增分類就會讓點餐端的驗證默默失準。完整規格見 [`specs/G06-product-options.md`](specs/G06-product-options.md)。
 
@@ -43,7 +43,7 @@
 
 規格採「全鏈一份主檔 + 分店覆寫表（`branch_products`）」，沒有覆寫列時行為與現在完全相同，既有資料零遷移。售完標記記在台北營業日上，隔日自動失效，**不需要引入任何排程作業**。**區域定價（分店各自售價）刻意排除**，它會同時動到金額重算、成本快照與報表毛利，且與 G06 的加價計算相撞 —— 另立 **G18**（`G17` 已由 G06 第 13.6 節的「常用組合快捷」占用），排在 G06 與 G13 都合併之後。規格書第 11.3 節有完整理由。
 
-**排程注意：G06 與 G13 都會修改 `Catalog.sellable()` 的簽章與 `OrderService.create()` 的品項迴圈，不要同時開工。** G06 已於 2026-09-18 隨 PR #14 合併，這道閘門解除：**G13 現在可以從最新主線開分支開工**。G06 已占用 Flyway `V3__product_options.sql`，G13 用 **V4**。G13 規格書寫作時 `Catalog.sellable()` 尚未帶選項，實作前請以主線上 PR #14 之後的簽章為準。
+**排程注意（已結案，保留為紀錄）：G06 與 G13 都會修改 `Catalog.sellable()` 的簽章與 `OrderService.create()` 的品項迴圈，不要同時開工。** G06 已於 2026-09-18 隨 PR #14 合併解除閘門，**G13 的實作已於 2026-09-20 隨 PR #20 合併進主線**（S1/S2/S3 三階段，Flyway 實際占用 `V4__branch_menu_availability.sql`，進度報告見 [`reports/G13-branch-menu-availability.md`](reports/G13-branch-menu-availability.md)）。
 
 ### P3 — 金流（PO 決定延後，最後才串接）
 
@@ -95,9 +95,9 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 
 | 編號 | 缺口 | 狀態 | 規格書 |
 | --- | --- | --- | --- |
-| G11 | 稽核紀錄的查詢與涵蓋範圍 | 規格書（與 G15 合併為一份）**審查／修訂中，尚未合併** | [PR #17](https://github.com/choka1227/coffee_GPT6/pull/17) |
-| G15 | 現金日結與交班 | 規格書（與 G11 合併為一份）**審查／修訂中，尚未合併** | [PR #17](https://github.com/choka1227/coffee_GPT6/pull/17) |
-| G10 | 訂單清單分頁與 N+1 | **規格書已完成，待實作**（閘門：G11+G15 合併後） | [`specs/G10-order-list-pagination.md`](specs/G10-order-list-pagination.md) |
+| G11 | 稽核紀錄的查詢與涵蓋範圍 | 規格書（與 G15 合併為一份）已合併（PR #17，v1.2）；**實作已合併（PR #22，S1／S2）** | [`specs/G11-G15-audit-and-cash-sessions.md`](specs/G11-G15-audit-and-cash-sessions.md) |
+| G15 | 現金日結與交班 | 規格書（與 G11 合併為一份）已合併（PR #17，v1.2）；**實作已合併（PR #22，S3／S4）** | [`specs/G11-G15-audit-and-cash-sessions.md`](specs/G11-G15-audit-and-cash-sessions.md) |
+| G10 | 訂單清單分頁與 N+1 | **規格書已完成，待實作**（閘門已解除：G11+G15 已隨 PR #22 合併） | [`specs/G10-order-list-pagination.md`](specs/G10-order-list-pagination.md) |
 | G14 | 分店營業時間 | 未開始 | — |
 | G07 | 折扣與促銷 | 未開始 | — |
 
@@ -105,13 +105,13 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 
 **G15 現金日結與交班**（第二次盤點新增）—— `cash()` 有記 `tendered` 與 `change_amount`，但沒有班別、沒有抽屜結算、沒有短溢比對。收了一整天現金，系統無法回答「抽屜裡的錢跟系統對不對得起來」。這是純內部的金錢控管缺口，與綠界完全無關，不受金流延後影響。**建議與 G11 一起設計**，兩者共用稽核基礎。
 
-**G11 與 G15 寫成一份規格**，目前在 [PR #17](https://github.com/choka1227/coffee_GPT6/pull/17) **審查修訂中，尚未合併進主線**（合併後檔案會落在 `docs/specs/G11-G15-audit-and-cash-sessions.md`，在那之前這個路徑不存在）。合併的理由不是湊在一起，而是 G15 的每一個動作（開班、點鈔、交班、短溢）本身就是必須進稽核軌跡的金錢動作 —— 先做 G15 再回頭補稽核，等於要把剛寫好的三個 service 方法再改一次。規格切成四個施工階段（S1/S2 為 G11，S3/S4 為 G15），階段之間全部是加法，任何一段單獨合併都不破壞既有行為。
+**G11 與 G15 寫成一份規格**，[`specs/G11-G15-audit-and-cash-sessions.md`](specs/G11-G15-audit-and-cash-sessions.md)，**已於 2026-09-19 隨 PR #17 合併進主線（規格版本 v1.2，Codex 核准）**。寫成一份的理由不是湊在一起，而是 G15 的每一個動作（開班、點鈔、交班、短溢）本身就是必須進稽核軌跡的金錢動作 —— 先做 G15 再回頭補稽核，等於要把剛寫好的三個 service 方法再改一次。規格切成四個施工階段（S1/S2 為 G11，S3/S4 為 G15），階段之間全部是加法，任何一段單獨合併都不破壞既有行為。
 
 規格新增一個模組 `coffee-audit`（只依賴 `shared`，是相依圖的葉節點，不可能參與循環）；**`cash_sessions` 刻意放在 `coffee-orders` 而非獨立模組** —— 交班要讀 `orders` 算金額、`cash()` 要寫 `orders.cash_session_id`，雙向互動放獨立模組會直接造成循環相依。規格第 3 節有完整推導。
 
 **G10 訂單清單分頁與 N+1** —— `OrderService.list()` 的 `order by created_at desc limit 100` 是寫死的，超過 100 筆的歷史訂單在 UI 上完全看不到，也沒有日期篩選或分頁參數。**比第一次盤點記載的更嚴重**：`.map(this::snapshot)` 對每一筆再打兩次 DB（訂單 + 品項），一次列表等於 201 次查詢。**G06 合併後又更糟** —— `snapshot()` 還會對每一個品項各打一次 `order_item_options`，100 筆 × 每筆 3 項 = 501 次。第三個缺陷是前端的狀態分頁籤與搜尋框篩的只是「抓回來的那 100 筆」，不是全集。
 
-完整規格見 [`specs/G10-order-list-pagination.md`](specs/G10-order-list-pagination.md)：游標分頁（排序鍵與游標格式與 G11 稽核查詢同形）、篩選全部下推後端、一頁固定 3 次查詢（表頭 + 品項批次 + 選項批次），切成三個施工階段，S1／S2 純加法、破壞性變更集中在很小的 S3。規格順手結清 G01a 留下的兩項非阻斷觀察（`Orders.reconciliationCandidates()` 的 `items()` 註解、`scope.replace` 字串替換），因為本規格正好動到那兩個檔案。**閘門：G11+G15 整份合併後才開工** —— 兩份都改 `OrderService.java`。
+完整規格見 [`specs/G10-order-list-pagination.md`](specs/G10-order-list-pagination.md)：游標分頁（排序鍵與游標格式與 G11 稽核查詢同形）、篩選全部下推後端、一頁固定 3 次查詢（表頭 + 品項批次 + 選項批次），切成三個施工階段，S1／S2 純加法、破壞性變更集中在很小的 S3。規格順手結清 G01a 留下的兩項非阻斷觀察（`Orders.reconciliationCandidates()` 的 `items()` 註解、`scope.replace` 字串替換），因為本規格正好動到那兩個檔案。**閘門已解除** —— G11+G15 已於 2026-09-20 隨 PR #22 整份合併，兩份規格共同修改 `OrderService.java` 的衝突風險不再存在。
 
 **G14 分店營業時間**（第二次盤點新增）—— `BranchService.requireOpen()`（`BranchService.java:36-40`）只檢查 `active` 布林，`branches` 表也沒有任何時間欄位。凌晨三點照樣能下單，店家只能靠手動切換 `active` 當開關門開關。
 
@@ -142,10 +142,11 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 
 1. ~~**Codex 依 `specs/G06-product-options.md` 實作選項模型與加價**~~ —— 已完成，PR #14 於 2026-09-18 合併（S1/S2/S3 三階段，進度報告見 [`reports/G06-product-options-progress.md`](reports/G06-product-options-progress.md)）
 2. ~~**Codex 依 `specs/G01a-reconciliation-fixes.md` 修正 G01 留在主線的兩項缺陷**~~ —— 已完成，PR #15 於 2026-09-18 合併（S1/S2 兩階段，進度報告見 [`reports/G01a-reconciliation-fixes.md`](reports/G01a-reconciliation-fixes.md)）
-3. **← 目前這一項：Codex 依 `specs/G13-branch-menu-availability.md` 實作分店可用性與售罄** —— 閘門已解除（G06 已合併），**沒有任何前置相依，從最新主線開 `codex/g13-*` 分支即可開工**。Flyway 用 V4
-4. **Claude 產出 G11 + G15 合併規格書（稽核軌跡與現金日結）** —— 規格書在 [PR #17](https://github.com/choka1227/coffee_GPT6/pull/17)，**尚未合併**（v1.2 依第二輪 review 修正了稽核例外的捕捉邊界與第 5.12 節的鎖順序敘述，等待複審）。**合併進主線之前不要依它開工** —— 只依已合併進 `feature/init-project` 的 `docs/specs/` 實作。合併後 Codex 做完 G13 接這一份，四個施工階段（S1/S2 為 G11，S3/S4 為 G15），Flyway 取 G13 之後的下一個未使用版號
-5. **Codex 依 [`specs/G10-order-list-pagination.md`](specs/G10-order-list-pagination.md) 實作訂單清單分頁、篩選與 N+1 修正** —— **閘門：G11+G15 整份合併進 `feature/init-project` 之後才開工**（兩份都改 `OrderService.java`）。三個施工階段（S1 後端分頁與批次載入、S2 前端切換、S3 移除舊端點），S1／S2 純加法。**Flyway 預期 V7**（V5／V6 留給 G11+G15），實際以開工當下目錄裡的下一個未使用版號為準
-6. 金流那條線（G01–G04 其餘部分）待進入綠界串接階段再排
+3. ~~**Codex 依 `specs/G13-branch-menu-availability.md` 實作分店可用性與售罄**~~ —— 已完成，PR #20 於 2026-09-20 合併（S1/S2/S3 三階段，Flyway 占用 V4，進度報告見 [`reports/G13-branch-menu-availability.md`](reports/G13-branch-menu-availability.md)）
+4. ~~**Claude 產出 G11 + G15 合併規格書（稽核軌跡與現金日結）**~~ —— 已完成，規格書 v1.2 於 2026-09-19 隨 [PR #17](https://github.com/choka1227/coffee_GPT6/pull/17) 合併（兩輪 `REQUEST_CHANGES` 後由 Codex 核准）。閘門解除
+5. ~~**Codex 依 [`specs/G11-G15-audit-and-cash-sessions.md`](specs/G11-G15-audit-and-cash-sessions.md) 實作稽核軌跡與現金日結**~~ —— 已完成，PR #22 於 2026-09-20 合併（S1–S4 四階段全數完成，Flyway 占用 V5／V6，進度報告見 [`reports/G11-G15-audit-cash-sessions-progress.md`](reports/G11-G15-audit-cash-sessions-progress.md)）
+6. **← 目前這一項：Codex 依 [`specs/G10-order-list-pagination.md`](specs/G10-order-list-pagination.md) 實作訂單清單分頁、篩選與 N+1 修正** —— **閘門已解除**（第 5 項 G11+G15 已於 2026-09-20 隨 PR #22 合併，`OrderService.java` 的衝突風險解除）。**沒有其他前置相依，從最新主線開 `codex/g10-*` 分支即可開工。** 三個施工階段（S1 後端分頁與批次載入、S2 前端切換、S3 移除舊端點），S1／S2 純加法。**Flyway 用 V7**（V5／V6 已由 G11+G15 實際占用，版號已確定，不必再判斷）
+7. 金流那條線（G01–G04 其餘部分）待進入綠界串接階段再排
 
 ### 排程注意
 
@@ -153,13 +154,21 @@ PR #9（G01 對帳）已於 2026-09-17 08:32 合併，`OrderService` 的衝突�
 
 G01 留在主線的缺陷已寫成獨立規格 [`specs/G01a-reconciliation-fixes.md`](specs/G01a-reconciliation-fixes.md)，用分支 `codex/g01-fixes`，**不要**夾在 G06 的 PR 裡 —— 兩件事、兩支分支。兩者動的是不同模組（`coffee-payments` vs `coffee-orders` / `coffee-catalog`），可以並行。**兩者皆已合併（#14、#15），此段保留為紀錄。**
 
-**目前（2026-09-18）主線上沒有進行中的實作 PR，G13 是唯一待實作的規格，沒有任何閘門。** Flyway 版號現況：`V1__coffee_schema.sql`、`V2__payment_reconciliation.sql`（#9）、`V3__product_options.sql`（#14）已占用，**G13 用 V4**。
+**目前（2026-09-20）待實作的規格只剩一份：G10（第 6 項），尚未開工。** G11+G15 的實作已隨 PR #22 整份合併（S1–S4 全數完成），G13 的實作已隨 PR #20 合併，**G10 沒有任何未解除的閘門**。Flyway 版號現況：`V1__coffee_schema.sql`、`V2__payment_reconciliation.sql`（#9）、`V3__product_options.sql`（#14）、`V4__branch_menu_availability.sql`（#20）、`V5__audit_trail.sql`、`V6__cash_sessions.sql`（#22）已占用，**G10 用 V7**。
+
+> **設計決策（2026-09-19，依 PR #18 上 Codex 的 `REQUEST_CHANGES`）：G11+G15 序列化排在 G13 之後，不開放並行。**（G13 已於 2026-09-20 合併，這道閘門本身已履行完畢；決策保留，因為它定義的是「一次一份」這個通則，不只是 G13 這一次。）
+> 理由：(1) 實作端只有 Codex 一個，`AGENTS.md`「施工階段與中斷續作」本來就是「一次執行推進一個階段、一個 PR 一支分支」，並行在現況下不存在可執行的意義；(2) 兩份規格的交集 `Identity.PERMISSIONS`、`InitialData` 角色清單與 Flyway 版號，正好是撞了就要整份重跑的那一類衝突，序列化把它降為零成本；(3) 本檔的「排定的工作順序」是實作端的唯一約束來源，同一份文件不能同時給出「必須等 G13」與「可並行」兩個答案。
+> 推翻它的代價：若日後真要並行（例如多了第二個實作端，或 G13 長期卡住），要先改 `AGENTS.md` 的施工規則與本節的順序定義，並在兩份規格裡把 migration 版號與 `Identity.PERMISSIONS` 的分配方式明確切開 —— 不能只在本檔局部放寬。
 
 ## 修訂紀錄
 
 | 日期 | 變更 |
 | --- | --- |
+| 2026-09-20 | 把主線 merge 進 `claude/spec-g10` 解 `GAP-ANALYSIS.md` 衝突（本 PR 與 PR #18 都改工作順序與修訂紀錄，依約定 #18 先合）。同批對齊 G11+G15 實作隨 PR #22 合併後的現況：主線這份仍寫「實作進行中（PR #22，draft）／續作不要另開分支」，但 PR #22 已合併、S1–S4 全數完成、V5／V6 已進主線 —— 照舊文字會讓實作端去續作一支已合併的分支，且誤以為 G10 仍被閘門擋住。P1 表 G11／G15 改為「實作已合併」，工作順序第 5 項標為完成、G10 升為第 6 項並標為目前這一項（閘門解除、Flyway 由「預期 V7」改為確定的 **V7**） |
 | 2026-09-20 | 登記 G10 規格書（[`specs/G10-order-list-pagination.md`](specs/G10-order-list-pagination.md)，v1.0）：訂單清單游標分頁、篩選下推後端、一頁固定 3 次查詢；三個施工階段，S1／S2 純加法。P1 表 G10 由「未開始」改為「規格書已完成，待實作」，工作順序的 G10 那一項補上規格連結、閘門（G11+G15 合併後，兩份都改 `OrderService.java`）與 Flyway 預期版號 V7。規格順手納入 G01a 留下的兩項非阻斷觀察（`Orders.java` 註解、`scope.replace`），因為它正好動到那兩個檔案 |
+| 2026-09-20 | G13 實作隨 PR #20 合併後的登記對齊（與本 PR 把主線 merge 進分支同批處理）：P0 表 G13 由「可開工」改為「實作已合併（PR #20）」、工作順序第 3 項標為完成；序列化閘門因此解除，第 5 項（G11+G15）改標為目前這一項，並載明 Codex 已在 `codex/g11-g15-audit-cash-sessions` / PR #22（draft）開工、續作不要另開分支；P1 表 G11 改標「實作進行中」、G15 標「S3/S4 尚未開始」；Flyway 版號現況補上 `V4__branch_menu_availability.sql`（#20）已占用，G11+G15 自 **V5** 起算（原本寫「取開工當下的下一個未使用版號」，現在版號已確定，直接寫死以免實作端再判斷一次） |
+| 2026-09-19 | 依 PR #18 上 Codex 的 `REQUEST_CHANGES` 修正工作順序的自相矛盾：第 5 項原本同時寫「排在 G13 之後」與「必要時可與 G13 並行」，排程注意又寫「兩份都沒有閘門」，實作端會同時得到兩個相反答案。**統一為序列化**：第 5 項的閘門明寫「G13 整份規格合併進 `feature/init-project` 之後才開工」並刪掉「必要時可並行」，排程注意改寫為「依序做，一次一份」，並補上這項設計決策的理由與推翻代價 |
+| 2026-09-19 | G11+G15 規格書隨 PR #17 合併進主線後的登記對齊：狀態由「審查／修訂中，尚未合併」改為「已合併，待實作」，規格書欄位由 PR 連結改回相對路徑（檔案現在真的在主線上了）；工作順序第 4 項標為完成，**刪掉「合併進主線之前不要依它開工」那句** —— 它已經反過來會擋住 Codex；新增第 5 項「Codex 實作 G11+G15」並把原第 5、6 項順延為 6、7；排程注意改記待實作規格為兩份（G13、G11+G15）。**第 5 項的開工條件以本表最上方同日那列的序列化決策為準** |
 | 2026-09-19 | G11+G15 規格書 v1.2（依 PR #17 上 Codex 第二輪 `REQUEST_CHANGES`）：§5.3 的例外捕捉邊界在 `AuditWriter.write()` 方法內，蓋不到 `@Transactional(REQUIRES_NEW)` proxy 在方法返回後才執行的 commit，commit 階段的例外會穿過 `afterCommit()` 傳回業務呼叫端（業務已提交卻回報失敗，可能引發重試與重複操作）—— 改為由 `AuditService` 包住整個 `writer.write()` 呼叫，§7 第 6 項加驗收 (c)「由交易管理器在 commit 階段拋例外」；§5.12 宣告的全域鎖順序 `branches → cash_sessions → orders` 與 §5.7 的實際步驟（branch → order → 無鎖讀 session）矛盾，會誘使實作端加上無用的 `cash_sessions` 行鎖 —— 改寫為「一律先鎖 branch，正確性由該鎖單獨支撐」並取消「不得跳過中間層」 |
 | 2026-09-18 | 依 PR #16 review 修正 G11 / G15 的登記：狀態改為「規格書審查／修訂中，尚未合併」，工作順序第 4 項退回未完成，規格書欄位由相對路徑改為 PR 連結（PR #17 合併前該路徑在主線上不存在，且規格仍在依 review 修訂）。**本檔可以先於 #17 合併** |
 | 2026-09-18 | 登記 G11 + G15 合併規格書（PR #17）：稽核軌跡與現金日結，四個施工階段、六項設計決策定案 |

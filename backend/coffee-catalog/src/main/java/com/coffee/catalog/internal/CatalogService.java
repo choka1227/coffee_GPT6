@@ -1,5 +1,6 @@
 package com.coffee.catalog.internal;
 
+import com.coffee.audit.api.Audit;
 import com.coffee.catalog.api.Catalog;
 import com.coffee.shared.*;
 import java.sql.ResultSet;
@@ -17,9 +18,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class CatalogService implements Catalog {
   private final JdbcTemplate db;
+  private final Audit audit;
 
-  public CatalogService(JdbcTemplate db) {
+  public CatalogService(JdbcTemplate db, Audit audit) {
     this.db = db;
+    this.audit = audit;
   }
 
   private Product productRow(ResultSet r, int n) throws SQLException {
@@ -133,6 +136,7 @@ public class CatalogService implements Catalog {
   }
 
   @Override
+  @Transactional
   public Product save(Actor actor, Product product) {
     requireManager(actor);
     Problem.check(product.name() != null && !product.name().isBlank()
@@ -159,6 +163,7 @@ public class CatalogService implements Catalog {
         product.cost(), product.image(), product.badge(), product.active(), id) == 0) {
       throw new Problem(404, "找不到商品");
     }
+    audit.record(actor, "PRODUCT_SAVE", id, null, "儲存商品 " + product.name());
     return new Product(
         id, product.name(), product.subtitle(), product.category(), product.price(), product.cost(),
         product.image(), product.badge(), product.active(), "AVAILABLE", productOptions(id, true));
@@ -235,13 +240,12 @@ public class CatalogService implements Catalog {
           now,
           actor.id());
     }
-    db.update(
-        "insert into audit_log(id,actor_id,action,target_id,created_at) values(?,?,?,?,?)",
-        Ids.next(),
-        actor.id(),
+    audit.record(
+        actor,
         "MENU_AVAILABILITY_" + availability,
-        branchId + ":" + productId,
-        now);
+        productId,
+        branchId,
+        "設定 " + Objects.toString(products.get(0).get("name")) + " 為 " + availability);
     return new BranchAvailability(
         branchId,
         productId,

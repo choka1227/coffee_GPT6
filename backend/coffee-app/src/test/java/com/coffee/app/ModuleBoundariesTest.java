@@ -16,7 +16,7 @@ class ModuleBoundariesTest {
             .importPackages("com.coffee");
     slices().matching("com.coffee.(*)..").should().beFreeOfCycles().check(classes);
     for (String module :
-        new String[] {"identity", "branches", "catalog", "orders", "payments", "reporting"})
+        new String[] {"audit", "identity", "branches", "catalog", "orders", "payments", "reporting"})
       noClasses()
           .that()
           .resideOutsideOfPackages("com.coffee." + module + "..", "com.coffee.app..")

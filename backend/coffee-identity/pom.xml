@@ -15,6 +15,11 @@
     </dependency>
     <dependency>
       <groupId>com.coffee</groupId>
+      <artifactId>coffee-audit</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.coffee</groupId>
       <artifactId>coffee-branches</artifactId>
       <version>${project.version}</version>
     </dependency>
