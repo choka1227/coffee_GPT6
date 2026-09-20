@@ -22,4 +22,10 @@ ALTER TABLE orders ADD COLUMN cash_session_id VARCHAR(36) REFERENCES cash_sessio
 CREATE INDEX idx_orders_cash_session ON orders(cash_session_id);
 
 INSERT INTO role_permissions(role_code,permission)
-  SELECT code,'CASH_SESSION' FROM roles WHERE code IN ('HQ','MANAGER','CASHIER');
+  SELECT r.code,'CASH_SESSION'
+  FROM roles r
+  WHERE r.code IN ('HQ','MANAGER','CASHIER')
+    AND NOT EXISTS(
+      SELECT 1 FROM role_permissions rp
+      WHERE rp.role_code=r.code AND rp.permission='CASH_SESSION'
+    );

@@ -38,4 +38,4 @@
 - 現金收入以 `SUM(total)` 計算，不採 `tendered`；未開班時既有收現流程仍成功且 `cash_session_id` 為 null。
 - 新增全新／既有資料庫 migration、角色權限、重複與併發開班、收現／交班競態、跨店／無權限、CSRF、金額與重複交班測試。
 - frontend：`npm run build` 成功。
-- backend：本機 Maven Central DNS 解析失敗，verify 未啟動；等待最新 head 的 GitHub Actions 驗證。
+- backend：本機 Maven Central DNS 解析失敗，verify 未啟動；Actions #134 找出舊版升級 fixture 會預先帶入新權限，V6 已改為冪等補登，等待修正 head 驗證。
