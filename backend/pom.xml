@@ -17,6 +17,7 @@
   </properties>
   <modules>
     <module>coffee-shared</module>
+    <module>coffee-audit</module>
     <module>coffee-branches</module>
     <module>coffee-identity</module>
     <module>coffee-catalog</module>

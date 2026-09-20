@@ -265,4 +265,87 @@ class HttpWorkflowTest {
     assertThat(anonymous.request("POST", "/api/menu/availability", body, Map.of()).statusCode())
         .isEqualTo(401);
   }
+
+  @Test
+  void auditedWriteEndpointsRequireCsrfForAuthorizedTargets() throws Exception {
+    var hq = new BrowserSession();
+    hq.login("owner@coffee.local", "BootstrapTest!2026");
+    String suffix = UUID.randomUUID().toString().substring(0, 8);
+    String branchBody =
+        "{\"id\":null,\"name\":\"稽核 CSRF 門市 "
+            + suffix
+            + "\",\"address\":\"台北市\",\"phone\":\"02-12345678\",\"active\":true,\"monthlyTarget\":10000}";
+    String hqToken = hq.token;
+    hq.token = null;
+    assertThat(hq.request("POST", "/api/branches", branchBody, Map.of()).statusCode())
+        .isEqualTo(403);
+    hq.token = hqToken;
+    String branch = hq.call("POST", "/api/branches", branchBody).get("id").asText();
+
+    String productBody =
+        "{\"id\":null,\"name\":\"稽核 CSRF 商品 "
+            + suffix
+            + "\",\"subtitle\":\"測試\",\"category\":\"經典咖啡\",\"price\":100,\"cost\":10,\"image\":\"latte\",\"badge\":\"\",\"active\":true}";
+    hq.token = null;
+    assertThat(hq.request("POST", "/api/menu", productBody, Map.of()).statusCode()).isEqualTo(403);
+    hq.token = hqToken;
+    String product = hq.call("POST", "/api/menu", productBody).get("id").asText();
+
+    for (String role : new String[] {"CUSTOMER", "CASHIER"})
+      hq.call(
+          "POST",
+          "/api/admin/accounts",
+          json.writeValueAsString(
+              Map.of(
+                  "username", role.toLowerCase() + "-" + suffix + "@http.local",
+                  "name", role,
+                  "role", role,
+                  "branchId", branch,
+                  "active", true,
+                  "password", "WorkflowTest!2026")));
+    var customer = new BrowserSession();
+    customer.login("customer-" + suffix + "@http.local", "WorkflowTest!2026");
+    String orderBody =
+        "{\"branchId\":\""
+            + branch
+            + "\",\"fulfillment\":\"TAKEAWAY\",\"paymentMethod\":\"CASH\",\"note\":\"\",\"items\":[{\"productId\":\""
+            + product
+            + "\",\"quantity\":1,\"optionIds\":[]}]}";
+    String orderId =
+        json.readTree(
+                customer
+                    .request(
+                        "POST",
+                        "/api/orders",
+                        orderBody,
+                        Map.of("Idempotency-Key", UUID.randomUUID().toString()))
+                    .body())
+            .get("id")
+            .asText();
+    var cashier = new BrowserSession();
+    cashier.login("cashier-" + suffix + "@http.local", "WorkflowTest!2026");
+    String cashierToken = cashier.token;
+    cashier.token = null;
+    assertThat(
+            cashier
+                .request(
+                    "POST", "/api/orders/" + orderId + "/cash", "{\"tendered\":200}", Map.of())
+                .statusCode())
+        .isEqualTo(403);
+    cashier.token = cashierToken;
+    cashier.call("POST", "/api/orders/" + orderId + "/cash", "{\"tendered\":200}");
+    cashier.token = null;
+    assertThat(
+            cashier
+                .request(
+                    "PATCH",
+                    "/api/orders/" + orderId + "/status",
+                    "{\"status\":\"PREPARING\"}",
+                    Map.of())
+                .statusCode())
+        .isEqualTo(403);
+    cashier.token = cashierToken;
+    cashier.call(
+        "PATCH", "/api/orders/" + orderId + "/status", "{\"status\":\"PREPARING\"}");
+  }
 }

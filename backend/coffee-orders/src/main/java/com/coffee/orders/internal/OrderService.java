@@ -1,5 +1,6 @@
 package com.coffee.orders.internal;
 
+import com.coffee.audit.api.Audit;
 import com.coffee.branches.api.Branches;
 import com.coffee.catalog.api.Catalog;
 import com.coffee.orders.api.Orders;
@@ -16,11 +17,13 @@ public class OrderService implements Orders {
   private final JdbcTemplate db;
   private final Catalog catalog;
   private final Branches branches;
+  private final Audit audit;
 
-  public OrderService(JdbcTemplate db, Catalog catalog, Branches branches) {
+  public OrderService(JdbcTemplate db, Catalog catalog, Branches branches, Audit audit) {
     this.db = db;
     this.catalog = catalog;
     this.branches = branches;
+    this.audit = audit;
   }
 
   @Transactional
@@ -172,6 +175,9 @@ public class OrderService implements Orders {
   @Transactional
   public Order cash(Actor a, String id, int tendered) {
     a.require("POS_ORDER");
+    String branchId = branchOf(id);
+    a.branch(branchId);
+    lockBranch(branchId);
     lock(id);
     Order o = snapshot(id);
     manage(a, o);
@@ -179,12 +185,29 @@ public class OrderService implements Orders {
     if (o.paidAt() != null) return o;
     Problem.check(o.status().equals("PENDING_PAYMENT"), "訂單目前無法收款");
     Problem.check(tendered >= o.total() && tendered <= 1000000, "實收金額不足或超過上限");
+    String cashSessionId =
+        db.query(
+                "select id from cash_sessions where branch_id=? and status='OPEN'",
+                (r, n) -> r.getString("id"),
+                branchId)
+            .stream()
+            .findFirst()
+            .orElse(null);
     db.update(
-        "update orders set status='PAID',paid_at=?,tendered=?,change_amount=? where id=?",
+        "update orders set status='PAID',paid_at=?,tendered=?,change_amount=?,cash_session_id=?"
+            + " where id=?",
         System.currentTimeMillis(),
         tendered,
         tendered - o.total(),
+        cashSessionId,
         id);
+    audit.record(
+        a,
+        "ORDER_CASH",
+        id,
+        o.branchId(),
+        "現金收款 " + o.total() + " 元，實收 " + tendered + " 元，找零 "
+            + (tendered - o.total()) + " 元");
     return snapshot(id);
   }
 
@@ -207,6 +230,12 @@ public class OrderService implements Orders {
                     next));
     Problem.check(allowed, "訂單狀態已變更，或不允許此狀態轉換");
     db.update("update orders set status=? where id=?", next, id);
+    audit.record(
+        a,
+        "ORDER_TRANSITION",
+        id,
+        o.branchId(),
+        "訂單狀態 " + o.status() + " → " + next);
     return snapshot(id);
   }
 
@@ -288,6 +317,17 @@ public class OrderService implements Orders {
   private void lock(String id) {
     if (db.queryForList("select id from orders where id=? for update", String.class, id).isEmpty())
       throw new Problem(404, "找不到訂單");
+  }
+
+  private String branchOf(String id) {
+    var rows = db.queryForList("select branch_id from orders where id=?", String.class, id);
+    if (rows.isEmpty()) throw new Problem(404, "找不到訂單");
+    return rows.get(0);
+  }
+
+  private void lockBranch(String branchId) {
+    if (db.queryForList("select id from branches where id=? for update", String.class, branchId)
+        .isEmpty()) throw new Problem(404, "找不到分店");
   }
 
   private Order snapshot(String id) {

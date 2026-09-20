@@ -21,6 +21,12 @@
 | GET | /api/orders/{id} | 訂單明細，檢查擁有者或分店權限 |
 | POST | /api/orders/{id}/cash | tendered；POS_ORDER / ORDER_MANAGE + 分店範圍 |
 | PATCH | /api/orders/{id}/status | status；狀態機及分店權限 |
+| GET | /api/audit?action=&actorId=&branchId=&from=&to=&cursor=&limit= | AUDIT_VIEW；GLOBAL 可跨店，BRANCH 強制所屬分店；游標分頁，limit 上限 200 |
+| POST | /api/cash-sessions | CASH_SESSION；開班，body 為 branchId、openingFloat、note |
+| GET | /api/cash-sessions/current?branchId= | CASH_SESSION；目前開啟班別，沒有時回 null |
+| POST | /api/cash-sessions/{id}/close | CASH_SESSION；交班，body 為 countedAmount、note；應有與短溢由後端計算 |
+| GET | /api/cash-sessions/{id} | CASH_SESSION；班別明細，OPEN 班別即時計算現金收入與應有金額 |
+| GET | /api/cash-sessions?branchId=&from=&to=&cursor=&limit= | CASH_SESSION；歷史班別游標分頁，並回傳查詢期間未歸班現金彙總 |
 | GET | /api/payments/config | 線上付款是否開放及 stage/production，不回傳金鑰 |
 | POST | /api/payments/ecpay/{id} | 產生付款 action 與 fields，需可存取該訂單 |
 | POST | /api/payments/ecpay/callback | 綠界通知，form-urlencoded、驗證簽章，純文字 1\|OK |
