@@ -8,7 +8,7 @@
 - [x] S1 稽核基礎建設
 - [x] S2 稽核涵蓋範圍與查詢 API
 - [x] S3 現金班別資料層與開班／收現
-- [ ] S4 交班、歷史查詢與前端
+- [x] S4 交班、歷史查詢與前端
 
 ## S1 設計與驗證
 
@@ -39,3 +39,14 @@
 - 新增全新／既有資料庫 migration、角色權限、重複與併發開班、收現／交班競態、跨店／無權限、CSRF、金額與重複交班測試。
 - frontend：`npm run build` 成功。
 - backend：本機 Maven Central DNS 解析失敗，verify 未啟動；Actions #134 找出舊版升級 fixture 會預先帶入新權限，V6 改為冪等補登後，Actions #136 的 frontend build、backend verify 全部成功。
+
+## S4 設計與驗證
+
+- 新增班別明細與 `openedAt:id` 游標歷史查詢；OPEN 班別的現金收入、訂單數與應有金額即時計算，CLOSED 班別使用交班定稿金額。
+- 歷史回應另外揭露查詢分店與期間內 `cash_session_id is null` 的現金收入與訂單數，未開班收款不會在日結畫面消失。
+- 後端強制 GLOBAL 選擇分店、BRANCH 僅能查所屬分店，並限制每頁最多 200 筆。
+- 前端新增現金班別頁，涵蓋開班、交班、歷史、未歸班現金；應有／實點與短溢清楚呈現，短少或溢收以紅色文字標示，所有金額皆使用 `shared/format.ts` 的 `money`。
+- 稽核頁加入現金動作篩選，`docs/API.md` 補齊 G11／G15 新端點。
+- 新增明細完整形狀、OPEN 即時計算、游標無重複、未歸班彙總、跨店、錯誤游標與 HTTP 回應驗收。
+- frontend：`npm run build` 成功。
+- backend：本機 Maven Central DNS 解析失敗，verify 未啟動；最新 head 的 Actions #140 frontend build、backend verify 全部成功。
