@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from "vue";
 import { Plus, Search, Pencil, Settings2 } from "lucide-vue-next";
 import { api, send } from "../../shared/api";
-import type { OptionGroup, OptionItem, Product } from "../../shared/types";
+import type { Branch, BranchAvailability, OptionGroup, OptionItem, Product } from "../../shared/types";
 import { money } from "../../shared/format";
 import { notify } from "../../shared/notice";
 import Modal from "../../shared/Modal.vue";
@@ -17,7 +17,10 @@ const products = ref<Product[]>([]),
   editingGroup = ref<OptionGroup | null>(null),
   editingItem = ref<OptionItem | null>(null),
   bindingProduct = ref<Product | null>(null),
-  selectedGroupIds = ref<string[]>([]);
+  selectedGroupIds = ref<string[]>([]),
+  branches = ref<Branch[]>([]),
+  supplyBranchId = ref(""),
+  branchAvailability = ref<BranchAvailability[]>([]);
 const categories = ["經典咖啡", "風味特調", "茶與其他", "手作烘焙"];
 const visible = computed(() =>
   products.value.filter(
@@ -30,10 +33,13 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    [products.value, optionGroups.value] = await Promise.all([
+    [products.value, optionGroups.value, branches.value] = await Promise.all([
       api<Product[]>("/menu?manage=true"),
       api<OptionGroup[]>("/menu/options"),
+      api<Branch[]>("/branches"),
     ]);
+    if (!supplyBranchId.value) supplyBranchId.value = branches.value[0]?.id || "";
+    await loadAvailability();
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
@@ -41,6 +47,27 @@ async function load() {
   }
 }
 onMounted(load);
+async function loadAvailability() {
+  branchAvailability.value = supplyBranchId.value
+    ? await api<BranchAvailability[]>(`/menu/availability?branchId=${encodeURIComponent(supplyBranchId.value)}`)
+    : [];
+}
+async function setSupply(item: BranchAvailability, availability: "AVAILABLE" | "UNLISTED") {
+  saving.value = true;
+  try {
+    await send("/menu/availability", {
+      branchId: supplyBranchId.value,
+      productId: item.productId,
+      availability,
+    });
+    notify(availability === "UNLISTED" ? "已設為本店不供應" : "已恢復本店供應");
+    await loadAvailability();
+  } catch (e) {
+    notify((e as Error).message);
+  } finally {
+    saving.value = false;
+  }
+}
 function add() {
   editing.value = {
     id: null,
@@ -52,6 +79,7 @@ function add() {
     image: "latte",
     badge: "",
     active: true,
+    availability: "AVAILABLE",
     optionGroups: [],
   };
 }
@@ -163,6 +191,35 @@ function usageCount(groupId: string | null) {
         ><b>{{ products.filter((p) => !p.active).length }}</b> 項已下架</span
       >
     </div>
+    <section class="panel">
+      <div class="table-toolbar">
+        <div>
+          <h2>分店供應設定</h2>
+          <p class="muted">設定特定分店是否供應商品；每日售完由門市在點餐畫面操作。</p>
+        </div>
+        <select v-model="supplyBranchId" aria-label="供應設定分店" @change="loadAvailability">
+          <option v-for="branch in branches" :key="branch.id!" :value="branch.id">{{ branch.name }}</option>
+        </select>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>商品</th><th>目前狀態</th><th>操作</th></tr></thead>
+          <tbody>
+            <tr v-for="item in branchAvailability" :key="item.productId">
+              <td><b>{{ item.productName }}</b></td>
+              <td>{{ item.availability === "UNLISTED" ? "本店不供應" : item.availability === "SOLD_OUT" ? "今日售完" : "供應中" }}</td>
+              <td>
+                <button
+                  class="btn secondary"
+                  :disabled="saving"
+                  @click="setSupply(item, item.availability === 'UNLISTED' ? 'AVAILABLE' : 'UNLISTED')"
+                >{{ item.availability === "UNLISTED" ? "恢復供應" : "設為不供應" }}</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
     <section class="panel">
       <div class="table-toolbar">
         <label class="search-field"

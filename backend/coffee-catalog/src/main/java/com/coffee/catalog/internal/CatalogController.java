@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/menu")
 class CatalogController {
   record GroupBinding(List<String> groupIds) {}
+  record AvailabilityInput(String branchId, String productId, String availability) {}
 
   private final Catalog s;
 
@@ -18,13 +19,27 @@ class CatalogController {
 
   @GetMapping
   List<Catalog.Product> list(
-      @RequestAttribute Actor actor, @RequestParam(defaultValue = "false") boolean manage) {
-    return s.list(actor, manage);
+      @RequestAttribute Actor actor,
+      @RequestParam(defaultValue = "false") boolean manage,
+      @RequestParam(required = false) String branchId) {
+    return s.list(actor, manage, branchId);
   }
 
   @PostMapping
   Catalog.Product save(@RequestAttribute Actor actor, @RequestBody Catalog.Product p) {
     return s.save(actor, p);
+  }
+
+  @GetMapping("/availability")
+  List<Catalog.BranchAvailability> availability(
+      @RequestAttribute Actor actor, @RequestParam String branchId) {
+    return s.availability(actor, branchId);
+  }
+
+  @PostMapping("/availability")
+  Catalog.BranchAvailability setAvailability(
+      @RequestAttribute Actor actor, @RequestBody AvailabilityInput input) {
+    return s.setAvailability(actor, input.branchId(), input.productId(), input.availability());
   }
 
   @GetMapping("/options")

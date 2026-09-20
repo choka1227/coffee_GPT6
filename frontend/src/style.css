@@ -518,7 +518,7 @@ small {
     transform 0.2s;
   color: var(--ink);
 }
-.product-card:hover:not(:disabled) {
+.product-card:hover:not(.unavailable) {
   transform: translateY(-3px);
   box-shadow: 0 10px 28px #273e3010;
 }
@@ -547,6 +547,23 @@ small {
   border-radius: 4px;
   font-size: 10px;
   letter-spacing: 0.4px;
+}
+.product-badge.sold-out {
+  background: #7f2f2f;
+  color: white;
+}
+.product-card.unavailable {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+.availability-action {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  color: var(--green);
+  padding: 7px 10px;
+  font-size: 12px;
 }
 .product-copy {
   padding: 16px;

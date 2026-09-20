@@ -214,7 +214,80 @@ class CoffeeIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"tendered\":500}"))
         .andExpect(status().isForbidden());
-    mvc.perform(get("/api/menu").session(c)).andExpect(jsonPath("$[0].cost").value(0));
+    mvc.perform(get("/api/menu?branchId=taipei").session(c))
+        .andExpect(jsonPath("$[0].cost").value(0))
+        .andExpect(jsonPath("$[0].availability").value("AVAILABLE"));
+    mvc.perform(get("/api/menu").session(c))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.message").value("請選擇分店"));
+  }
+
+  @Test
+  void branchAvailabilityControlsMenuOrderingAndIdempotentReplay() throws Exception {
+    var customer = login("customer");
+    String key = UUID.randomUUID().toString();
+    var original = create(customer, "taipei", "CASH", 1, key);
+
+    db.update(
+        "insert into branch_products(branch_id,product_id,availability,sold_out_date,updated_at,updated_by)"
+            + " values('taipei','latte','SOLD_OUT',?,?,?)",
+        Integer.parseInt(LocalDate.now(ZoneId.of("Asia/Taipei")).format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE)),
+        System.currentTimeMillis(), "hq");
+
+    mvc.perform(get("/api/menu?branchId=taipei").session(customer))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$[?(@.id == 'latte' && @.availability == 'SOLD_OUT')]").isNotEmpty());
+    mvc.perform(get("/api/menu?branchId=banqiao").session(customer))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$[?(@.id == 'latte' && @.availability == 'AVAILABLE')]").isNotEmpty());
+
+    int ordersBeforeRejectedRequest =
+        db.queryForObject("select count(*) from orders", Integer.class);
+    mvc.perform(
+            post("/api/orders")
+                .session(customer)
+                .with(csrf())
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body("taipei", "CASH", 1)))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.message").value("本店今日已售完此商品，請調整餐點"));
+    assertThat(db.queryForObject("select count(*) from orders", Integer.class))
+        .isEqualTo(ordersBeforeRejectedRequest);
+
+    var replay = create(customer, "taipei", "CASH", 1, key);
+    assertThat(replay.get("id").asText()).isEqualTo(original.get("id").asText());
+
+    db.update("update branch_products set availability='UNLISTED',sold_out_date=null where branch_id='taipei' and product_id='latte'");
+    mvc.perform(get("/api/menu?branchId=taipei").session(customer))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$[?(@.id == 'latte')]").isEmpty());
+    mvc.perform(
+            post("/api/orders")
+                .session(customer)
+                .with(csrf())
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body("taipei", "CASH", 1)))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.message").value("本店未供應此商品"));
+
+    db.update("update branch_products set availability='SOLD_OUT',sold_out_date=20000101 where branch_id='taipei' and product_id='latte'");
+    mvc.perform(get("/api/menu?branchId=taipei").session(customer))
+        .andExpect(jsonPath("$[?(@.id == 'latte' && @.availability == 'AVAILABLE')]").isNotEmpty());
+
+    db.update("update products set active=false where id='latte'");
+    mvc.perform(get("/api/menu?branchId=taipei").session(customer))
+        .andExpect(jsonPath("$[?(@.id == 'latte')]").isEmpty());
+    mvc.perform(
+            post("/api/orders")
+                .session(customer)
+                .with(csrf())
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body("taipei", "CASH", 1)))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.message").value("商品已下架，請重新整理菜單"));
   }
 
   @Test

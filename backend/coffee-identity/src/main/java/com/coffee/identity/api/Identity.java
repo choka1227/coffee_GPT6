@@ -15,7 +15,8 @@ public interface Identity {
           "BRANCH_MANAGE",
           "ACCOUNT_MANAGE",
           "ROLE_MANAGE",
-          "MENU_MANAGE");
+          "MENU_MANAGE",
+          "MENU_AVAILABILITY");
 
   record Account(
       String id, String username, String name, String role, String branchId, boolean active) {}
