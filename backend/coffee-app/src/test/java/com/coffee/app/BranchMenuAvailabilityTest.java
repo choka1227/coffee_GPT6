@@ -99,14 +99,14 @@ class BranchMenuAvailabilityTest {
         .isEqualTo(3);
     assertThat(
             db.queryForList(
-                "select action from audit_log where target_id='taipei:croissant'",
+                "select action from audit_log where target_id='croissant' and branch_id='taipei'",
                 String.class))
         .containsExactlyInAnyOrder(
             "MENU_AVAILABILITY_UNLISTED", "MENU_AVAILABILITY_AVAILABLE");
   }
 
   @Test
-  void expiredSoldOutReadsAsAvailableAndUuidTargetFitsAuditSchema() {
+  void expiredSoldOutReadsAsAvailableAndUuidAuditUsesSeparateBranchScope() {
     int yesterday =
         Integer.parseInt(
             LocalDate.now(ZoneId.of("Asia/Taipei"))
@@ -151,10 +151,11 @@ class BranchMenuAvailabilityTest {
     catalog.setAvailability(hq, branchId, productId, "UNLISTED");
     assertThat(
             db.queryForObject(
-                "select target_id from audit_log where target_id=?",
+                "select target_id from audit_log where target_id=? and branch_id=?",
                 String.class,
-                branchId + ":" + productId))
-        .hasSize(73);
+                productId,
+                branchId))
+        .hasSize(36);
   }
 
   @Test
