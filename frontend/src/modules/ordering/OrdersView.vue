@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { useRoute } from "vue-router";
 import {
   RefreshCw,
@@ -9,7 +9,7 @@ import {
   Check,
 } from "lucide-vue-next";
 import { api, send } from "../../shared/api";
-import type { Order } from "../../shared/types";
+import type { Order, OrderPage } from "../../shared/types";
 import { useAuth } from "../identity/store";
 import { money, dateTime, statuses } from "../../shared/format";
 import { notify } from "../../shared/notice";
@@ -18,7 +18,9 @@ import { openEcpay } from "../payments/ecpay";
 const auth = useAuth(),
   route = useRoute(),
   orders = ref<Order[]>([]),
+  nextCursor = ref<string | null>(null),
   loading = ref(false),
+  loadingMore = ref(false),
   error = ref(""),
   query = ref(""),
   status = ref("ALL"),
@@ -26,39 +28,61 @@ const auth = useAuth(),
   cashOrder = ref<Order | null>(null),
   tendered = ref(0),
   busy = ref(false);
-const visible = computed(() =>
-  orders.value.filter(
-    (o) =>
-      (status.value === "ALL" || o.status === status.value) &&
-      (!query.value ||
-        (o.id + o.items.map((l) => l.name).join())
-          .toLowerCase()
-          .includes(query.value.toLowerCase())),
-  ),
-);
+let queryTimer: ReturnType<typeof setTimeout> | undefined;
+let requestSequence = 0;
 const nextStatus: Record<string, string> = {
   PAID: "PREPARING",
   PREPARING: "READY",
   READY: "COMPLETED",
 };
-async function load() {
-  loading.value = true;
+async function load(reset = true) {
+  const requestId = ++requestSequence;
+  if (reset) {
+    orders.value = [];
+    nextCursor.value = null;
+    loading.value = true;
+    loadingMore.value = false;
+  } else {
+    if (!nextCursor.value || loadingMore.value) return;
+    loadingMore.value = true;
+  }
   error.value = "";
   try {
-    orders.value = await api<Order[]>("/orders");
-    if (route.query.order) {
+    const params = new URLSearchParams();
+    if (status.value !== "ALL") params.set("status", status.value);
+    const keyword = query.value.trim();
+    if (keyword) params.set("q", keyword);
+    if (!reset && nextCursor.value) params.set("cursor", nextCursor.value);
+    const page = await api<OrderPage>("/orders/page?" + params.toString());
+    if (requestId !== requestSequence) return;
+    orders.value = reset ? page.items : [...orders.value, ...page.items];
+    nextCursor.value = page.nextCursor;
+    if (reset && route.query.order) {
       const wanted = String(route.query.order);
       const found = orders.value.find((o) => o.id === wanted);
       selected.value =
         found || (await api<Order>("/orders/" + encodeURIComponent(wanted)));
     }
   } catch (e) {
+    if (requestId !== requestSequence) return;
     error.value = (e as Error).message;
   } finally {
-    loading.value = false;
+    if (requestId === requestSequence) {
+      loading.value = false;
+      loadingMore.value = false;
+    }
   }
 }
 onMounted(load);
+watch(status, () => load());
+watch(query, () => {
+  clearTimeout(queryTimer);
+  requestSequence++;
+  orders.value = [];
+  nextCursor.value = null;
+  queryTimer = setTimeout(() => load(), 300);
+});
+onBeforeUnmount(() => clearTimeout(queryTimer));
 async function transition(o: Order, next: string) {
   busy.value = true;
   try {
@@ -116,7 +140,7 @@ async function pay(o: Order) {
           }}
         </p>
       </div>
-      <button class="btn secondary" :disabled="loading" @click="load">
+      <button class="btn secondary" :disabled="loading" @click="load()">
         <RefreshCw :size="17" />重新整理
       </button>
     </div>
@@ -149,7 +173,7 @@ async function pay(o: Order) {
       </div>
       <div v-if="error" class="error-state" role="alert">{{ error }}</div>
       <div v-else-if="loading" class="loading-state">讀取訂單中…</div>
-      <div v-else-if="!visible.length" class="empty-state">
+      <div v-else-if="!orders.length" class="empty-state">
         <ClipboardList :size="40" />
         <h3>目前沒有符合的訂單</h3>
         <RouterLink to="/" class="text-link"
@@ -169,7 +193,7 @@ async function pay(o: Order) {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="o in visible" :key="o.id">
+            <tr v-for="o in orders" :key="o.id">
               <td>
                 <button class="order-id" @click="selected = o">
                   #{{ o.id.slice(-8) }}</button
@@ -248,7 +272,15 @@ async function pay(o: Order) {
         </table>
       </div>
       <div class="table-foot">
-        顯示最近 100 筆訂單中的 {{ visible.length }} 筆 · 付款狀態以後端確認為準
+        已載入 {{ orders.length }} 筆 · 付款狀態以後端確認為準
+        <button
+          v-if="nextCursor"
+          class="btn small secondary"
+          :disabled="loadingMore"
+          @click="load(false)"
+        >
+          {{ loadingMore ? "載入中…" : "載入更多" }}
+        </button>
       </div>
     </div>
   </div>

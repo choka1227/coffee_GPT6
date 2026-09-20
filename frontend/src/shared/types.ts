@@ -91,6 +91,10 @@ export interface Order {
   changeAmount: number | null;
   items: Line[];
 }
+export type OrderPage = {
+  items: Order[];
+  nextCursor: string | null;
+};
 export interface Role {
   code: string;
   name: string;
