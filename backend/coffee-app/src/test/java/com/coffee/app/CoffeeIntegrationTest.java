@@ -131,6 +131,17 @@ class CoffeeIntegrationTest {
   }
 
   @Test
+  void orderPageGetDoesNotRequireCsrfAndRejectsBlankCursor() throws Exception {
+    var manager = login("manager");
+    mvc.perform(get("/api/orders/page").session(manager))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items").isArray());
+    mvc.perform(get("/api/orders/page").param("cursor", "").session(manager))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.message").value("查詢游標格式不正確"));
+  }
+
+  @Test
   void serverCalculatesPricesAndIdempotencyPreventsDuplicates() throws Exception {
     var customer = login("customer");
     String key = UUID.randomUUID().toString();

@@ -31,6 +31,19 @@ class OrderController {
     return s.list(actor);
   }
 
+  @GetMapping("/page")
+  Orders.Page page(
+      @RequestAttribute Actor actor,
+      @RequestParam(required = false) String status,
+      @RequestParam(required = false) String branchId,
+      @RequestParam(required = false) Long from,
+      @RequestParam(required = false) Long to,
+      @RequestParam(required = false) String q,
+      @RequestParam(required = false) String cursor,
+      @RequestParam(defaultValue = "0") int limit) {
+    return s.page(actor, new Orders.Query(status, branchId, from, to, q, cursor, limit));
+  }
+
   @GetMapping("/{id}")
   Orders.Order get(@RequestAttribute Actor actor, @PathVariable String id) {
     return s.get(actor, id);

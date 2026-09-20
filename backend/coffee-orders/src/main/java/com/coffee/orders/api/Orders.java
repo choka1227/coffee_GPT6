@@ -43,9 +43,16 @@ public interface Orders {
       Integer changeAmount,
       List<Line> items) {}
 
+  record Query(
+      String status, String branchId, Long from, Long to, String q, String cursor, int limit) {}
+
+  record Page(List<Order> items, String nextCursor) {}
+
   Order create(Actor a, Create request, String key);
 
   List<Order> list(Actor a);
+
+  Page page(Actor a, Query query);
 
   Order get(Actor a, String id);
 
@@ -59,6 +66,7 @@ public interface Orders {
 
   void confirmOnline(String id, int amount, String providerTradeNo, long paidAt);
 
+  /** 只回表頭欄位，items() 固定為空 List（對帳不需要品項，避免 N+1）。 */
   List<Order> reconciliationCandidates(Actor actor, long since, long until, int limit, int offset);
 
   Order paymentSnapshot(String id);

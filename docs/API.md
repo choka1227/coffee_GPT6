@@ -17,6 +17,7 @@
 | GET | /api/menu/availability?branchId={id} | 分店供應狀態；MENU_AVAILABILITY + 分店範圍 |
 | POST | /api/menu/availability | 設定 AVAILABLE / SOLD_OUT / UNLISTED；UNLISTED 僅 MENU_MANAGE + GLOBAL |
 | GET | /api/orders | 本人 / 所屬分店 / 所有分店，依身分授權；最近 100 筆 |
+| GET | /api/orders/page?status=&branchId=&from=&to=&q=&cursor=&limit= | 訂單清單游標分頁；依身分授權，預設 50、上限 200 |
 | POST | /api/orders | 建立訂單；Idempotency-Key header 必填 |
 | GET | /api/orders/{id} | 訂單明細，檢查擁有者或分店權限 |
 | POST | /api/orders/{id}/cash | tendered；POS_ORDER / ORDER_MANAGE + 分店範圍 |

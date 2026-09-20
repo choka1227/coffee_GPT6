@@ -14,6 +14,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class OrderService implements Orders {
+  private static final Set<String> ORDER_STATUSES =
+      Set.of("PENDING_PAYMENT", "PAID", "PREPARING", "READY", "COMPLETED", "CANCELLED");
   private final JdbcTemplate db;
   private final Catalog catalog;
   private final Branches branches;
@@ -158,6 +160,228 @@ public class OrderService implements Orders {
         .toList();
   }
 
+  public Page page(Actor a, Query query) {
+    Query q = query == null ? new Query(null, null, null, null, null, null, 0) : query;
+    Problem.check(q.status() == null || ORDER_STATUSES.contains(q.status()), "訂單狀態不正確");
+    Problem.check(q.from() == null || q.to() == null || q.from() <= q.to(), "查詢時間區間不正確");
+    String keyword = q.q() == null ? null : q.q().trim();
+    if (keyword != null && keyword.isEmpty()) keyword = null;
+    Problem.check(keyword == null || keyword.length() <= 60, "搜尋關鍵字過長");
+    Cursor cursor = q.cursor() == null ? null : decodeCursor(q.cursor());
+    int limit = q.limit() < 1 ? 50 : Math.min(q.limit(), 200);
+
+    StringBuilder sql =
+        new StringBuilder(
+            "select o.*,b.name branch_name from orders o join branches b on b.id=o.branch_id where 1=1");
+    List<Object> params = new ArrayList<>();
+    appendScope(a, q.branchId(), sql, params);
+    if (q.status() != null) {
+      sql.append(" and o.status=?");
+      params.add(q.status());
+    }
+    if (q.from() != null) {
+      sql.append(" and o.created_at>=?");
+      params.add(q.from());
+    }
+    if (q.to() != null) {
+      sql.append(" and o.created_at<=?");
+      params.add(q.to());
+    }
+    if (keyword != null) {
+      String pattern = "%" + escapeLike(keyword.toLowerCase(Locale.ROOT)) + "%";
+      sql.append(
+          " and (lower(o.id) like ? escape '\\' or exists (select 1 from order_items i"
+              + " where i.order_id=o.id and lower(i.name) like ? escape '\\'))");
+      params.add(pattern);
+      params.add(pattern);
+    }
+    if (cursor != null) {
+      sql.append(" and (o.created_at<? or (o.created_at=? and o.id<?))");
+      params.add(cursor.createdAt());
+      params.add(cursor.createdAt());
+      params.add(cursor.id());
+    }
+    sql.append(" order by o.created_at desc,o.id desc limit ?");
+    params.add(limit + 1);
+
+    List<OrderHeader> headers =
+        db.query(
+            sql.toString(),
+            (r, n) ->
+                new OrderHeader(
+                    r.getString("id"),
+                    r.getString("branch_id"),
+                    r.getString("branch_name"),
+                    r.getString("account_id"),
+                    r.getString("status"),
+                    r.getString("fulfillment"),
+                    r.getString("payment_method"),
+                    r.getInt("total"),
+                    r.getString("note"),
+                    r.getLong("created_at"),
+                    r.getObject("paid_at", Long.class),
+                    r.getObject("tendered", Integer.class),
+                    r.getObject("change_amount", Integer.class)),
+            params.toArray());
+    boolean more = headers.size() > limit;
+    if (more) headers = new ArrayList<>(headers.subList(0, limit));
+    if (headers.isEmpty()) return new Page(List.of(), null);
+
+    Map<String, List<LineRow>> lineRows = loadLines(headers);
+    List<String> itemIds =
+        lineRows.values().stream().flatMap(Collection::stream).map(LineRow::id).toList();
+    Map<String, List<LineOption>> options = itemIds.isEmpty() ? Map.of() : loadOptions(itemIds);
+    List<Order> orders =
+        headers.stream()
+            .map(h -> h.toOrder(toLines(lineRows.getOrDefault(h.id(), List.of()), options)))
+            .toList();
+    OrderHeader last = headers.get(headers.size() - 1);
+    return new Page(orders, more ? encodeCursor(last.createdAt(), last.id()) : null);
+  }
+
+  private void appendScope(Actor a, String branchId, StringBuilder sql, List<Object> params) {
+    if (a.customer()) {
+      sql.append(" and o.account_id=?");
+      params.add(a.id());
+      if (branchId != null) {
+        sql.append(" and o.branch_id=?");
+        params.add(branchId);
+      }
+      return;
+    }
+    a.require("ORDER_MANAGE");
+    if (a.global()) {
+      if (branchId != null) {
+        sql.append(" and o.branch_id=?");
+        params.add(branchId);
+      }
+    } else {
+      if (branchId != null) a.branch(branchId);
+      sql.append(" and o.branch_id=?");
+      params.add(a.branchId());
+    }
+  }
+
+  private Map<String, List<LineRow>> loadLines(List<OrderHeader> headers) {
+    List<String> orderIds = headers.stream().map(OrderHeader::id).toList();
+    String placeholders = String.join(",", Collections.nCopies(orderIds.size(), "?"));
+    Map<String, List<LineRow>> lines = new LinkedHashMap<>();
+    db.query(
+        "select * from order_items where order_id in (" + placeholders
+            + ") order by order_id,name",
+        r -> {
+          LineRow line =
+              new LineRow(
+                  r.getString("id"),
+                  r.getString("order_id"),
+                  r.getString("product_id"),
+                  r.getString("name"),
+                  r.getString("category"),
+                  r.getInt("unit_price"),
+                  r.getInt("quantity"),
+                  r.getString("temperature"),
+                  r.getString("sugar"),
+                  r.getInt("options_price"));
+          lines.computeIfAbsent(line.orderId(), ignored -> new ArrayList<>()).add(line);
+        },
+        orderIds.toArray());
+    return lines;
+  }
+
+  private Map<String, List<LineOption>> loadOptions(List<String> itemIds) {
+    String placeholders = String.join(",", Collections.nCopies(itemIds.size(), "?"));
+    Map<String, List<LineOption>> options = new HashMap<>();
+    db.query(
+        "select order_item_id,group_name,option_name,price_delta from order_item_options"
+            + " where order_item_id in (" + placeholders + ") order by order_item_id,id",
+        r ->
+            options
+                .computeIfAbsent(r.getString("order_item_id"), ignored -> new ArrayList<>())
+                .add(
+                    new LineOption(
+                        r.getString("group_name"),
+                        r.getString("option_name"),
+                        r.getInt("price_delta"))),
+        itemIds.toArray());
+    return options;
+  }
+
+  private List<Line> toLines(
+      List<LineRow> rows, Map<String, List<LineOption>> optionsByItem) {
+    return rows.stream()
+        .map(
+            row ->
+                new Line(
+                    row.productId(),
+                    row.name(),
+                    row.category(),
+                    row.unitPrice(),
+                    row.quantity(),
+                    row.temperature(),
+                    row.sugar(),
+                    row.optionsPrice(),
+                    Math.multiplyExact(
+                        Math.addExact(row.unitPrice(), row.optionsPrice()), row.quantity()),
+                    optionsByItem.getOrDefault(row.id(), List.of())))
+        .toList();
+  }
+
+  static String encodeCursor(long createdAt, String id) {
+    return createdAt + ":" + id;
+  }
+
+  static Cursor decodeCursor(String value) {
+    int separator = value.indexOf(':');
+    Problem.check(separator > 0 && separator < value.length() - 1, "查詢游標格式不正確");
+    String time = value.substring(0, separator);
+    String id = value.substring(separator + 1);
+    Problem.check(time.chars().allMatch(Character::isDigit) && id.length() <= 20, "查詢游標格式不正確");
+    try {
+      return new Cursor(Long.parseLong(time), id);
+    } catch (NumberFormatException ignored) {
+      throw new Problem(400, "查詢游標格式不正確");
+    }
+  }
+
+  static String escapeLike(String value) {
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+  }
+
+  record Cursor(long createdAt, String id) {}
+
+  private record OrderHeader(
+      String id,
+      String branchId,
+      String branchName,
+      String accountId,
+      String status,
+      String fulfillment,
+      String paymentMethod,
+      int total,
+      String note,
+      long createdAt,
+      Long paidAt,
+      Integer tendered,
+      Integer changeAmount) {
+    Order toOrder(List<Line> lines) {
+      return new Order(
+          id, branchId, branchName, accountId, status, fulfillment, paymentMethod, total, note,
+          createdAt, paidAt, tendered, changeAmount, lines);
+    }
+  }
+
+  private record LineRow(
+      String id,
+      String orderId,
+      String productId,
+      String name,
+      String category,
+      int unitPrice,
+      int quantity,
+      String temperature,
+      String sugar,
+      int optionsPrice) {}
+
   public Order get(Actor a, String id) {
     Order o = snapshot(id);
     if (!o.accountId().equals(a.id())) {
@@ -263,7 +487,7 @@ public class OrderService implements Orders {
       actor.require("PAYMENT_RECONCILE");
       if (actor.customer()) throw new Problem(403, "沒有執行金流對帳的權限");
       if (!actor.global()) {
-        scope = " and branch_id=?";
+        scope = " and o.branch_id=?";
         params.add(actor.branchId());
       }
     }
@@ -273,7 +497,7 @@ public class OrderService implements Orders {
         "select o.*,b.name branch_name from orders o join branches b on b.id=o.branch_id"
             + " where o.payment_method='ECPAY' and o.status='PENDING_PAYMENT'"
             + " and o.created_at>=? and o.created_at<=?"
-            + scope.replace("branch_id", "o.branch_id")
+            + scope
             + " order by o.created_at,o.id limit ? offset ?",
         (r, n) ->
             new Order(

@@ -1,0 +1,22 @@
+# G10 訂單清單游標分頁實作紀錄
+
+- 來源規格：`docs/specs/G10-order-list-pagination.md`
+- 主線來源：`baf1db674bcc25ce410048c1e1b4ad929d93d6f7`
+- 本階段：S1 後端分頁查詢與批次載入
+
+## 設計摘要
+
+- 以 `(created_at desc, id desc)` 為穩定排序鍵，游標僅承載排序位置，資料範圍仍由登入者身分強制套用。
+- 先多取一筆判斷下一頁，不另做總筆數查詢。
+- 表頭、品項與選項固定以至多三次查詢批次載入；空頁只查一次。
+- 保留既有 `GET /api/orders` 與 `Orders.list()`，本階段僅新增 `/api/orders/page`。
+
+## 疑點與處理
+
+- `cursor` 未提供與明確提供空字串語意不同：未提供代表第一頁，`cursor=` 依驗收條件視為格式錯誤並回 400。
+- `q` 使用 `Locale.ROOT` 正規化並跳脫 `\\`、`%`、`_`，避免萬用字元擴張查詢範圍。
+
+## 驗證計畫
+
+- 覆蓋游標格式、跨頁不重複、同毫秒第二排序鍵、篩選、授權、CSRF 與固定查詢次數。
+- 執行 frontend build、backend verify，並以最新 head 的 GitHub Actions 補足遠端驗證。
