@@ -26,7 +26,10 @@ class OrderPaginationTest {
   @BeforeEach
   void setUp() {
     JdbcDataSource source = new JdbcDataSource();
-    source.setURL("jdbc:h2:mem:order-page-" + UUID.randomUUID() + ";MODE=PostgreSQL");
+    source.setURL(
+        "jdbc:h2:mem:order-page-"
+            + UUID.randomUUID()
+            + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1");
     statements = new AtomicInteger();
     db = new JdbcTemplate(counting(source, statements));
     db.execute("create table branches(id varchar(36) primary key,name varchar(80) not null)");
