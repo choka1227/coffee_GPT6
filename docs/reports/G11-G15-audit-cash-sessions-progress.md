@@ -7,7 +7,7 @@
 
 - [x] S1 稽核基礎建設
 - [x] S2 稽核涵蓋範圍與查詢 API
-- [ ] S3 現金班別資料層與開班／收現
+- [x] S3 現金班別資料層與開班／收現
 - [ ] S4 交班、歷史查詢與前端
 
 ## S1 設計與驗證
@@ -38,4 +38,4 @@
 - 現金收入以 `SUM(total)` 計算，不採 `tendered`；未開班時既有收現流程仍成功且 `cash_session_id` 為 null。
 - 新增全新／既有資料庫 migration、角色權限、重複與併發開班、收現／交班競態、跨店／無權限、CSRF、金額與重複交班測試。
 - frontend：`npm run build` 成功。
-- backend：本機 Maven Central DNS 解析失敗，verify 未啟動；Actions #134 找出舊版升級 fixture 會預先帶入新權限，V6 已改為冪等補登，等待修正 head 驗證。
+- backend：本機 Maven Central DNS 解析失敗，verify 未啟動；Actions #134 找出舊版升級 fixture 會預先帶入新權限，V6 改為冪等補登後，Actions #136 的 frontend build、backend verify 全部成功。
