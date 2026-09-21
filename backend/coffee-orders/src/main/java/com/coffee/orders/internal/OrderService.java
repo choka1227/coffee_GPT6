@@ -305,11 +305,13 @@ public class OrderService implements Orders {
     db.query(
         "select order_id,code,name,kind,percent,amount,discount_amount from order_discounts"
             + " where order_id in (" + placeholders + ")",
-        r -> result.put(
-            r.getString("order_id"),
-            new OrderDiscount(
-                r.getString("code"), r.getString("name"), r.getString("kind"),
-                r.getInt("percent"), r.getInt("amount"), r.getInt("discount_amount"))),
+        r -> {
+          result.put(
+              r.getString("order_id"),
+              new OrderDiscount(
+                  r.getString("code"), r.getString("name"), r.getString("kind"),
+                  r.getInt("percent"), r.getInt("amount"), r.getInt("discount_amount")));
+        },
         orderIds.toArray());
     return result;
   }
