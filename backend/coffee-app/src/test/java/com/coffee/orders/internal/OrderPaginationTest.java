@@ -74,6 +74,10 @@ class OrderPaginationTest {
     assertThat(first.nextCursor()).isNotNull();
     assertThat(statements).hasValue(3);
 
+    statements.set(0);
+    assertThat(orders.page(manager, query(null, null, null, 50)).items()).hasSize(25);
+    assertThat(statements).hasValue(3);
+
     Set<String> ids = new HashSet<>();
     String cursor = null;
     do {
@@ -89,6 +93,23 @@ class OrderPaginationTest {
   }
 
   @Test
+  void sameTimestampUsesIdAsSecondSortKeyWithoutDuplicates() {
+    for (int i = 1; i <= 5; i++) seed(i, "owner", "taipei", 3_000L, "PAID", "Latte");
+    Actor manager = actor("manager", "GLOBAL", null, "ORDER_MANAGE");
+
+    List<String> ids = new ArrayList<>();
+    String cursor = null;
+    do {
+      Orders.Page page = orders.page(manager, query(null, null, cursor, 2));
+      page.items().forEach(order -> ids.add(order.id()));
+      cursor = page.nextCursor();
+    } while (cursor != null);
+
+    assertThat(ids).containsExactly("ORD-05", "ORD-04", "ORD-03", "ORD-02", "ORD-01");
+    assertThat(new HashSet<>(ids)).hasSameSizeAs(ids);
+  }
+
+  @Test
   void scopeAndFiltersCannotBeBypassedByCursorOrBranchParameter() {
     seed(1, "alice", "taipei", 2_000L, "PAID", "百分比 100% Latte");
     seed(2, "bob", "taipei", 2_000L, "PAID", "Other");
@@ -101,11 +122,21 @@ class OrderPaginationTest {
     assertThat(orders.page(alice, query(null, "taipei", null, 50)).items())
         .extracting(Orders.Order::branchId)
         .containsOnly("taipei");
-    assertThat(orders.page(alice, new Orders.Query(null, null, 2_000L, 2_000L, "%", null, 50)).items())
+    assertThat(orders.page(alice, new Orders.Query(null, null, null, null, "%", null, 50)).items())
         .extracting(Orders.Order::id)
         .containsExactly("ORD-01");
 
+    String aliceCursor = orders.page(alice, query(null, null, null, 1)).nextCursor();
+    assertThat(aliceCursor).isNotNull();
+    assertThat(orders.page(actor("bob", "SELF", null), query(null, null, aliceCursor, 50)).items())
+        .isNotEmpty()
+        .extracting(Orders.Order::accountId)
+        .containsOnly("bob");
+
     Actor branch = actor("staff", "BRANCH", "taipei", "ORDER_MANAGE");
+    assertThat(orders.page(branch, query(null, null, null, 50)).items())
+        .extracting(Orders.Order::branchId)
+        .containsOnly("taipei");
     assertThatThrownBy(() -> orders.page(branch, query(null, "taichung", null, 50)))
         .isInstanceOf(Problem.class)
         .hasMessage("只能存取所屬分店資料");
@@ -113,6 +144,37 @@ class OrderPaginationTest {
             () -> orders.page(actor("staff", "BRANCH", "taipei"), query(null, null, null, 50)))
         .isInstanceOf(Problem.class)
         .hasMessage("沒有此功能的操作權限");
+
+    Actor global = actor("admin", "GLOBAL", null, "ORDER_MANAGE");
+    assertThat(orders.page(global, query(null, "taichung", null, 50)).items())
+        .extracting(Orders.Order::branchId)
+        .containsOnly("taichung");
+    assertThat(orders.page(global, query(null, null, null, 50)).items())
+        .extracting(Orders.Order::branchId)
+        .containsExactlyInAnyOrder("taipei", "taipei", "taichung");
+  }
+
+  @Test
+  void limitsAndCaseInsensitiveKeywordFiltersAreEnforced() {
+    for (int i = 0; i < 205; i++) {
+      seed(i, "owner", "taipei", 4_000L + i, "PAID", i == 204 ? "Vanilla LATTE" : "Other");
+    }
+    Actor manager = actor("manager", "GLOBAL", null, "ORDER_MANAGE");
+
+    assertThat(orders.page(manager, query(null, null, null, 500)).items()).hasSize(200);
+    assertThat(orders.page(manager, query(null, null, null, 0)).items()).hasSize(50);
+    assertThat(
+            orders
+                .page(manager, new Orders.Query(null, null, null, null, "ord-204", null, 50))
+                .items())
+        .extracting(Orders.Order::id)
+        .containsExactly("ORD-204");
+    assertThat(
+            orders
+                .page(manager, new Orders.Query(null, null, null, null, "latte", null, 50))
+                .items())
+        .extracting(Orders.Order::id)
+        .containsExactly("ORD-204");
   }
 
   private Orders.Query query(String status, String branchId, String cursor, int limit) {
