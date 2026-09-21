@@ -4,12 +4,12 @@
 | --- | --- |
 | 缺口編號 | G07 |
 | 優先順序 | P1 |
-| 版本 | v1.0（2026-09-21） |
+| 版本 | v1.1（2026-09-21） |
 | 規格作者 | Claude（PM / SA） |
 | 實作 | Codex（PG / SD） |
 | 前置相依 | G06（選項加價）已合併、G10（訂單分頁）已合併。**依「一次一份」排在 G14 之後** |
 | Flyway 版號 | **V9**（V8 已由 G14 規格指定，見 §4.0） |
-| 施工階段 | S1 / S2 / S3 / S4，四階段，S1／S2／S4 純加法 |
+| 施工階段 | S1 / S2 / S3，三階段，S1／S2 純加法（v1.1 把次數上限併入 S1，見 §9.0） |
 
 ---
 
@@ -144,7 +144,7 @@ CREATE INDEX idx_discounts_code_active ON discounts(code, active);
 | `redeemed_count` | 已使用次數，只增不減（§11.8） |
 | `active` | 停用後立即不可用，但**不影響已成立的訂單**（快照） |
 
-**`max_redemptions` 與 `redeemed_count` 在 S1 就一次建好**，S4 只加行為不再加 migration。這是刻意的：兩個階段共用一個版號，省掉第二次版號協調。S1–S3 期間這兩欄恆為「NULL / 0」，不影響任何行為。
+**`max_redemptions` 與 `redeemed_count` 在 S1 就一次建好，而且 S1 同時就要實作次數檢查與計數遞增**（§5.2 第 6、8 步）。v1.0 把這兩步排到最後一階段，那是錯的：S2 的維護 UI 一開放就能設 `max_redemptions`，若強制邏輯還沒進去，總部設了上限卻無限可用、`redeemed_count` 永遠是 0 —— 一個「設定看得到但不生效」的中間狀態比沒有這個欄位糟得多。**能設定與能強制必須同一階段落地，而且強制要先到。**
 
 ### 4.2 `order_discounts` —— 訂單折扣快照
 
@@ -247,14 +247,15 @@ public interface Discounts {
      - ends_at   IS NULL 或 atEpochMs <= ends_at
      - branch_id IS NULL 或 branch_id = 訂單分店
 5. 門檻檢查：subtotal >= min_subtotal，不足 → 400「訂單金額未達此優惠碼的最低消費」
-6. 次數檢查（S4）：max_redemptions IS NULL 或 redeemed_count < max_redemptions
+6. 次數檢查：max_redemptions IS NULL 或 redeemed_count < max_redemptions
      不足 → 409「此優惠碼的使用次數已達上限」
 7. 算折抵：
      raw = (kind == "PERCENT")
              ? Math.multiplyExact(subtotal, percent) / 100    // 整數除法，無條件捨去
              : amount
      discountAmount = Math.max(0, Math.min(raw, subtotal - 1))
-8. 遞增計數（S4）：update discounts set redeemed_count=redeemed_count+1 where id=?
+8. 遞增計數：update discounts set redeemed_count=redeemed_count+1 where id=?
+     max_redemptions IS NULL 時也要遞增 —— redeemed_count 是促銷成本的帳，不是只有設上限才記
 9. 回傳 Applied(規則快照欄位..., subtotal, discountAmount)
 ```
 
@@ -264,7 +265,7 @@ public interface Discounts {
 
 1. **整數運算，無條件捨去。** `Math.multiplyExact(subtotal, percent) / 100`。不得用 `double`、不得用 `BigDecimal`、不得先除再乘。`subtotal` 上限是 1,000,000，`× 90` 不會溢位，但仍然用 `multiplyExact` 以符合 `AGENTS.md` 金額章節
 2. **`Math.min(raw, subtotal - 1)`** 保證折後至少 1 元（§11.5）。`subtotal = 1` 時折抵為 0，**這不是錯誤**，照常寫快照
-3. **第 3 步的 `for update` 是必要的**，即使 S1–S3 還沒有次數上限。先鎖再讀，讓 S4 加計數時不必回頭改鎖的位置 —— 這是把破壞性變更提前吸收在 S1
+3. **第 3 步的 `for update` 是必要的**，而且要先鎖再讀 —— 第 6 步的檢查與第 8 步的遞增必須在同一把鎖底下，否則兩筆併發訂單都會讀到「還有名額」（驗收 18 會驗）
 4. **鎖順序：`branches` → `orders` → `discounts`。** `create()` 目前沒有鎖 `branches`／`orders`（新訂單還不存在），所以實務上只會拿到 `discounts` 這一把鎖；規定順序是為了日後有人在 `create()` 加鎖時不會踩出死鎖
 
 ### 5.4 `save()` 的驗證
@@ -430,14 +431,25 @@ Map.entry("discount", discountTotal)
 
 > 規則見 `AGENTS.md`「施工階段與中斷續作」。每階段獨立 CI 綠、獨立可合併、有自己的驗收子集。**做完一個階段就 push**，不要整份做完才推。
 
+### 9.0 v1.1 的階段調整（為什麼從四階段變三階段）
+
+v1.0 把「使用次數上限與兌換計數」單獨切成 S4，是個錯誤的切法，Codex 在 PR #27 的審查裡指出來了，這裡採納：
+
+`max_redemptions` 從 S1 起就存在於 `Rule` 與 `save()`，S2 的維護 UI 又把它開放給總部設定，但強制邏輯排在 S4 —— **S2 或 S3 單獨合併進主線的期間，總部設 `max_redemptions=1` 的碼仍然無限可用，`redeemed_count` 永遠是 0。** 這種「設定看得到但不生效」的狀態違反「每階段獨立可合併、不破壞任何既有行為」：它沒有破壞既有行為，但它讓一個新開放的設定說謊，而說謊的方向是促銷成本無上限。
+
+修法是把 §5.2 第 6、8 步併進 S1，讓**強制先於開放**落地。原 S4 剩下的只有「UI 顯示已用／上限」，那本來就屬於 S2 的那張維護畫面，所以併入 S2，階段數從四變三。總工作量不變，只是搬位置。
+
+一般化的規則，寫下來給後續規格用：
+
+> **一個設定欄位的「可設定」與「生效」必須在同一階段。** 切階段時可以把功能切成「還沒有人用」，不可以切成「有人能設但不作用」。
+
 PR 描述請維護這張表：
 
 ```markdown
 ## 施工進度（G07）
-- [ ] S1 資料層與折扣計算 —— 未開始
+- [ ] S1 資料層與折扣計算（含次數上限強制） —— 未開始
 - [ ] S2 維護 API 與總部 UI —— 未開始
 - [ ] S3 下單套用、讀路徑與報表 —— 未開始
-- [ ] S4 使用次數上限與兌換計數 —— 未開始
 ```
 
 ### S1 — 資料層與折扣計算（純加法，零行為變化）
@@ -445,12 +457,14 @@ PR 描述請維護這張表：
 | 項目 | 內容 |
 | --- | --- |
 | 檔案 | `V9__order_discounts.sql`、`catalog/api/Discounts.java`、`catalog/internal/DiscountService.java` |
-| 測試 | `DiscountMigrationTest`（仿 `CashSessionsMigrationTest`）、`DiscountCalculationTest`（純單元測試，不起 Spring） |
-| 驗收子集 | 驗收 1–4 |
+| 測試 | `DiscountMigrationTest`（仿 `CashSessionsMigrationTest`）、`DiscountCalculationTest`（純單元測試，不起 Spring）、`DiscountRedemptionTest`（直接呼叫 `apply()`，含併發） |
+| 驗收子集 | 驗收 1–4、17–18 |
 
-`DiscountService` 在這一階段實作 `list()` / `save()` / `apply()` **三支都做完**，但**沒有任何呼叫端** —— 沒有 Controller、`OrderService` 不動。`apply()` 的次數檢查與計數遞增在這一階段**先不做**（S4 才加），其餘七步全部做完。
+`DiscountService` 在這一階段實作 `list()` / `save()` / `apply()` **三支都做完，§5.2 的九步一步都不省**（含第 6 步次數檢查與第 8 步遞增計數），但**沒有任何呼叫端** —— 沒有 Controller、`OrderService` 不動。
 
 零行為變化：新表沒有任何列，`orders.discount_amount` 全部是 DEFAULT 0。
+
+**驗收 17、18 在這一階段是直接對 `DiscountService.apply()` 測，不經過下單**（下單要到 S3 才接上）：在一個交易裡連續 `apply()` 同一組 `max_redemptions=1` 的碼，第二次要拿到 409；併發則用兩條執行緒各自開交易搶同一組碼。驗收 19 的「訂單回滾不留下增量」必須有訂單才驗得到，留在 S3。
 
 ### S2 — 維護 API 與總部 UI（純加法）
 
@@ -460,7 +474,7 @@ PR 描述請維護這張表：
 | 測試 | `DiscountAdminTest`（權限矩陣、驗證表、重複碼 409）、`HttpWorkflowTest` 補 CSRF 案例 |
 | 驗收子集 | 驗收 5–8 |
 
-路由 `/discounts`，`meta: { permissions: ["MENU_MANAGE"] }`。導覽列的入口與 `/menu` 同區。
+路由 `/discounts`，`meta: { permissions: ["MENU_MANAGE"] }`。導覽列的入口與 `/menu` 同區。維護畫面包含 `maxRedemptions` 的輸入欄與「已用／上限」的顯示（`redeemedCount` / `maxRedemptions`，無上限顯示「不限」）—— 強制邏輯 S1 已經在了，所以這裡開放設定是安全的。
 
 此階段結束後總部可以建立規則，但**下單還不會用到它** —— 這是安全的中間狀態。
 
@@ -469,30 +483,20 @@ PR 描述請維護這張表：
 | 項目 | 內容 |
 | --- | --- |
 | 檔案 | `orders/api/Orders.java`、`orders/internal/OrderService.java`、`reporting/internal/ReportService.java`、`frontend` 的 `MenuView.vue` / `OrdersView.vue` / `ReportsView.vue` / `types.ts` |
-| 測試 | `OrderDiscountTest`、`CoffeeIntegrationTest` 既有案例補新欄位、`OrderPaginationTest` 補查詢次數 |
-| 驗收子集 | 驗收 9–16 |
+| 測試 | `OrderDiscountTest`（含驗收 19 的回滾）、`CoffeeIntegrationTest` 既有案例補新欄位、`OrderPaginationTest` 補查詢次數 |
+| 驗收子集 | 驗收 9–16、19、20 |
 
 `Order` record 加三個欄位是編譯期可見的破壞性變更，呼叫點集中在 `OrderService`（`snapshot` / `page` / `reconciliationCandidates`）與前端 `types.ts`。**沒有優惠碼的訂單行為必須與 S3 之前完全一致**（驗收 16）。
 
-### S4 — 使用次數上限與兌換計數（純加法）
-
-| 項目 | 內容 |
-| --- | --- |
-| 檔案 | `catalog/internal/DiscountService.java`（只加 §5.2 第 6、8 步）、`DiscountsView.vue` 顯示已用／上限 |
-| 測試 | `DiscountRedemptionTest`（含併發） |
-| 驗收子集 | 驗收 17–19 |
-
-不需要新的 migration（欄位 S1 已建）。`max_redemptions` 為 NULL 的既有規則行為不變。
-
 ### 為什麼切得開
 
-S1 建表但沒人呼叫、S2 加端點但下單不碰、S4 只加兩步邏輯 —— 三個階段各自合併進主線的行為變化都是零。唯一的行為變更集中在 S3，而 S3 的「沒帶碼就完全照舊」這條性質讓它也能安全單獨合併。
+S1 建表但沒人呼叫、S2 加端點但下單不碰 —— 這兩個階段各自合併進主線的行為變化都是零，而且**每個階段開放的設定在同一階段就會生效**（§9.0）。唯一的行為變更集中在 S3，而 S3 的「沒帶碼就完全照舊」這條性質讓它也能安全單獨合併。
 
 ---
 
 ## 10. 驗收條件
 
-逐條可勾選。每一條都要有對應的測試。
+逐條可勾選。每一條都要有對應的測試。**編號沿用 v1.0，只改分組** —— 17、18 移到 S1，19、20 移到 S3，這樣號碼在兩版之間仍然指同一件事。
 
 **S1**
 
@@ -500,6 +504,8 @@ S1 建表但沒人呼叫、S2 加端點但下單不碰、S4 只加兩步邏輯 �
 2. [ ] `PERCENT` 10%、小計 505 → 折抵 50（無條件捨去，不是 50.5 也不是 51）
 3. [ ] `AMOUNT` 100、小計 100 → 折抵 99，折後 1 元（下限生效）；小計 1 → 折抵 0，折後 1 元
 4. [ ] `apply(null, ...)` 回傳 `null`，不寫任何列
+17. [ ] `max_redemptions = 1` 的碼，第二次 `apply()` 回 409「此優惠碼的使用次數已達上限」；`max_redemptions = NULL` 的碼每次 `apply()` 都讓 `redeemed_count` +1
+18. [ ] 兩條執行緒各自開交易搶同一組只剩一個名額的碼，只有一筆成功，`redeemed_count` 不會超過 `max_redemptions`
 
 **S2**
 
@@ -518,15 +524,7 @@ S1 建表但沒人呼叫、S2 加端點但下單不碰、S4 只加兩步邏輯 �
 14. [ ] 套用折扣後 `audit_log` 有一列 `ORDER_DISCOUNT`，`branch_id` 是訂單分店
 15. [ ] `GET /api/orders` 一頁的 DB 查詢次數在 20 筆與 100 筆兩種頁大小下相同（G10 的性質不得退化）；`subtotal` / `discountAmount` / `discount` 正確
 16. [ ] **沒帶 `discountCode` 的訂單**：`total`、`order_items`、稽核、報表全部與 S3 之前一致；`discount` 為 `null`、`discountAmount` 為 0、`subtotal` = `total`
-
-**S4**
-
-17. [ ] `max_redemptions = 1` 的碼，第二次下單回 409「此優惠碼的使用次數已達上限」
-18. [ ] 兩筆訂單同時搶最後一個名額，只有一筆成功，`redeemed_count` 不會超過 `max_redemptions`
-19. [ ] 訂單建立失敗回滾時 `redeemed_count` 不留下增量；訂單取消**不**退還次數（§11.8）
-
-**報表**
-
+19. [ ] 訂單建立失敗回滾時 `redeemed_count` 不留下增量；訂單取消**不**退還次數（§11.8）；`max_redemptions = 1` 的碼第二次下單回 409（驗收 17 的端到端版本）
 20. [ ] 當月有折扣訂單時 `report()` 的 `discount` = `sum(orders.discount_amount)`，且 `revenue + discount` = 品項原價營收加總
 
 ---
@@ -598,6 +596,7 @@ S1 建表但沒人呼叫、S2 加端點但下單不碰、S4 只加兩步邏輯 �
 3. **`apply()` 必須在 `create()` 的交易內**，不要加 `REQUIRES_NEW`
 4. **不要把 `apply()` 搬到命中 `existing` 的重試分支之前**（§6.4 第 1 點）
 5. **`page()` 一頁的查詢次數不得隨筆數增加**（G10 立下的性質，驗收 15 會驗）
+6. **次數檢查與遞增計數（§5.2 第 6、8 步）屬於 S1，不是後面的階段。** 同一把 `for update` 底下完成，`max_redemptions` 為 NULL 時仍然要遞增 —— S2 的維護 UI 一開放就能設上限，強制邏輯必須已經在了（§9.0）
 6. **Flyway 用 V9**，即使開工時主線上還沒有 V8（§4.0）
 7. 404 / 409 用 `throw new Problem(...)`，`Problem.check` 只能用在 400
 8. 錯誤訊息一律繁體中文台灣用語，寫給顧客看
