@@ -73,7 +73,7 @@ onMounted(load);
     </div>
     <div v-if="loading" class="loading-state">讀取中…</div>
     <div v-else class="card-grid">
-      <article v-for="rule in rules" :key="rule.id" class="admin-card">
+      <article v-for="rule in rules" :key="rule.id || rule.code" class="admin-card">
         <div><Tags :size="18" /><strong>{{ rule.code }}</strong>
           <span class="badge">{{ rule.active ? "啟用" : "停用" }}</span></div>
         <h3>{{ rule.name }}</h3>
