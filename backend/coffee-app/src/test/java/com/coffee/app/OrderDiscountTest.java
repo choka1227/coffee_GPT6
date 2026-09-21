@@ -16,14 +16,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.transaction.annotation.Transactional;
 
 @SpringBootTest(
     properties = {
       "spring.datasource.url=jdbc:h2:mem:order-discount;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1"
     })
 @ActiveProfiles("dev")
-@Transactional
 class OrderDiscountTest {
   @Autowired Orders orders;
   @Autowired JdbcTemplate db;
