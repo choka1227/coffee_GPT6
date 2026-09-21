@@ -3,6 +3,7 @@ package com.coffee.orders.internal;
 import com.coffee.audit.api.Audit;
 import com.coffee.branches.api.Branches;
 import com.coffee.catalog.api.Catalog;
+import com.coffee.catalog.api.Discounts;
 import com.coffee.orders.api.Orders;
 import com.coffee.shared.*;
 import java.nio.charset.StandardCharsets;
@@ -18,12 +19,15 @@ public class OrderService implements Orders {
       Set.of("PENDING_PAYMENT", "PAID", "PREPARING", "READY", "COMPLETED", "CANCELLED");
   private final JdbcTemplate db;
   private final Catalog catalog;
+  private final Discounts discounts;
   private final Branches branches;
   private final Audit audit;
 
-  public OrderService(JdbcTemplate db, Catalog catalog, Branches branches, Audit audit) {
+  public OrderService(
+      JdbcTemplate db, Catalog catalog, Discounts discounts, Branches branches, Audit audit) {
     this.db = db;
     this.catalog = catalog;
+    this.discounts = discounts;
     this.branches = branches;
     this.audit = audit;
   }
@@ -76,20 +80,34 @@ public class OrderService implements Orders {
       total = Math.addExact(total, Math.multiplyExact(unitPrice, l.quantity()));
     }
     Problem.check(total <= 1000000, "單筆訂單金額超過上限");
+    int subtotal = total;
+    var applied = discounts.apply(q.discountCode(), q.branchId(), subtotal, now);
+    int discountAmount = applied == null ? 0 : applied.discountAmount();
+    total = Math.subtractExact(subtotal, discountAmount);
     db.update(
         "insert into"
-            + " orders(id,branch_id,account_id,status,fulfillment,payment_method,total,note,created_at,idempotency_key,request_hash)"
-            + " values(?,?,?,'PENDING_PAYMENT',?,?,?,?,?,?,?)",
+            + " orders(id,branch_id,account_id,status,fulfillment,payment_method,total,discount_amount,note,created_at,idempotency_key,request_hash)"
+            + " values(?,?,?,'PENDING_PAYMENT',?,?,?,?,?,?,?,?)",
         id,
         q.branchId(),
         a.id(),
         q.fulfillment(),
         q.paymentMethod(),
         total,
+        discountAmount,
         q.note(),
         now,
         key,
         fingerprint);
+    if (applied != null) {
+      db.update(
+          "insert into order_discounts(order_id,discount_id,code,name,kind,percent,amount,subtotal,discount_amount,created_at) values(?,?,?,?,?,?,?,?,?,?)",
+          id, applied.discountId(), applied.code(), applied.name(), applied.kind(), applied.percent(),
+          applied.amount(), applied.subtotal(), applied.discountAmount(), now);
+      audit.record(
+          a, "ORDER_DISCOUNT", id, q.branchId(),
+          "套用折扣 " + applied.code() + "，折抵 " + applied.discountAmount() + " 元");
+    }
     for (int i = 0; i < q.items().size(); i++) {
       var l = q.items().get(i);
       var p = products.get(i);
@@ -123,12 +141,17 @@ public class OrderService implements Orders {
   private Create normalize(Create q) {
     if (q.items() == null) return q;
     return new Create(
-        q.branchId(), q.fulfillment(), q.paymentMethod(), q.note(),
+        q.branchId(), q.fulfillment(), q.paymentMethod(), q.note(), normalizeCode(q.discountCode()),
         q.items().stream()
             .map(l -> l == null ? null : new LineInput(
                 l.productId(), l.quantity(),
                 l.optionIds() == null ? null : l.optionIds().stream().sorted().toList()))
             .toList());
+  }
+
+  private String normalizeCode(String code) {
+    if (code == null || code.isBlank()) return null;
+    return code.trim().toUpperCase(Locale.ROOT);
   }
 
   private String fingerprint(Create q) {
@@ -199,6 +222,8 @@ public class OrderService implements Orders {
                     r.getString("fulfillment"),
                     r.getString("payment_method"),
                     r.getInt("total"),
+                    r.getInt("total") + r.getInt("discount_amount"),
+                    r.getInt("discount_amount"),
                     r.getString("note"),
                     r.getLong("created_at"),
                     r.getObject("paid_at", Long.class),
@@ -209,13 +234,16 @@ public class OrderService implements Orders {
     if (more) headers = new ArrayList<>(headers.subList(0, limit));
     if (headers.isEmpty()) return new Page(List.of(), null);
 
+    Map<String, OrderDiscount> orderDiscounts = loadDiscounts(headers);
     Map<String, List<LineRow>> lineRows = loadLines(headers);
     List<String> itemIds =
         lineRows.values().stream().flatMap(Collection::stream).map(LineRow::id).toList();
     Map<String, List<LineOption>> options = itemIds.isEmpty() ? Map.of() : loadOptions(itemIds);
     List<Order> orders =
         headers.stream()
-            .map(h -> h.toOrder(toLines(lineRows.getOrDefault(h.id(), List.of()), options)))
+            .map(h -> h.toOrder(
+                toLines(lineRows.getOrDefault(h.id(), List.of()), options),
+                orderDiscounts.get(h.id())))
             .toList();
     OrderHeader last = headers.get(headers.size() - 1);
     return new Page(orders, more ? encodeCursor(last.createdAt(), last.id()) : null);
@@ -268,6 +296,22 @@ public class OrderService implements Orders {
         },
         orderIds.toArray());
     return lines;
+  }
+
+  private Map<String, OrderDiscount> loadDiscounts(List<OrderHeader> headers) {
+    List<String> orderIds = headers.stream().map(OrderHeader::id).toList();
+    String placeholders = String.join(",", Collections.nCopies(orderIds.size(), "?"));
+    Map<String, OrderDiscount> result = new HashMap<>();
+    db.query(
+        "select order_id,code,name,kind,percent,amount,discount_amount from order_discounts"
+            + " where order_id in (" + placeholders + ")",
+        r -> result.put(
+            r.getString("order_id"),
+            new OrderDiscount(
+                r.getString("code"), r.getString("name"), r.getString("kind"),
+                r.getInt("percent"), r.getInt("amount"), r.getInt("discount_amount"))),
+        orderIds.toArray());
+    return result;
   }
 
   private Map<String, List<LineOption>> loadOptions(List<String> itemIds) {
@@ -341,14 +385,17 @@ public class OrderService implements Orders {
       String fulfillment,
       String paymentMethod,
       int total,
+      int subtotal,
+      int discountAmount,
       String note,
       long createdAt,
       Long paidAt,
       Integer tendered,
       Integer changeAmount) {
-    Order toOrder(List<Line> lines) {
+    Order toOrder(List<Line> lines, OrderDiscount discount) {
       return new Order(
-          id, branchId, branchName, accountId, status, fulfillment, paymentMethod, total, note,
+          id, branchId, branchName, accountId, status, fulfillment, paymentMethod, total,
+          subtotal, discountAmount, discount, note,
           createdAt, paidAt, tendered, changeAmount, lines);
     }
   }
@@ -477,7 +524,10 @@ public class OrderService implements Orders {
     params.add(limit);
     params.add(offset);
     return db.query(
-        "select o.*,b.name branch_name from orders o join branches b on b.id=o.branch_id"
+        "select o.*,b.name branch_name,d.code discount_code,d.name discount_name,"
+            + "d.kind discount_kind,d.percent discount_percent,d.amount discount_rule_amount"
+            + " from orders o join branches b on b.id=o.branch_id"
+            + " left join order_discounts d on d.order_id=o.id"
             + " where o.payment_method='ECPAY' and o.status='PENDING_PAYMENT'"
             + " and o.created_at>=? and o.created_at<=?"
             + scope
@@ -492,6 +542,12 @@ public class OrderService implements Orders {
                 r.getString("fulfillment"),
                 r.getString("payment_method"),
                 r.getInt("total"),
+                r.getInt("total") + r.getInt("discount_amount"),
+                r.getInt("discount_amount"),
+                r.getString("discount_code") == null ? null : new OrderDiscount(
+                    r.getString("discount_code"), r.getString("discount_name"),
+                    r.getString("discount_kind"), r.getInt("discount_percent"),
+                    r.getInt("discount_rule_amount"), r.getInt("discount_amount")),
                 r.getString("note"),
                 r.getLong("created_at"),
                 r.getObject("paid_at", Long.class),
@@ -552,6 +608,9 @@ public class OrderService implements Orders {
                     r.getString("fulfillment"),
                     r.getString("payment_method"),
                     r.getInt("total"),
+                    r.getInt("total") + r.getInt("discount_amount"),
+                    r.getInt("discount_amount"),
+                    discountSnapshot(r.getString("id")),
                     r.getString("note"),
                     r.getLong("created_at"),
                     r.getObject("paid_at", Long.class),
@@ -582,5 +641,15 @@ public class OrderService implements Orders {
             id);
     if (rows.isEmpty()) throw new Problem(404, "找不到訂單");
     return rows.get(0);
+  }
+
+  private OrderDiscount discountSnapshot(String orderId) {
+    return db.query(
+            "select code,name,kind,percent,amount,discount_amount from order_discounts where order_id=?",
+            (r, n) -> new OrderDiscount(
+                r.getString("code"), r.getString("name"), r.getString("kind"),
+                r.getInt("percent"), r.getInt("amount"), r.getInt("discount_amount")),
+            orderId)
+        .stream().findFirst().orElse(null);
   }
 }
