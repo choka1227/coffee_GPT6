@@ -7,9 +7,17 @@ public interface Branches {
   record Branch(
       String id, String name, String address, String phone, boolean active, int monthlyTarget) {}
 
+  record Hours(int dayOfWeek, int openMinute, int closeMinute) {}
+
   List<Branch> list(Actor actor, boolean manage);
 
   Branch requireOpen(String id);
+
+  List<Hours> hours(String branchId);
+
+  boolean openAt(String branchId, long atEpochMs);
+
+  Branch requireOrderable(String id, long atEpochMs);
 
   Branch save(Actor actor, Branch branch);
 }

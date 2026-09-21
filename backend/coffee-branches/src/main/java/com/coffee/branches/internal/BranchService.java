@@ -3,6 +3,8 @@ package com.coffee.branches.internal;
 import com.coffee.audit.api.Audit;
 import com.coffee.branches.api.Branches;
 import com.coffee.shared.*;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -10,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class BranchService implements Branches {
+  private static final ZoneId TAIPEI = ZoneId.of("Asia/Taipei");
   private final JdbcTemplate db;
   private final Audit audit;
 
@@ -41,6 +44,69 @@ public class BranchService implements Branches {
     return db.query("select * from branches where id=? and active=true", this::row, id).stream()
         .findFirst()
         .orElseThrow(() -> new Problem(400, "分店不存在或已暫停營業"));
+  }
+
+  public List<Hours> hours(String branchId) {
+    return db.query(
+        "select day_of_week,open_minute,close_minute from branch_hours"
+            + " where branch_id=? order by day_of_week,open_minute",
+        (r, n) -> new Hours(r.getInt(1), r.getInt(2), r.getInt(3)),
+        branchId);
+  }
+
+  public boolean openAt(String branchId, long atEpochMs) {
+    return isOpenAt(hours(branchId), atEpochMs);
+  }
+
+  public Branch requireOrderable(String id, long atEpochMs) {
+    Branch branch = requireOpen(id);
+    List<Hours> schedule = hours(id);
+    if (isOpenAt(schedule, atEpochMs)) return branch;
+    throw new Problem(400, closedMessage(schedule, atEpochMs));
+  }
+
+  public static boolean isOpenAt(List<Hours> schedule, long atEpochMs) {
+    if (schedule.isEmpty()) return true;
+    var local = Instant.ofEpochMilli(atEpochMs).atZone(TAIPEI);
+    int today = local.getDayOfWeek().getValue();
+    int previous = today == 1 ? 7 : today - 1;
+    int minute = local.getHour() * 60 + local.getMinute();
+    return schedule.stream()
+        .anyMatch(
+            period ->
+                (period.dayOfWeek() == today
+                        && period.closeMinute() > period.openMinute()
+                        && period.openMinute() <= minute
+                        && minute < period.closeMinute())
+                    || (period.dayOfWeek() == today
+                        && period.closeMinute() <= period.openMinute()
+                        && minute >= period.openMinute())
+                    || (period.dayOfWeek() == previous
+                        && period.closeMinute() <= period.openMinute()
+                        && minute < period.closeMinute()));
+  }
+
+  private static String closedMessage(List<Hours> schedule, long atEpochMs) {
+    int today = Instant.ofEpochMilli(atEpochMs).atZone(TAIPEI).getDayOfWeek().getValue();
+    String periods =
+        schedule.stream()
+            .filter(period -> period.dayOfWeek() == today)
+            .map(
+                period ->
+                    formatMinute(period.openMinute())
+                        + "–"
+                        + (period.closeMinute() <= period.openMinute() ? "隔日 " : "")
+                        + formatMinute(period.closeMinute()))
+            .reduce((left, right) -> left + "、" + right)
+            .orElse(null);
+    return periods == null
+        ? "分店今日未營業"
+        : "分店目前未營業（今日營業時間 " + periods + "）";
+  }
+
+  private static String formatMinute(int minute) {
+    if (minute == 1440) return "24:00";
+    return String.format(Locale.ROOT, "%02d:%02d", minute / 60, minute % 60);
   }
 
   @Transactional
