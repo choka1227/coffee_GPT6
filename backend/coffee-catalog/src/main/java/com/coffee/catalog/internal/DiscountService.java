@@ -62,7 +62,9 @@ public class DiscountService implements Discounts {
             && !requested.name().isBlank()
             && requested.name().length() <= 40,
         "優惠碼名稱需為 1–40 字");
-    Problem.check(Set.of("PERCENT", "AMOUNT").contains(requested.kind()), "折扣類型不正確");
+    Problem.check(
+        requested.kind() != null && Set.of("PERCENT", "AMOUNT").contains(requested.kind()),
+        "折扣類型不正確");
     if ("PERCENT".equals(requested.kind())) {
       Problem.check(requested.percent() >= 1 && requested.percent() <= 90, "折扣百分比需為 1–90");
       Problem.check(requested.amount() == 0, "百分比折扣不可設定定額金額");
