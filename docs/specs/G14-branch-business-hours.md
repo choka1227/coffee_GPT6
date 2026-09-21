@@ -2,13 +2,13 @@
 
 | 項目 | 內容 |
 | --- | --- |
-| 版本 | v1.0 |
-| 日期 | 2026-09-20（Asia/Taipei） |
+| 版本 | v1.1（依 PR #24 上 Codex 的 `REQUEST_CHANGES` 修正授權邊界，見 §11.6） |
+| 日期 | 2026-09-20（v1.0）／2026-09-21（v1.1），Asia/Taipei |
 | 對應缺口 | G14（`docs/GAP-ANALYSIS.md` P1） |
 | 主要模組 | `coffee-branches`（新增資料與 API）、`coffee-orders`（只透過 `Branches` 的 `api` 呼叫） |
 | 前置相依 | 無。G11+G15（PR #22）與 G13（PR #20）都已合併，`coffee-audit` 的公開 API 可直接使用 |
 | 與 G10 的關係 | 不相交。G10 動 `OrderService.list()` / `page()`（讀），本規格動 `OrderService.create()`（寫）的一行查核。兩者可並行，但依 `AGENTS.md`「一次一份」仍序列化 |
-| Flyway | **預期 V8**（V7 保留給 G10）。若開工時 G10 尚未合併，V7 就是空的 —— **一律以開工當下 `backend/coffee-app/src/main/resources/db/migration/` 裡下一個未使用號為準**，並在 PR 描述寫明實際用了哪一號 |
+| Flyway | **V8**。V7（`V7__order_list_indexes.sql`）已由 G10 的 PR #26 實際占用，版號已定。仍請開工時掃一次 `backend/coffee-app/src/main/resources/db/migration/` 確認，並在 PR 描述寫明實際用了哪一號 |
 | 施工階段 | S1 / S2 / S3，三段。S1、S2 純加法，唯一的行為變更集中在 S3 |
 
 ---
@@ -62,7 +62,7 @@ return db.query("select * from branches where id=? and active=true", this::row, 
 | --- | --- |
 | 1 | `branch_hours` 表與 migration |
 | 2 | `Branches` api 新增 `Hours` record、`hours()`、`saveHours()`、`openAt()`、`requireOrderable()` |
-| 3 | `GET /api/branches/{id}/hours`（公開讀取）、`PUT /api/branches/{id}/hours`（總部維護） |
+| 3 | `GET /api/branches/{id}/hours`（登入即可讀，與 `GET /api/branches` 同級）、`PUT /api/branches/{id}/hours`（總部維護） |
 | 4 | `GET /api/branches` 回應增加 `openNow` |
 | 5 | `OrderService.create()` 的顧客端時段查核 |
 | 6 | 總部分店管理頁的時段編輯 UI、顧客端的「營業中／已打烊」顯示 |
@@ -211,7 +211,7 @@ public interface Branches {
   Branch requireOpen(String id);                         // 不變
   Branch save(Actor actor, Branch branch);               // 不變
 
-  /** 該分店的營業時段，依 dayOfWeek、openMinute 排序。公開資料。 */
+  /** 該分店的營業時段，依 dayOfWeek、openMinute 排序。任何登入者都讀得到，不是機密資料。 */
   List<Hours> hours(String branchId);
 
   /** 指定時刻是否在營業時段內。沒有任何時段列時恆為 true。 */
@@ -231,8 +231,10 @@ public interface Branches {
 
 | 方法 | 路徑 | 權限 | 說明 |
 | --- | --- | --- | --- |
-| `GET` | `/api/branches/{id}/hours` | 公開（與 `GET /api/branches` 同級） | 讀取該分店營業時段 |
+| `GET` | `/api/branches/{id}/hours` | **需登入**，不需任何權限常數（與 `GET /api/branches` 同級） | 讀取該分店營業時段 |
 | `PUT` | `/api/branches/{id}/hours` | `BRANCH_MANAGE` + 總部範圍 + CSRF | 整批取代 |
+
+> **不要動 `SecurityConfiguration`（依 PR #24 上 Codex 的 `REQUEST_CHANGES`，2026-09-21 定案）。** 本規格 v1.0 把 `GET` 寫成「公開（與 `GET /api/branches` 同級）」，那句話自相矛盾：主線 `backend/coffee-app/src/main/java/com/coffee/app/security/SecurityConfiguration.java` 對所有 `/api/**` 一律 `authenticated()`，只有 `/api/auth/csrf`、`/api/auth/login`、`/api/payments/ecpay/callback`、`/actuator/health` 四條 `permitAll()` —— **`GET /api/branches` 本身就不是公開端點**。「同級」現在指的是「登入即可、不需要權限常數」，兩支端點的授權行為完全一致，`SecurityConfiguration` 一個字都不必改。設計決策與推翻代價見 §11.6。
 
 `GET /api/branches/{id}/hours` 回應：
 
@@ -281,7 +283,7 @@ public interface Branches {
 
 | 動作 | 權限 | 資料範圍 |
 | --- | --- | --- |
-| 讀取營業時間 | 無 | 公開。顧客要看得到才能決定要不要來 |
+| 讀取營業時間 | 無（但**需登入**） | 與 `GET /api/branches` 同級：任何登入者（含顧客）都讀得到全部分店的時段，不分所屬分店。見 §5.2 的方框與 §11.6 |
 | 修改營業時間 | `BRANCH_MANAGE` | **`a.global()`，限總部** |
 
 **不新增任何權限常數。** `Identity.PERMISSIONS` 不動，角色權限不變，因此**不需要為權限寫任何 migration**（對照 G13 的 §4.3、G11 的 V5 都得補角色授權 —— 本規格刻意避開）。
@@ -422,6 +424,7 @@ Codex 請把這張表複製到 PR 描述並逐階段更新：
 | `frontend/src/shared/types.ts` | `Hours` 型別 |
 | `docs/API.md` | 兩個端點 |
 | 測試 | 驗證、重疊、上限、越權、CSRF |
+| **不動** | **`coffee-app/.../security/SecurityConfiguration.java`** —— 兩支端點都走既有的 `/api/**` → `authenticated()`，不新增任何 `permitAll()`（§5.2 方框、§11.6） |
 
 **驗收子集：** §9 的第 6–14 項。此時**還沒有人依這份資料做任何判斷**，所以就算店長設錯也不影響下單 —— 單獨合併風險仍然接近零。
 
@@ -456,7 +459,7 @@ Codex 請把這張表複製到 PR 描述並逐階段更新：
 **維護 API（S2）**
 
 6. [ ] `PUT /api/branches/{id}/hours` 以總部 `BRANCH_MANAGE` 帳號可寫入，`GET` 讀回來的內容與寫入一致且依 `dayOfWeek, openMinute` 排序（S2）
-7. [ ] 未登入可 `GET` 營業時間（公開）（S2）
+7. [ ] **未登入 `GET` 營業時間 → 401**（與 `GET /api/branches` 同級，`SecurityConfiguration` 不變）；已登入的一般顧客帳號 `GET` → 200，即使該分店不是它的所屬分店（S2）
 8. [ ] 無 `BRANCH_MANAGE` → 403；有 `BRANCH_MANAGE` 但為分店範圍帳號 → 403 且訊息為「此功能限總部範圍」（S2）
 9. [ ] 缺 CSRF token 的 `PUT` → 403，帶 token 的相同請求 → 成功（兩次請求只差 token）（S2）
 10. [ ] 重疊時段被擋（含跨夜與隔天重疊、週日→週一繞接）→ 400（S2）
@@ -515,7 +518,8 @@ Codex 請把這張表複製到 PR 描述並逐階段更新：
 1. 無 `BRANCH_MANAGE` 的帳號 `PUT` → 403
 2. 有 `BRANCH_MANAGE` 但資料範圍為 `BRANCH` 的帳號 `PUT`（含改自己那家店）→ 403，訊息「此功能限總部範圍」
 3. 顧客帳號 `PUT` → 403
-4. 未登入 `PUT` → 401；未登入 `GET` → 200（公開）
+4. **未登入 `PUT` → 401；未登入 `GET` → 401**（兩支都受 `SecurityConfiguration` 的 `/api/**` → `authenticated()` 管轄，本規格不放行任何路徑）
+5. 已登入的顧客帳號 `GET` 任一分店的時段 → 200（讀取不分資料範圍，見 §11.6）
 
 ### 10.3 CSRF（`HttpWorkflowTest`，真實 HTTP + Cookie）
 
@@ -592,11 +596,25 @@ Codex 請把這張表複製到 PR 描述並逐階段更新：
 
 **推翻它的代價：** 要過濾的話是一行，但顧客端要另外提供一個「查看所有分店營業時間」的入口，否則資訊就消失了。
 
+### 11.6 `GET /api/branches/{id}/hours` 需要登入，不對未登入者開放 —— **需要登入**
+
+**這一項是 v1.1 新增的，起因是 v1.0 寫錯了。** PR #24 上 Codex 的 `REQUEST_CHANGES` 指出：v1.0 的 §5.2／§5.4 與驗收 7 寫「公開（與 `GET /api/branches` 同級）」，但主線 `SecurityConfiguration` 對 `/api/**` 一律 `authenticated()`，`permitAll()` 只有 `/api/auth/csrf`、`/api/auth/login`、`/api/payments/ecpay/callback`、`/actuator/health` 四條。**「與 `GET /api/branches` 同級」與「公開」是互相矛盾的兩件事**，而 S2 的「動到」清單又沒列 `SecurityConfiguration` —— 照規格施工必然回 401，驗收 7 永遠不可能過。這個退回是對的。
+
+**決定：維持需要登入，`SecurityConfiguration` 一個字不動。** 「同級」改為指「登入即可、不需要任何權限常數、不分資料範圍」。
+
+**理由：**
+
+1. **本來就沒有未登入看得到的東西。** 顧客要看營業時間，是為了決定要不要點餐；而分店清單（`GET /api/branches`）與菜單（`GET /api/menu`）本來就都要登入。只把 `hours` 一支放行，顧客仍然拿不到分店 id，這個「公開」在產品上是空的
+2. **放行一條 `permitAll()` 的代價不對稱。** 目前的安全設定極簡（四條例外，每一條都有明確理由），加第五條就要同時處理：只放 `HttpMethod.GET`、不能誤放同路徑的 `PUT`、不能寫成 `/api/branches/**` 把清單一起放掉。Codex 的 review 已經把這三個坑列出來了 —— 那正是為一個目前沒有需求的能力承擔三個出錯機會
+3. **真要做對外門面，那是另一個決策。** 「未登入的顧客能看到什麼」應該是一次想清楚的產品決定（分店 + 菜單 + 營業時間一起），不該由本規格夾帶一支端點偷渡進去
+
+**推翻它的代價：** 低，而且是純加法。日後真要做對外門面時，在 `SecurityConfiguration` 加一條限定 `HttpMethod.GET` 的 `/api/branches/*/hours` 規則即可，本規格的 `hours()` / `BranchController` 都不用改（讀取路徑本來就沒有依賴 `Actor`）。要注意的只有：同路徑的 `PUT` 絕對不能一起放行，且必須補「未登入 `PUT` → 401」與「未登入 `GET` → 200」兩條測試。**代價低正是現在不做的理由** —— 之後補回來很便宜，現在做錯很貴。
+
 ---
 
 ## 12. 給 Codex 的施工提醒
 
-八條，前三條是踩到就會出事的。
+九條，前三條是踩到就會出事的。
 
 1. **不要改 `requireOpen()`。** 見 §5.7。改了會讓總部在非營業時間無法管理該分店的帳號（`IdentityService.java:93`），而既有測試抓不到
 2. **`day_of_week` 用 ISO-8601（1=星期一，7=星期日），對應 `java.time.DayOfWeek.getValue()`。** 不要用 `java.util.Calendar`（1=星期日）或 0-based。混用會讓整個判定錯開一天，而且週一到週五的測試可能還是會過
@@ -606,6 +624,7 @@ Codex 請把這張表複製到 PR 描述並逐階段更新：
 6. **`GET /api/branches` 不要 N+1**（§5.4）。一次撈全部 `branch_hours` 再在記憶體分組
 7. **跨夜判定的 `prev` 要從 1 繞回 7**（§4.4）。這是最常漏的一條，§10.1 第 14 項專門釘它
 8. **`saveHours()` 的驗證要全部做完才寫**（驗收 13）。先 `delete` 再逐列 `insert` 並在中途才發現錯誤，靠交易回滾雖然也對，但錯誤訊息會變成只報最後一列 —— 先驗完整批，錯誤訊息才講得清楚是哪一天哪一段
+9. **不要改 `SecurityConfiguration`**（§5.2、§11.6）。兩支端點都走既有的 `/api/**` → `authenticated()`，**不要為 `GET` 加 `permitAll()`**。驗收 7 與 §10.2 第 4 項要的是「未登入 `GET` → 401」，不是 200
 
 另外兩點不影響正確性但會影響審查：
 
