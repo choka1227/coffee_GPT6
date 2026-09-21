@@ -97,9 +97,9 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 | --- | --- | --- | --- |
 | G11 | 稽核紀錄的查詢與涵蓋範圍 | 規格書（與 G15 合併為一份）已合併（PR #17，v1.2）；**實作已合併（PR #22，S1／S2）** | [`specs/G11-G15-audit-and-cash-sessions.md`](specs/G11-G15-audit-and-cash-sessions.md) |
 | G15 | 現金日結與交班 | 規格書（與 G11 合併為一份）已合併（PR #17，v1.2）；**實作已合併（PR #22，S3／S4）** | [`specs/G11-G15-audit-and-cash-sessions.md`](specs/G11-G15-audit-and-cash-sessions.md) |
-| G10 | 訂單清單分頁與 N+1 | 規格書已合併；**實作審查中（PR #26，S1–S3 全數送審）** | [`specs/G10-order-list-pagination.md`](specs/G10-order-list-pagination.md) |
+| G10 | 訂單清單分頁與 N+1 | 實作已合併（PR #26，2026-09-21） | [`specs/G10-order-list-pagination.md`](specs/G10-order-list-pagination.md) |
 | G14 | 分店營業時間 | **規格書已完成，待實作** | [`specs/G14-branch-business-hours.md`](specs/G14-branch-business-hours.md) |
-| G07 | 折扣與促銷 | 未開始 | — |
+| G07 | 訂單折扣與優惠碼 | **規格書已完成，待實作** | [`specs/G07-order-discounts.md`](specs/G07-order-discounts.md) |
 
 **G11 稽核紀錄** —— `audit_log` 表存在，但全專案**只有 `IdentityService.java:221` 一處寫入**，且沒有任何查詢端點。等於有稽核資料卻無法稽核。現金收款（`OrderService.cash()`）、訂單狀態轉換（`transition()`）、菜單改價（`CatalogService.save()`）、分店改設定（`BranchService.save()`）全部沒有紀錄。金額相關操作都應該進稽核軌跡。
 
@@ -119,7 +119,11 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 
 完整規格見 [`specs/G14-branch-business-hours.md`](specs/G14-branch-business-hours.md)：新增 `branch_hours` 表（一列一段，天然支援分段與跨夜營業），**沒有任何時段列 = 24 小時營業**，既有資料零遷移；時段只對顧客自助下單強制，員工 POS 不擋（§11.1）；不新增任何權限常數，因此不需要角色 migration。三個施工階段，S1／S2 純加法，唯一的行為變更集中在很小的 S3。**例外日／公休日刻意排除，另立 G19**（規格 §11.3）。
 
-**G07 折扣與促銷** —— 沒有任何折扣機制：無優惠券、無會員價、無買一送一、無員工價。`orders.total` 是純加總。導入時要特別小心，折扣是最容易出現「信任前端傳來金額」漏洞的地方。**G06 完成後再做**，兩者都動到金額計算，同時做會撞在一起。
+**G07 訂單折扣與優惠碼** —— 沒有任何折扣機制：無優惠券、無會員價、無買一送一、無員工價。`orders.total` 是純加總（`OrderService.java:63-75`），之後不再變動。後果不只是「做不了促銷」：店員遇到「這杯算你便宜 20」只能在系統外少收現金，**那筆差額會在 G15 的現金日結被誤判成店員短收**；報表的 `grossProfit = revenue - cost` 也因為折扣不進系統而失真。
+
+完整規格見 [`specs/G07-order-discounts.md`](specs/G07-order-discounts.md)：折扣是最容易寫出「信任前端傳來金額」漏洞的地方，所以規格刻意把範圍壓到**一張訂單最多一個、只作用在訂單小計、只由優惠碼觸發**的最小形狀 —— `Create` 不得有任何金額欄位，前端只送碼，折抵由後端重算（規格 §6.1 列為紅線）。`order_discounts` 以 `order_id` 當主鍵，讓「不可疊加」由資料表形狀強制而不是靠程式紀律。`orders` 只加 `discount_amount INTEGER NOT NULL DEFAULT 0` 一欄（小計 = `total + discount_amount`，既有資料零遷移）。四個施工階段，S1／S2／S4 純加法，唯一的行為變更集中在 S3，且「沒帶碼就完全照舊」。**Flyway 用 V9**（V8 由 G14 占用，理由見規格 §4.0）。**不新增權限常數**，沿用 `MENU_MANAGE` + 總部範圍，因此不需要角色 migration。
+
+寫規格時撞到一條 V1 留下的硬限制：`orders.total` 有 `CHECK(total>0)`，而 `AGENTS.md` 禁止修改既有 migration，匿名 CHECK 又沒有 H2 / PostgreSQL 兩邊都可靠的移除寫法 —— **因此折後金額下限定為 1 元，百分比折扣上限 90%，不支援免費訂單**（規格 §11.5）。品項層折扣／買一送一登記為 **G20**、會員價與員工價登記為 **G21**（規格 §11.2）。
 
 ### P2 — 規模與體驗
 
@@ -131,6 +135,8 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 | G08 | 庫存扣減 | 未開始 |
 | G17 | 點餐 UI 的「常用組合」快捷 | 未開始（G06 第 13.6 節登記） |
 | G19 | 分店例外營業日（公休、臨時調整） | 未開始（G14 §11.3 登記） |
+| G20 | 品項層折扣與買一送一 | 未開始（G07 §11.2 登記） |
+| G21 | 會員價與員工價 | 未開始（G07 §11.2 登記） |
 | G12 | 外送、硬體印單 | 未開始 |
 
 **G09 報表效能** —— `ReportService.report()` 把整月已付款訂單投影載入記憶體，再對每一天（`ReportService.java:66-80`）與每一小時（`137-146`）各做一次 stream filter，是 O(天數 × 訂單數)。單店資料量下沒問題，跨店或資料累積後會變成記憶體與延遲風險。彙整應下推到 SQL。
@@ -143,6 +149,8 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 
 **G17 點餐 UI 的「常用組合」快捷**（G06 第 13.6 節登記）—— 選項群組多的商品，手機版點餐流程會偏長。刻意延後：常用組合要先有真實訂單資料才知道哪些組合常用，現在做出來的一定是猜的。G06 上線跑一段時間後再用實際資料判斷要不要做。
 
+**G20 品項層折扣與買一送一** / **G21 會員價與員工價**（G07 §11.2 登記）—— G07 只做訂單層、只由優惠碼觸發的折扣。買一送一要決定「折的是哪一件」，那是品項層的規則引擎，會動到 `order_items` 快照結構與報表的品項營收歸屬；會員價與員工價要先有會員／員工身分模型（`accounts` 目前只有角色與分店）。兩者各自的規模都與 G07 相當，合進去會逼出一個切不開的大階段。**排在 G07 上線並累積一段真實 `order_discounts` 資料之後**，屆時看實際用了哪幾種促銷再決定要不要做 —— 現在做的一定是猜的（與 G17 同一個理由）。兩者都是加法，不需要回頭改 G07。
+
 **G19 分店例外營業日**（G14 §11.3 登記）—— G14 只做每週固定時段，國定假日、臨時公休、提早打烊、颱風天全部不在範圍。例外日需要自己的資料表、日曆 UI 與優先序規則（例外覆蓋固定時段），規模與 G14 本身相當，合在一起會讓 G14 的 S1 失去「合併後零影響」的性質。現階段的替代方案是切 `active` 一天，不精緻但臨時公休是低頻事件。**資料形狀（一段時間 + 一個日期）與 `branch_hours` 同構，日後補一張 `branch_hours_overrides` 是純加法**，不必回頭改 G14。編號說明：`G17` 由 G06 第 13.6 節占用、`G18` 由 G13 第 11.3 節的區域定價占用，G19 是下一個未使用號。
 
 ## 排定的工作順序
@@ -152,9 +160,10 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 3. ~~**Codex 依 `specs/G13-branch-menu-availability.md` 實作分店可用性與售罄**~~ —— 已完成，PR #20 於 2026-09-20 合併（S1/S2/S3 三階段，Flyway 占用 V4，進度報告見 [`reports/G13-branch-menu-availability.md`](reports/G13-branch-menu-availability.md)）
 4. ~~**Claude 產出 G11 + G15 合併規格書（稽核軌跡與現金日結）**~~ —— 已完成，規格書 v1.2 於 2026-09-19 隨 [PR #17](https://github.com/choka1227/coffee_GPT6/pull/17) 合併（兩輪 `REQUEST_CHANGES` 後由 Codex 核准）。閘門解除
 5. ~~**Codex 依 [`specs/G11-G15-audit-and-cash-sessions.md`](specs/G11-G15-audit-and-cash-sessions.md) 實作稽核軌跡與現金日結**~~ —— 已完成，PR #22 於 2026-09-20 合併（S1–S4 四階段全數完成，Flyway 占用 V5／V6，進度報告見 [`reports/G11-G15-audit-cash-sessions-progress.md`](reports/G11-G15-audit-cash-sessions-progress.md)）
-6. **← 目前這一項：Codex 依 [`specs/G10-order-list-pagination.md`](specs/G10-order-list-pagination.md) 實作訂單清單分頁、篩選與 N+1 修正** —— **已於 [PR #26](https://github.com/choka1227/coffee_GPT6/pull/26) 送審，S1–S3 三階段全數完成、CI 綠、Flyway 實際占用 V7**。2026-09-21 的審查退回（`REQUEST_CHANGES`）只針對規格 §10 要求但未寫出的測試（游標越權、同毫秒第二排序鍵、兩種頁大小的查詢次數、三條資料範圍斷言），實作程式碼沒有缺陷。**續作請留在 `codex/g10-order-pagination` 分支補測試，不要另開分支、不要重做已完成的階段。**
-7. **Codex 依 [`specs/G14-branch-business-hours.md`](specs/G14-branch-business-hours.md) 實作分店營業時間** —— 無前置相依，但依 `AGENTS.md`「一次一份」**排在 G10 之後**。與 G10 不相交（G10 動 `OrderService.list()`／`page()` 的讀路徑，G14 動 `create()` 的一行查核），真要並行也不會撞，但實作端只有一個，序列化沒有成本。三個施工階段（S1 資料層與判定、S2 維護 API 與總部 UI、S3 下單強制與顧客端顯示），S1／S2 純加法。**Flyway 用 V8**（V7 已由 G10 的 PR #26 實際占用）。**規格 §5.7 與 §12 第 1 條是硬性要求：不要把時段檢查加進 `requireOpen()`**
-8. 金流那條線（G01–G04 其餘部分）待進入綠界串接階段再排
+6. ~~**Codex 依 [`specs/G10-order-list-pagination.md`](specs/G10-order-list-pagination.md) 實作訂單清單分頁、篩選與 N+1 修正**~~ —— 已完成，[PR #26](https://github.com/choka1227/coffee_GPT6/pull/26) 於 2026-09-21 合併（S1–S3 三階段全數完成，Flyway 實際占用 V7，進度報告見 [`reports/G10-order-list-pagination-progress.md`](reports/G10-order-list-pagination-progress.md)）。審查曾以缺測試退回一輪，補齊後合併。**`codex/g10-order-pagination` 分支已完成任務，不要再從它續作或開新分支**
+7. **← 目前這一項：Codex 依 [`specs/G14-branch-business-hours.md`](specs/G14-branch-business-hours.md) 實作分店營業時間** —— 無前置相依，閘門已解除（G10 已合併）。三個施工階段（S1 資料層與判定、S2 維護 API 與總部 UI、S3 下單強制與顧客端顯示），S1／S2 純加法。**Flyway 用 V8**（V7 已由 PR #26 實際占用）。**規格 §5.7 與 §12 第 1 條是硬性要求：不要把時段檢查加進 `requireOpen()`**
+8. **Codex 依 [`specs/G07-order-discounts.md`](specs/G07-order-discounts.md) 實作訂單折扣與優惠碼** —— 依「一次一份」**排在 G14 之後**。與 G14 不相交（G14 動 `create()` 的分店查核，G07 動 `create()` 的金額計算與讀路徑），但兩者都改 `OrderService.create()` 與 `Orders.java` 的 `Create` record，**同時開工必然衝突**，序列化不是偏好而是必要。四個施工階段（S1 資料層與計算、S2 維護 API 與總部 UI、S3 下單套用與報表、S4 使用次數上限），S1／S2／S4 純加法。**Flyway 用 V9**，即使開工時 V8 還沒進主線也不要改用 V8（理由見規格 §4.0）。**規格 §6.1 是紅線：`Create` 不得有任何金額欄位**
+9. 金流那條線（G01–G04 其餘部分）待進入綠界串接階段再排
 
 ### 排程注意
 
@@ -162,7 +171,9 @@ PR #9（G01 對帳）已於 2026-09-17 08:32 合併，`OrderService` 的衝突�
 
 G01 留在主線的缺陷已寫成獨立規格 [`specs/G01a-reconciliation-fixes.md`](specs/G01a-reconciliation-fixes.md)，用分支 `codex/g01-fixes`，**不要**夾在 G06 的 PR 裡 —— 兩件事、兩支分支。兩者動的是不同模組（`coffee-payments` vs `coffee-orders` / `coffee-catalog`），可以並行。**兩者皆已合併（#14、#15），此段保留為紀錄。**
 
-**目前（2026-09-21）待實作的規格有兩份：G10（第 6 項，實作已在 PR #26 審查中）與 G14（第 7 項，尚未開工），依序做。** G11+G15 的實作已隨 PR #22 整份合併（S1–S4 全數完成），G13 的實作已隨 PR #20 合併，**兩項都沒有未解除的閘門**。Flyway 版號現況：`V1__coffee_schema.sql`、`V2__payment_reconciliation.sql`（#9）、`V3__product_options.sql`（#14）、`V4__branch_menu_availability.sql`（#20）、`V5__audit_trail.sql`、`V6__cash_sessions.sql`（#22）已占用，`V7__order_list_indexes.sql` 由 G10 的 PR #26 占用（尚未合併，但版號已定），**G14 用 V8**。
+**目前（2026-09-21）待實作的規格有兩份：G14（第 7 項，目前這一項）與 G07（第 8 項，待命），依序做。** G10 的實作已隨 PR #26 合併，G11+G15 已隨 PR #22 整份合併（S1–S4 全數完成），G13 已隨 PR #20 合併，**三項都沒有未解除的閘門**。Flyway 版號現況：`V1__coffee_schema.sql`、`V2__payment_reconciliation.sql`（#9）、`V3__product_options.sql`（#14）、`V4__branch_menu_availability.sql`（#20）、`V5__audit_trail.sql`、`V6__cash_sessions.sql`（#22）、`V7__order_list_indexes.sql`（#26）已進主線，**G14 用 V8、G07 用 V9**。
+
+**版號不得互換。** G07 就算先於 G14 開工也一樣用 V9 —— Flyway 預設不接受事後補插較小版號（out-of-order），G07 若占走 V8，G14 之後在既有資料庫上就無號可用。空一個版號的成本是零。
 
 規格庫存維持 2 份（一份在做、一份待命）是刻意的上限：實作端一次只做一份，且一份可能跨多次執行，堆更多只會變成永遠做不完的清單。**庫存滿 2 份時不再產出新規格。**
 
@@ -174,6 +185,7 @@ G01 留在主線的缺陷已寫成獨立規格 [`specs/G01a-reconciliation-fixes
 
 | 日期 | 變更 |
 | --- | --- |
+| 2026-09-21 | 登記 G07 規格書（[`specs/G07-order-discounts.md`](specs/G07-order-discounts.md)，v1.0）：訂單層折扣與優惠碼、一張訂單最多一個（由 `order_discounts.order_id` 主鍵強制）、後端依規則重算且 `Create` 不得有任何金額欄位、`orders` 只加 `discount_amount DEFAULT 0`（既有資料零遷移）；四個施工階段，S1／S2／S4 純加法。P1 表 G07 由「未開始」改為「規格書已完成，待實作」，工作順序新增第 8 項並把金流順延為第 9 項。**同批對齊 G10 實作隨 PR #26 合併後的現況** —— 主線這份仍寫「實作審查中」與「續作請留在 `codex/g10-order-pagination` 分支補測試」，照舊文字會讓實作端去續作一支任務已完成的分支，且誤以為 G14 還沒輪到：P1 表 G10 改為「實作已合併」，工作順序第 6 項標為完成、**第 7 項（G14）改標為目前這一項**，Flyway 現況把 V7 由「已定但未合併」改為已進主線。寫規格時撞到 V1 的 `orders.total CHECK(total>0)` 且 `AGENTS.md` 禁止改既有 migration，匿名 CHECK 又無跨 H2／PostgreSQL 可靠的移除寫法 —— **折後金額下限定為 1 元、百分比上限 90%，不支援免費訂單**（規格 §11.5）。品項層折扣／買一送一登記為 **G20**、會員價與員工價登記為 **G21**（P2 表） |
 | 2026-09-21 | 把主線 merge 進 `claude/spec-g14` 解 `GAP-ANALYSIS.md` 衝突（本 PR 與已合併的 PR #23 都改 P1 表、工作順序與修訂紀錄，依 PR 描述的約定順序 #23 先合）。同批登記 G10 實作現況：P1 表 G10 改為「實作審查中（PR #26）」、工作順序第 6 項補上 PR 連結與「續作留在 `codex/g10-order-pagination` 分支」的指示，**G14 的 Flyway 由「預期 V8」改為確定的 V8**（V7 已由 PR #26 實際占用，實作端不必再判斷）。另依 PR #24 上 Codex 的 `REQUEST_CHANGES` 修正 G14 規格書的授權邊界矛盾，見同日下一列 |
 | 2026-09-21 | G14 規格書 v1.1（依 PR #24 上 Codex 的 `REQUEST_CHANGES`）：原 §5.2／§5.4 與驗收 7 寫「`GET /api/branches/{id}/hours` 公開（與 `GET /api/branches` 同級）」，但主線 `SecurityConfiguration` 對所有 `/api/**` 一律 `authenticated()`，`GET /api/branches` 本身就不是公開端點 —— **「同級」這個前提從一開始就是錯的**。若照原文施工，實作端不改 `SecurityConfiguration`（S2 的檔案清單也沒列它）就必然回 401，驗收 7 永遠過不了。**決定：改為與 `GET /api/branches` 真正同級，即需要登入**，`SecurityConfiguration` 一個字不動 |
 | 2026-09-20 | 登記 G14 規格書（[`specs/G14-branch-business-hours.md`](specs/G14-branch-business-hours.md)，v1.0）：每週固定營業時段、`branch_hours` 一列一段（天然支援分段與跨夜）、沒有時段列＝24 小時營業（既有資料零遷移）、時段只對顧客自助下單強制、不新增權限常數因此不需要角色 migration；三個施工階段，S1／S2 純加法。P1 表 G14 由「未開始」改為「規格書已完成，待實作」，工作順序新增第 7 項並把金流順延為第 8 項。**寫規格時發現 `requireOpen()` 被 `IdentityService.saveAccount()` 共用**（`IdentityService.java:93`），把時段檢查加進去會讓總部在非營業時間無法管理該分店帳號 —— 規格 §5.7 明文禁止，改為新增 `requireOrderable()`。例外日／公休日排除在外，登記為 **G19**（P2 表） |
