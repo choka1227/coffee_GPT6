@@ -15,8 +15,15 @@ import {
 } from "lucide-vue-next";
 import { useAuth } from "../identity/store";
 import { api, send } from "../../shared/api";
-import type { Product, Branch, CartLine, Order } from "../../shared/types";
-import { money } from "../../shared/format";
+import type {
+  Product,
+  Branch,
+  BranchHours,
+  BranchHoursResponse,
+  CartLine,
+  Order,
+} from "../../shared/types";
+import { minuteTime, money } from "../../shared/format";
 import { notify } from "../../shared/notice";
 import Modal from "../../shared/Modal.vue";
 import { openEcpay } from "../payments/ecpay";
@@ -40,6 +47,7 @@ const auth = useAuth(),
   selectedOptionIds = ref<string[]>([]),
   quantity = ref(1),
   receipt = ref<Order | null>(null),
+  branchHours = ref<BranchHours[]>([]),
   config = ref({ enabled: false, environment: "stage" });
 let retryBody = "",
   retryKey = "";
@@ -69,6 +77,30 @@ const optionsValid = computed(() =>
 const branch = computed(() =>
   branches.value.find((b) => b.id === branchId.value),
 );
+const customerClosed = computed(
+  () => auth.customer && !!branch.value && !branch.value.openNow,
+);
+const dayNames = ["", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"];
+const schedule = computed(() =>
+  dayNames.slice(1).map((name, index) => {
+    const periods = branchHours.value.filter((period) => period.dayOfWeek === index + 1);
+    return {
+      name,
+      text: periods.length
+        ? periods
+            .map(
+              (period) =>
+                `${minuteTime(period.openMinute)}–${
+                  period.closeMinute <= period.openMinute ? "隔日 " : ""
+                }${minuteTime(period.closeMinute)}`,
+            )
+            .join("、")
+        : branchHours.value.length
+          ? "未營業"
+          : "24 小時營業",
+    };
+  }),
+);
 const permittedBranches = computed(() =>
   auth.customer || auth.user?.scope === "GLOBAL"
     ? branches.value
@@ -79,6 +111,20 @@ const unavailableCart = computed(() => {
   return cart.value.filter((line) => menu.get(line.productId)?.availability !== "AVAILABLE");
 });
 let menuReady = false;
+async function loadBranchHours(showError = true) {
+  if (!branchId.value) {
+    branchHours.value = [];
+    return;
+  }
+  try {
+    const result = await api<BranchHoursResponse>(`/branches/${branchId.value}/hours`);
+    branchHours.value = result.hours;
+  } catch (e) {
+    branchHours.value = [];
+    if (showError) error.value = (e as Error).message;
+    else notify((e as Error).message);
+  }
+}
 async function loadMenu(showError = true) {
   if (!branchId.value) {
     products.value = [];
@@ -105,7 +151,7 @@ async function load() {
     branches.value = b;
     config.value = c;
     if (!b.some((branch) => branch.id === branchId.value)) branchId.value = b[0]?.id || "";
-    await loadMenu();
+    await Promise.all([loadMenu(), loadBranchHours()]);
     menuReady = true;
   } catch (e) {
     error.value = (e as Error).message;
@@ -118,11 +164,11 @@ watch(branchId, async () => {
   if (!menuReady) return;
   error.value = "";
   loading.value = true;
-  await loadMenu(false);
+  await Promise.all([loadMenu(false), loadBranchHours(false)]);
   loading.value = false;
 });
 function choose(p: Product) {
-  if (busy.value || p.availability === "SOLD_OUT") return;
+  if (busy.value || customerClosed.value || p.availability === "SOLD_OUT") return;
   selected.value = p;
   selectedOptionIds.value = p.optionGroups
     .filter((g) => g.minSelect > 0)
@@ -140,6 +186,10 @@ function toggleOption(groupId: string | null, itemId: string | null, single: boo
   else if (!single) selectedOptionIds.value = selectedOptionIds.value.filter((id) => id !== itemId);
 }
 function add() {
+  if (customerClosed.value) {
+    notify("分店目前未營業，請選擇其他分店或於營業時間再下單");
+    return;
+  }
   const p = selected.value;
   if (!p?.id) return;
   const existing = cart.value.find(
@@ -182,6 +232,10 @@ async function checkout() {
   if (busy.value || !cart.value.length) return;
   if (!branchId.value) {
     notify("請先選擇分店");
+    return;
+  }
+  if (customerClosed.value) {
+    notify("分店目前未營業，請選擇其他分店或於營業時間再下單");
     return;
   }
   if (unavailableCart.value.length) {
@@ -291,11 +345,23 @@ async function toggleAvailability(p: Product) {
             :disabled="busy || permittedBranches.length <= 1"
           >
             <option v-for="b in permittedBranches" :key="b.id!" :value="b.id">
-              {{ b.name }}
+              {{ b.name }}{{ auth.customer ? (b.openNow ? " · 營業中" : " · 已打烊") : "" }}
             </option>
           </select>
         </div>
       </div>
+      <section v-if="auth.customer && branch" class="hours-status" :class="{ closed: customerClosed }">
+        <div>
+          <strong>{{ customerClosed ? "目前已打烊" : "目前營業中" }}</strong>
+          <span>{{ branch.name }}營業時間</span>
+        </div>
+        <dl>
+          <template v-for="day in schedule" :key="day.name">
+            <dt>{{ day.name }}</dt><dd>{{ day.text }}</dd>
+          </template>
+        </dl>
+        <p v-if="customerClosed">目前仍可瀏覽菜單；請選擇營業中的分店或於營業時間再下單。</p>
+      </section>
       <div v-if="auth.customer" class="coffee-banner">
         <div>
           <span class="eyebrow">THE HOUSE FAVORITE</span>
@@ -355,7 +421,7 @@ async function toggleAvailability(p: Product) {
           :class="{ unavailable: p.availability === 'SOLD_OUT' }"
           role="button"
           tabindex="0"
-          :aria-disabled="busy || p.availability === 'SOLD_OUT'"
+          :aria-disabled="busy || customerClosed || p.availability === 'SOLD_OUT'"
           @click="choose(p)"
           @keydown.enter="choose(p)"
           @keydown.space.prevent="choose(p)"
@@ -500,7 +566,7 @@ async function toggleAvailability(p: Product) {
       </div>
       <button
         class="btn primary checkout"
-        :disabled="!cart.length || busy || !branchId || !!unavailableCart.length"
+        :disabled="!cart.length || busy || !branchId || customerClosed || !!unavailableCart.length"
         @click="checkout"
       >
         {{
@@ -554,7 +620,7 @@ async function toggleAvailability(p: Product) {
         ><button
           class="btn primary"
           :disabled="
-            !Number.isInteger(quantity) || quantity < 1 || quantity > 50 || !optionsValid
+            customerClosed || !Number.isInteger(quantity) || quantity < 1 || quantity > 50 || !optionsValid
           "
           @click="add"
         >

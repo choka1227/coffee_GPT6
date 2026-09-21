@@ -1,16 +1,43 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
-import { Plus, MapPin, Phone, Store, Pencil, Target } from "lucide-vue-next";
+import {
+  Plus,
+  MapPin,
+  Phone,
+  Store,
+  Pencil,
+  Target,
+  Clock,
+  Trash2,
+} from "lucide-vue-next";
 import { api, send } from "../../shared/api";
-import type { Branch } from "../../shared/types";
-import { money } from "../../shared/format";
+import type {
+  Branch,
+  BranchHours,
+  BranchHoursResponse,
+} from "../../shared/types";
+import { minuteTime, money } from "../../shared/format";
 import { notify } from "../../shared/notice";
 import Modal from "../../shared/Modal.vue";
 const branches = ref<Branch[]>([]),
   editing = ref<Branch | null>(null),
   loading = ref(true),
   error = ref(""),
-  saving = ref(false);
+  saving = ref(false),
+  hoursBranch = ref<Branch | null>(null),
+  hours = ref<BranchHours[]>([]),
+  hoursLoading = ref(false),
+  hoursSaving = ref(false);
+const dayNames = [
+  "",
+  "星期一",
+  "星期二",
+  "星期三",
+  "星期四",
+  "星期五",
+  "星期六",
+  "星期日",
+];
 async function load() {
   loading.value = true;
   error.value = "";
@@ -31,6 +58,7 @@ function add() {
     phone: "",
     active: true,
     monthlyTarget: 300000,
+    openNow: true,
   };
 }
 async function save() {
@@ -44,6 +72,72 @@ async function save() {
     notify((e as Error).message);
   } finally {
     saving.value = false;
+  }
+}
+function parseMinute(value: string, close = false) {
+  if (close && value === "24:00") return 1440;
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) throw new Error(close ? "結束時間不正確" : "開始時間不正確");
+  const hour = Number(match[1]),
+    minute = Number(match[2]);
+  if (hour > 23 || minute > 59)
+    throw new Error(close ? "結束時間不正確" : "開始時間不正確");
+  return hour * 60 + minute;
+}
+async function editHours(branch: Branch) {
+  hoursBranch.value = branch;
+  hoursLoading.value = true;
+  try {
+    const result = await api<BranchHoursResponse>(
+      `/branches/${branch.id}/hours`,
+    );
+    hours.value = result.hours.map((period) => ({ ...period }));
+  } catch (e) {
+    notify((e as Error).message);
+    hoursBranch.value = null;
+  } finally {
+    hoursLoading.value = false;
+  }
+}
+function dayHours(day: number) {
+  return hours.value.filter((period) => period.dayOfWeek === day);
+}
+function addHours(day: number) {
+  hours.value.push({ dayOfWeek: day, openMinute: 540, closeMinute: 1260 });
+}
+function removeHours(period: BranchHours) {
+  hours.value = hours.value.filter((candidate) => candidate !== period);
+}
+async function saveHours() {
+  if (!hoursBranch.value?.id) return;
+  hoursSaving.value = true;
+  try {
+    const result = await send<BranchHoursResponse>(
+      `/branches/${hoursBranch.value.id}/hours`,
+      { hours: hours.value },
+      "PUT",
+    );
+    hours.value = result.hours;
+    notify("營業時間已儲存");
+    hoursBranch.value = null;
+  } catch (e) {
+    notify((e as Error).message);
+  } finally {
+    hoursSaving.value = false;
+  }
+}
+function updateTime(
+  period: BranchHours,
+  field: "openMinute" | "closeMinute",
+  event: Event,
+) {
+  try {
+    period[field] = parseMinute(
+      (event.target as HTMLInputElement).value,
+      field === "closeMinute",
+    );
+  } catch (e) {
+    notify((e as Error).message);
   }
 }
 </script>
@@ -106,6 +200,9 @@ async function save() {
           <button class="btn secondary" @click="editing = { ...b }">
             <Pencil :size="16" />編輯分店
           </button>
+          <button class="btn secondary" @click="editHours(b)">
+            <Clock :size="16" />營業時間
+          </button>
         </div>
       </article>
     </div>
@@ -142,4 +239,100 @@ async function save() {
       </button>
     </form></Modal
   >
+  <Modal
+    v-if="hoursBranch"
+    :title="`${hoursBranch.name}・營業時間`"
+    wide
+    @close="!hoursSaving && (hoursBranch = null)"
+  >
+    <div v-if="hoursLoading" class="loading-state">讀取營業時間中…</div>
+    <form v-else class="hours-form" @submit.prevent="saveHours">
+      <p v-if="hours.length === 0" class="hours-empty">
+        目前未設定營業時間，視為 24 小時營業。
+      </p>
+      <div v-for="day in 7" :key="day" class="hours-day">
+        <div class="hours-day-title">
+          <strong>{{ dayNames[day] }}</strong>
+          <button class="btn secondary" type="button" @click="addHours(day)">
+            <Plus :size="15" />新增時段
+          </button>
+        </div>
+        <p v-if="dayHours(day).length === 0" class="muted">本日未設定時段</p>
+        <div
+          v-for="(period, index) in dayHours(day)"
+          :key="`${period.dayOfWeek}-${period.openMinute}-${period.closeMinute}-${index}`"
+          class="hours-row"
+        >
+          <input
+            type="text"
+            inputmode="numeric"
+            pattern="[0-2][0-9]:[0-5][0-9]"
+            :value="minuteTime(period.openMinute)"
+            aria-label="開始時間"
+            @change="updateTime(period, 'openMinute', $event)"
+          />
+          <span>至</span>
+          <input
+            type="text"
+            inputmode="numeric"
+            pattern="(?:[0-2][0-9]):[0-5][0-9]"
+            :value="minuteTime(period.closeMinute)"
+            aria-label="結束時間"
+            @change="updateTime(period, 'closeMinute', $event)"
+          />
+          <button
+            class="icon-btn"
+            type="button"
+            aria-label="刪除時段"
+            @click="removeHours(period)"
+          >
+            <Trash2 :size="17" />
+          </button>
+        </div>
+      </div>
+      <p class="form-hint">結束時間早於或等於開始時間時，代表營業至隔日。</p>
+      <button class="btn primary" :disabled="hoursSaving">
+        {{ hoursSaving ? "儲存中…" : "儲存營業時間" }}
+      </button>
+    </form>
+  </Modal>
 </template>
+
+<style scoped>
+.branch-card-body > .btn + .btn {
+  margin-left: 0.5rem;
+}
+.hours-form {
+  display: grid;
+  gap: 1rem;
+}
+.hours-empty {
+  margin: 0;
+  padding: 0.8rem 1rem;
+  border-radius: 0.6rem;
+  background: #fff7df;
+  color: #6a4a00;
+}
+.hours-day {
+  border-bottom: 1px solid var(--border, #dedbd3);
+  padding-bottom: 0.8rem;
+}
+.hours-day-title,
+.hours-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.hours-day-title {
+  justify-content: space-between;
+}
+.hours-row {
+  margin-top: 0.6rem;
+}
+.hours-row input {
+  min-width: 8rem;
+}
+.hours-day .muted {
+  margin: 0.55rem 0 0;
+}
+</style>

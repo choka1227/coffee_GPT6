@@ -11,6 +11,8 @@
 | POST | /api/auth/password | oldPassword, newPassword |
 | GET | /api/branches | 營業中分店清單；manage=true 需 BRANCH_MANAGE |
 | POST | /api/branches | 新增 / 更新分店；BRANCH_MANAGE + GLOBAL |
+| GET | /api/branches/{id}/hours | 分店每週營業時段與 openNow；任何已登入帳號可讀 |
+| PUT | /api/branches/{id}/hours | 整批取代分店營業時段；BRANCH_MANAGE + GLOBAL + CSRF |
 | GET | /api/menu?branchId={id} | 分店點餐菜單；branchId 必填，回傳 AVAILABLE / SOLD_OUT，UNLISTED 不回傳 |
 | GET | /api/menu?manage=true | 全鏈菜單；MENU_MANAGE，可取得成本及已下架商品，忽略 branchId |
 | POST | /api/menu | 新增 / 更新商品；MENU_MANAGE + GLOBAL |

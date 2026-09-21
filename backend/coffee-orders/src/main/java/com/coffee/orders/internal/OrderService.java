@@ -52,8 +52,11 @@ public class OrderService implements Orders {
       Problem.check(fingerprint.equals(existing.get(0).get("request_hash")), "同一識別碼不能用於不同訂單");
       return get(a, (String) existing.get(0).get("id"));
     }
-    branches.requireOpen(q.branchId());
-    if (!a.customer()) {
+    long now = System.currentTimeMillis();
+    if (a.customer()) {
+      branches.requireOrderable(q.branchId(), now);
+    } else {
+      branches.requireOpen(q.branchId());
       a.require("POS_ORDER");
       a.branch(q.branchId());
     }
@@ -84,7 +87,7 @@ public class OrderService implements Orders {
         q.paymentMethod(),
         total,
         q.note(),
-        System.currentTimeMillis(),
+        now,
         key,
         fingerprint);
     for (int i = 0; i < q.items().size(); i++) {
