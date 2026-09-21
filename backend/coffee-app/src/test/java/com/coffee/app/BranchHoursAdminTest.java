@@ -148,10 +148,7 @@ class BranchHoursAdminTest {
     } finally {
       executor.shutdownNow();
     }
-    assertThat(branches.hours("taipei"))
-        .satisfiesAnyOf(
-            result -> assertThat(result).containsExactlyElementsOf(first),
-            result -> assertThat(result).containsExactlyElementsOf(second));
+    assertThat(branches.hours("taipei")).isIn(first, second);
   }
 
   private void saveAfterSignal(
