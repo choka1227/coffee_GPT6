@@ -5,6 +5,10 @@ export const money = (n: number) =>
     maximumFractionDigits: 0,
   }).format(n);
 export const number = (n: number) => new Intl.NumberFormat("zh-TW").format(n);
+export const minuteTime = (value: number) =>
+  value === 1440
+    ? "24:00"
+    : `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
 export const dateTime = (n: number) =>
   new Intl.DateTimeFormat("zh-TW", {
     timeZone: "Asia/Taipei",

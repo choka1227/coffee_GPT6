@@ -19,5 +19,7 @@ public interface Branches {
 
   Branch requireOrderable(String id, long atEpochMs);
 
+  List<Hours> saveHours(Actor actor, String branchId, List<Hours> hours);
+
   Branch save(Actor actor, Branch branch);
 }

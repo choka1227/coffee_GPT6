@@ -15,6 +15,16 @@ export interface Branch {
   active: boolean;
   monthlyTarget: number;
 }
+export interface BranchHours {
+  dayOfWeek: number;
+  openMinute: number;
+  closeMinute: number;
+}
+export interface BranchHoursResponse {
+  branchId: string;
+  openNow: boolean;
+  hours: BranchHours[];
+}
 export interface Product {
   id: string | null;
   name: string;
