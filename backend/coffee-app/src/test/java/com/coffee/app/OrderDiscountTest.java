@@ -79,12 +79,16 @@ class OrderDiscountTest {
 
   @Test
   void reportShowsDiscountAndRevenueAfterPayment() {
+    String month = YearMonth.now().toString();
+    var before = reports.report(headquarters, month, null);
     insert("LESS-20", "AMOUNT", 0, 20, 0, null);
     Orders.Order order = create("LESS-20", UUID.randomUUID().toString());
     orders.cash(cashier, order.id(), order.total());
-    var report = reports.report(headquarters, YearMonth.now().toString(), null);
-    assertThat(report.get("discount")).isEqualTo(20L);
-    assertThat(report.get("revenue")).isEqualTo((long) order.total());
+    var report = reports.report(headquarters, month, null);
+    assertThat(((Number) report.get("discount")).longValue()
+        - ((Number) before.get("discount")).longValue()).isEqualTo(20L);
+    assertThat(((Number) report.get("revenue")).longValue()
+        - ((Number) before.get("revenue")).longValue()).isEqualTo(order.total());
   }
 
   private Orders.Order create(String code, String key) {
