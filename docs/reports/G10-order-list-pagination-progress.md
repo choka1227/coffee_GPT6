@@ -20,4 +20,5 @@
 ## 驗證計畫
 
 - 覆蓋游標格式、跨頁不重複、同毫秒第二排序鍵、篩選、授權、CSRF 與固定查詢次數。
+- Review 回歸測試另覆蓋跨帳號游標、GLOBAL／BRANCH／SELF 範圍、上下限修正、大小寫不敏感關鍵字，以及 5／50 筆頁面固定三次查詢。
 - 執行 frontend build、backend verify，並以最新 head 的 GitHub Actions 補足遠端驗證。
