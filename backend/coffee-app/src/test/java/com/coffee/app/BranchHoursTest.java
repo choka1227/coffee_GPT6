@@ -1,13 +1,17 @@
 package com.coffee.app;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
+import com.coffee.audit.api.Audit;
 import com.coffee.branches.api.Branches.Hours;
 import com.coffee.branches.internal.BranchService;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 
 class BranchHoursTest {
   private static final ZoneId TAIPEI = ZoneId.of("Asia/Taipei");
@@ -70,5 +74,25 @@ class BranchHoursTest {
     long sundayAt2300Utc = 1789945200000L;
     assertThat(BranchService.isOpenAt(List.of(new Hours(1, 420, 480)), sundayAt2300Utc))
         .isTrue();
+  }
+
+  @Test
+  void currentStatusForManyBranchesUsesOneHoursQuery() {
+    var database = new CountingJdbcTemplate();
+    var service = new BranchService(database, mock(Audit.class));
+
+    assertThat(service.openAt(List.of("one", "two", "three", "four"), taipei(21, 12, 0, 0, 0)))
+        .containsOnlyKeys("one", "two", "three", "four")
+        .allSatisfy((branch, open) -> assertThat(open).isTrue());
+    assertThat(database.queries).isEqualTo(1);
+  }
+
+  private static class CountingJdbcTemplate extends JdbcTemplate {
+    int queries;
+
+    @Override
+    public void query(String sql, RowCallbackHandler handler) {
+      queries++;
+    }
   }
 }

@@ -58,6 +58,7 @@ function add() {
     phone: "",
     active: true,
     monthlyTarget: 300000,
+    openNow: true,
   };
 }
 async function save() {

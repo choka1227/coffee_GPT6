@@ -2,6 +2,7 @@ package com.coffee.branches.api;
 
 import com.coffee.shared.Actor;
 import java.util.List;
+import java.util.Map;
 
 public interface Branches {
   record Branch(
@@ -16,6 +17,8 @@ public interface Branches {
   List<Hours> hours(String branchId);
 
   boolean openAt(String branchId, long atEpochMs);
+
+  Map<String, Boolean> openAt(List<String> branchIds, long atEpochMs);
 
   Branch requireOrderable(String id, long atEpochMs);
 

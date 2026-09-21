@@ -8,6 +8,15 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/branches")
 class BranchController {
+  record BranchResponse(
+      String id,
+      String name,
+      String address,
+      String phone,
+      boolean active,
+      int monthlyTarget,
+      boolean openNow) {}
+
   record HoursRequest(List<Branches.Hours> hours) {}
 
   record HoursResponse(String branchId, boolean openNow, List<Branches.Hours> hours) {}
@@ -19,9 +28,24 @@ class BranchController {
   }
 
   @GetMapping
-  List<Branches.Branch> list(
+  List<BranchResponse> list(
       @RequestAttribute Actor actor, @RequestParam(defaultValue = "false") boolean manage) {
-    return service.list(actor, manage);
+    var branches = service.list(actor, manage);
+    var open =
+        service.openAt(
+            branches.stream().map(Branches.Branch::id).toList(), System.currentTimeMillis());
+    return branches.stream()
+        .map(
+            branch ->
+                new BranchResponse(
+                    branch.id(),
+                    branch.name(),
+                    branch.address(),
+                    branch.phone(),
+                    branch.active(),
+                    branch.monthlyTarget(),
+                    open.get(branch.id())))
+        .toList();
   }
 
   @PostMapping

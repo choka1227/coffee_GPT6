@@ -14,6 +14,7 @@ export interface Branch {
   phone: string;
   active: boolean;
   monthlyTarget: number;
+  openNow: boolean;
 }
 export interface BranchHours {
   dayOfWeek: number;

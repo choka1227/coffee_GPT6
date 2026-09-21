@@ -65,6 +65,24 @@ public class BranchService implements Branches {
     return isOpenAt(hours(branchId), atEpochMs);
   }
 
+  public Map<String, Boolean> openAt(List<String> branchIds, long atEpochMs) {
+    if (branchIds.isEmpty()) return Map.of();
+    Map<String, List<Hours>> schedules = new HashMap<>();
+    db.query(
+        "select branch_id,day_of_week,open_minute,close_minute from branch_hours"
+            + " order by branch_id,day_of_week,open_minute",
+        result -> {
+          schedules
+              .computeIfAbsent(result.getString(1), ignored -> new ArrayList<>())
+              .add(new Hours(result.getInt(2), result.getInt(3), result.getInt(4)));
+        });
+    Map<String, Boolean> result = new LinkedHashMap<>();
+    for (String branchId : branchIds) {
+      result.put(branchId, isOpenAt(schedules.getOrDefault(branchId, List.of()), atEpochMs));
+    }
+    return result;
+  }
+
   public Branch requireOrderable(String id, long atEpochMs) {
     Branch branch = requireOpen(id);
     List<Hours> schedule = hours(id);
