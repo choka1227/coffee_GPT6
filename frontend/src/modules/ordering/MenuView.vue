@@ -40,6 +40,7 @@ const auth = useAuth(),
   fulfillment = ref("TAKEAWAY"),
   payment = ref("CASH"),
   note = ref(""),
+  discountCode = ref(""),
   tendered = ref<number | undefined>(),
   busy = ref(false),
   mobileCart = ref(false),
@@ -259,6 +260,7 @@ async function checkout() {
       fulfillment: fulfillment.value,
       paymentMethod: payment.value,
       note: note.value,
+      discountCode: discountCode.value,
       items: cart.value.map(({ productId, quantity, optionIds }) => ({
         productId,
         quantity,
@@ -275,6 +277,7 @@ async function checkout() {
     });
     cart.value = [];
     note.value = "";
+    discountCode.value = "";
     retryBody = "";
     retryKey = "";
     if (payment.value === "ECPAY") {
@@ -528,6 +531,13 @@ async function toggleAvailability(p: Product) {
             placeholder="有什麼想讓我們知道的？"
             rows="2"
           ></textarea></label
+        ><label class="payment-choice"
+          >優惠碼 <span>選填</span><input
+            v-model="discountCode"
+            maxlength="20"
+            autocomplete="off"
+            placeholder="輸入優惠碼"
+          /></label
         ><label class="payment-choice"
           >付款方式<select v-model="payment">
             <option value="CASH">

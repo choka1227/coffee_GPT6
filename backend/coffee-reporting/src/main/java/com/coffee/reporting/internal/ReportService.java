@@ -20,6 +20,7 @@ public class ReportService {
       String branchId,
       String branchName,
       int total,
+      int discountAmount,
       long paidAt,
       String fulfillment,
       String method) {}
@@ -47,7 +48,7 @@ public class ReportService {
     if (branch != null) params.add(branch);
     var sales =
         db.query(
-            "select o.id,o.branch_id,b.name,o.total,o.paid_at,o.fulfillment,o.payment_method from"
+            "select o.id,o.branch_id,b.name,o.total,o.discount_amount,o.paid_at,o.fulfillment,o.payment_method from"
                 + " orders o join branches b on b.id=o.branch_id where o.paid_at>=? and o.paid_at<?"
                 + filter,
             (r, n) ->
@@ -56,11 +57,13 @@ public class ReportService {
                     r.getString(2),
                     r.getString(3),
                     r.getInt(4),
-                    r.getLong(5),
-                    r.getString(6),
-                    r.getString(7)),
+                    r.getInt(5),
+                    r.getLong(6),
+                    r.getString(7),
+                    r.getString(8)),
             params.toArray());
     long revenue = sales.stream().mapToLong(Sale::total).sum();
+    long discount = sales.stream().mapToLong(Sale::discountAmount).sum();
     long count = sales.size();
     List<Map<String, Object>> daily = new ArrayList<>();
     for (int day = 1; day <= m.lengthOfMonth(); day++) {
@@ -149,6 +152,7 @@ public class ReportService {
         Map.entry("month", month),
         Map.entry("today", today.toString()),
         Map.entry("revenue", revenue),
+        Map.entry("discount", discount),
         Map.entry("orders", count),
         Map.entry("averageOrder", count == 0 ? 0 : Math.round((double) revenue / count)),
         Map.entry("quantity", quantity),

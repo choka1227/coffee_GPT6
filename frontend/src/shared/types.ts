@@ -95,6 +95,16 @@ export interface Order {
   fulfillment: string;
   paymentMethod: string;
   total: number;
+  subtotal: number;
+  discountAmount: number;
+  discount: {
+    code: string;
+    name: string;
+    kind: "PERCENT" | "AMOUNT";
+    percent: number;
+    amount: number;
+    discountAmount: number;
+  } | null;
   note: string;
   createdAt: number;
   paidAt: number | null;
@@ -163,6 +173,7 @@ export interface Report {
   month: string;
   today: string;
   revenue: number;
+  discount: number;
   orders: number;
   averageOrder: number;
   quantity: number;
@@ -191,6 +202,21 @@ export interface Report {
   cashOrders: number;
   onlineOrders: number;
   takeawayOrders: number;
+}
+export interface DiscountRule {
+  id: string | null;
+  code: string;
+  name: string;
+  kind: "PERCENT" | "AMOUNT";
+  percent: number;
+  amount: number;
+  minSubtotal: number;
+  branchId: string | null;
+  startsAt: number | null;
+  endsAt: number | null;
+  maxRedemptions: number | null;
+  redeemedCount: number;
+  active: boolean;
 }
 export interface ReconciliationPending {
   orderId: string;

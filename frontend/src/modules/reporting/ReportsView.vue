@@ -156,6 +156,7 @@ function exportReport() {
   csv("coffee-report-" + r.month + ".csv", [
     ["月份", r.month],
     ["營業額", r.revenue],
+    ["優惠折抵", r.discount],
     ["訂單數", r.orders],
     ["平均客單價", r.averageOrder],
     ["商品毛利（未扣營運費用）", r.grossProfit],
@@ -244,6 +245,11 @@ function exportReport() {
           <div><span>本月營業額</span><Wallet :size="19" /></div>
           <h2>{{ money(report.revenue) }}</h2>
           <small>已確認付款 · {{ month }}</small>
+        </article>
+        <article class="kpi">
+          <div><span>優惠折抵</span><Receipt :size="19" /></div>
+          <h2>{{ money(report.discount) }}</h2>
+          <small>已付款訂單使用優惠碼的折抵總額</small>
         </article>
         <article class="kpi">
           <div><span>成交訂單</span><Receipt :size="19" /></div>
