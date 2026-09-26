@@ -59,6 +59,38 @@ class DiscountRedemptionTest {
   }
 
   @Test
+  void unavailableCodesReturnTheSameNotFoundProblem() {
+    long at = 1_000_000L;
+    insert("INACTIVE", null, false, null, null, null);
+    insert("FUTURE", null, true, at + 1, null, null);
+    insert("EXPIRED", null, true, null, at - 1, null);
+    insert("OTHER-BRANCH", null, true, null, null, "taichung");
+
+    assertInvalid("INACTIVE", at);
+    assertInvalid("FUTURE", at);
+    assertInvalid("EXPIRED", at);
+    assertInvalid("OTHER-BRANCH", at);
+    assertInvalid("MISSING", at);
+
+    assertThat(count("INACTIVE")).isZero();
+    assertThat(count("FUTURE")).isZero();
+    assertThat(count("EXPIRED")).isZero();
+    assertThat(count("OTHER-BRANCH")).isZero();
+  }
+
+  @Test
+  void startAndEndTimesAreInclusive() {
+    long at = 1_000_000L;
+    insert("START-NOW", null, true, at, null, null);
+    insert("END-NOW", null, true, null, at, null);
+
+    assertThat(discounts.apply("START-NOW", "taipei", 505, at)).isNotNull();
+    assertThat(discounts.apply("END-NOW", "taipei", 505, at)).isNotNull();
+    assertThat(count("START-NOW")).isEqualTo(1);
+    assertThat(count("END-NOW")).isEqualTo(1);
+  }
+
+  @Test
   void concurrentRedemptionsCannotExceedTheCap() throws Exception {
     insert("RACE-ONE", 1);
     var ready = new CountDownLatch(2);
@@ -96,13 +128,28 @@ class DiscountRedemptionTest {
   }
 
   private void insert(String code, Integer max) {
+    insert(code, max, true, null, null, null);
+  }
+
+  private void insert(
+      String code, Integer max, boolean active, Long startsAt, Long endsAt, String branchId) {
     long now = System.currentTimeMillis();
     db.update(
         "insert into discounts(id,code,name,kind,percent,amount,min_subtotal,branch_id,"
             + "starts_at,ends_at,max_redemptions,redeemed_count,active,created_at,updated_at)"
             + " values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        UUID.randomUUID().toString(), code, code, "PERCENT", 10, 0, 0, null, null, null, max,
-        0, true, now, now);
+        UUID.randomUUID().toString(), code, code, "PERCENT", 10, 0, 0, branchId, startsAt,
+        endsAt, max, 0, active, now, now);
+  }
+
+  private void assertInvalid(String code, long at) {
+    assertThatThrownBy(() -> discounts.apply(code, "taipei", 505, at))
+        .isInstanceOfSatisfying(
+            Problem.class,
+            problem -> {
+              assertThat(problem.status).isEqualTo(404);
+              assertThat(problem).hasMessage("優惠碼不存在或已失效");
+            });
   }
 
   private int count(String code) {
