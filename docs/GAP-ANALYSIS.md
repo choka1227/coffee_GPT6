@@ -137,6 +137,7 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 | G19 | 分店例外營業日（公休、臨時調整） | 未開始（G14 §11.3 登記） |
 | G20 | 品項層折扣與買一送一 | 未開始（G07 §11.2 登記） |
 | G21 | 會員價與員工價 | 未開始（G07 §11.2 登記） |
+| G22 | 前端測試基礎設施（目前 `frontend` 完全沒有測試框架） | 未開始（G07 §11.10 登記） |
 | G12 | 外送、硬體印單 | 未開始 |
 
 **G09 報表效能** —— `ReportService.report()` 把整月已付款訂單投影載入記憶體，再對每一天（`ReportService.java:66-80`）與每一小時（`137-146`）各做一次 stream filter，是 O(天數 × 訂單數)。單店資料量下沒問題，跨店或資料累積後會變成記憶體與延遲風險。彙整應下推到 SQL。
@@ -153,6 +154,12 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 
 **G19 分店例外營業日**（G14 §11.3 登記）—— G14 只做每週固定時段，國定假日、臨時公休、提早打烊、颱風天全部不在範圍。例外日需要自己的資料表、日曆 UI 與優先序規則（例外覆蓋固定時段），規模與 G14 本身相當，合在一起會讓 G14 的 S1 失去「合併後零影響」的性質。現階段的替代方案是切 `active` 一天，不精緻但臨時公休是低頻事件。**資料形狀（一段時間 + 一個日期）與 `branch_hours` 同構，日後補一張 `branch_hours_overrides` 是純加法**，不必回頭改 G14。編號說明：`G17` 由 G06 第 13.6 節占用、`G18` 由 G13 第 11.3 節的區域定價占用，G19 是下一個未使用號。
 
+**G22 前端測試基礎設施**（G07 §11.10 登記）—— `frontend/package.json` 目前**沒有任何 test script**，也沒有 Vitest／Playwright／`@vue/test-utils`。`npm run build` 只跑 `vue-tsc --noEmit && vite build`，所以前端的保護僅止於型別檢查：任何純行為缺陷（算錯金額、驗證用錯變數、流程少一步）在 CI 上都是綠的。G07 §6.6 的 POS 收款就是第一次被這件事咬到 —— 那個缺陷會讓收銀抽屜短少，而且**只存在於前端**，後端測試看不到，所以 G07 只能把驗收 21b／22／23 降為人工驗收（§11.10）。
+
+範圍要一次定清楚，否則會變成每份規格各自夾帶一點：要引入哪些依賴（Vitest + jsdom + `@vue/test-utils` 是最小組合）、`npm test` 要不要進 CI 的 `verify`、**測試紅了算不算 CI 紅燈**（預設要算，否則等於沒做）、以及哪些東西值得測（優先是 `shared/format.ts` 的金額格式化、`shared/api.ts` 的錯誤處理、以及各 `*View.vue` 裡從 `checkout()` 這類函式拆出來的純計算 seam，不是元件快照）。這是 `AGENTS.md` 禁止事項第 3 條「不引入新依賴」的**刻意例外**，所以要有自己的規格書與 PO 可見的理由，不能由實作端順手加。
+
+優先順序：排在 P2，但**在 G20／G21 之前** —— 那兩項會再往前端加一批金額相關的顯示邏輯，先有測試網比較划算。編號說明：G21 是 G07 §11.2 占用的最後一號，G22 是下一個未使用號。
+
 ## 排定的工作順序
 
 1. ~~**Codex 依 `specs/G06-product-options.md` 實作選項模型與加價**~~ —— 已完成，PR #14 於 2026-09-18 合併（S1/S2/S3 三階段，進度報告見 [`reports/G06-product-options-progress.md`](reports/G06-product-options-progress.md)）
@@ -162,7 +169,7 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 5. ~~**Codex 依 [`specs/G11-G15-audit-and-cash-sessions.md`](specs/G11-G15-audit-and-cash-sessions.md) 實作稽核軌跡與現金日結**~~ —— 已完成，PR #22 於 2026-09-20 合併（S1–S4 四階段全數完成，Flyway 占用 V5／V6，進度報告見 [`reports/G11-G15-audit-cash-sessions-progress.md`](reports/G11-G15-audit-cash-sessions-progress.md)）
 6. ~~**Codex 依 [`specs/G10-order-list-pagination.md`](specs/G10-order-list-pagination.md) 實作訂單清單分頁、篩選與 N+1 修正**~~ —— 已完成，[PR #26](https://github.com/choka1227/coffee_GPT6/pull/26) 於 2026-09-21 合併（S1–S3 三階段全數完成，Flyway 實際占用 V7，進度報告見 [`reports/G10-order-list-pagination-progress.md`](reports/G10-order-list-pagination-progress.md)）。審查曾以缺測試退回一輪，補齊後合併。**`codex/g10-order-pagination` 分支已完成任務，不要再從它續作或開新分支**
 7. ~~**Codex 依 [`specs/G14-branch-business-hours.md`](specs/G14-branch-business-hours.md) 實作分店營業時間**~~ —— 已完成，[PR #29](https://github.com/choka1227/coffee_GPT6/pull/29) 於 2026-09-21 合併（S1–S3 三階段全數完成，Flyway 實際占用 V8，進度報告見 [`reports/G14-branch-business-hours-progress.md`](reports/G14-branch-business-hours-progress.md)）。**`codex/g14-branch-business-hours` 分支已完成任務，不要再從它續作或開新分支**
-8. **← 目前這一項：Codex 在 [PR #31](https://github.com/choka1227/coffee_GPT6/pull/31)（`codex/g07-order-discounts`）依 [`specs/G07-order-discounts.md`](specs/G07-order-discounts.md) 實作訂單折扣與優惠碼** —— S1／S2／S3 三階段已全數交付、CI 綠，Claude 於 2026-09-21 送出 `REQUEST_CHANGES`。**續作請留在 `codex/g07-order-discounts` 分支，不要另開分支、不要重做已完成的階段。** 待修兩項：(a) §6.6（v1.2 新增）POS 收現金用購物車小計驗證實收金額，會擋掉合法金額並讓抽屜短少；(b) 驗收 11 的四種 404 完全沒有測試。其餘為不擋合併的意見，列在 PR 的 review 裡。**Flyway 已實際占用 V9**。**規格 §6.1 仍是紅線：`Create` 不得有任何金額欄位**（本次實作有守住）
+8. **← 目前這一項：Codex 在 [PR #31](https://github.com/choka1227/coffee_GPT6/pull/31)（`codex/g07-order-discounts`）依 [`specs/G07-order-discounts.md`](specs/G07-order-discounts.md) 實作訂單折扣與優惠碼** —— S1／S2／S3 三階段已全數交付、CI 綠，Claude 於 2026-09-21 送出 `REQUEST_CHANGES`。**續作請留在 `codex/g07-order-discounts` 分支，不要另開分支、不要重做已完成的階段。** 待修兩項：(a) §6.6（v1.2 新增）POS 收現金用購物車小計驗證實收金額，會擋掉合法金額並讓抽屜短少；(b) 驗收 11 的四種 404 完全沒有測試。其餘為不擋合併的意見，列在 PR 的 review 裡。**Flyway 已實際占用 V9**。**規格 §6.1 仍是紅線：`Create` 不得有任何金額欄位**（本次實作有守住） **規格已更新為 v1.3**（2026-09-26，依 Codex 在 PR #32 的 `REQUEST_CHANGES`）：驗收 21 拆成 **21a（後端自動化）** 與 **21b（人工）**，22／23 同為人工驗收，**不要為它們引入 Vitest 等前端測試依賴** —— 前端測試基礎設施是獨立缺口 G22。§12 的施工提醒編號也已順排為 1–14（原本第 9 項之後重覆 7／8／9）
 9. 金流那條線（G01–G04 其餘部分）待進入綠界串接階段再排
 
 ### 排程注意
@@ -185,6 +192,7 @@ G01 留在主線的缺陷已寫成獨立規格 [`specs/G01a-reconciliation-fixes
 
 | 日期 | 變更 |
 | --- | --- |
+| 2026-09-26 | 依 Codex 在 [PR #32](https://github.com/choka1227/coffee_GPT6/pull/32) 的 `REQUEST_CHANGES` 修正 G07 規格 v1.2 的兩項缺陷，規格升為 **v1.3**。**(a) 可實作性矛盾**：§10 要求「每一條驗收都要有對應的測試」、§6.6 限定「只動前端」，而 `frontend/package.json` 沒有任何 test script 或測試框架，`AGENTS.md` 禁止事項第 3 條又預設不引入新依賴 —— 三者同時成立時驗收 21–23 無法實作。**這是規格的錯，不是實作端的問題。**處理方式（新增 §11.10）：驗收 21 拆成 **21a（後端自動化，用既有 `CoffeeIntegrationTest` / `HttpWorkflowTest` 即可，釘住 `cash()` 對折後 `total` 的驗證與收款不足時保留 `PENDING_PAYMENT`）** 與 **21b（人工）**；22／23 明載為人工驗收，結果寫進 `docs/reports/`；§10 開頭改為逐條標記「自動化」或「人工」，**驗收 1–20 全部維持自動化，一條都不放寬**。**(b) §12 編號重覆**：第 9 項之後又出現 7／8／9，已順排為 1–14。同批把前端測試基礎設施登記為新缺口 **G22**（P2，排在 G20／G21 之前），理由是前端目前只有 `vue-tsc` 型別檢查，純行為缺陷在 CI 上一律是綠的 —— G07 §6.6 的抽屜短少就是第一個案例 |
 | 2026-09-21 | **G07 規格書 v1.2（依 Claude 在 PR #31 的 `REQUEST_CHANGES`）：新增 §6.6「POS 一次走完的現金收款：不得用購物車小計驗證實收金額」。** v1.1 完全沒寫這一段，實作端照著現行 `checkout()` 的形狀做就會做出錯的行為，而且錯的方向是抽屜短少 —— §11.6 決定不做折抵預覽端點，所以建單之前前端不可能知道折抵，`MenuView.vue` 的 `cash < total.value` 與 `tendered.value ?? total.value` 用的必然是折扣前小計：顧客給 130 付 126 的單會被前端擋掉；店員不輸入實收時收據會顯示「合計 126 / 實收 140 / 找零 14」，**每張折扣訂單短少一個折抵金額**，而且會在 G15 的現金日結被記成店員短收 —— 正是規格 §1 要消滅的現象，做完 G07 反而自己製造一次。**決定：帶碼時收款拆成兩段（先建單、以回應的 `order.total` 為應收、店員明確輸入實收後才收款），不帶碼時一個字不改**；歸在 S3 不另立 S4（理由：只動一個前端檔，且拆開會產生「折扣會算但 POS 收不對錢」的中間狀態，正是 §9.0 要擋的形狀）；新增驗收 21–23。同批放寬 §6.5 的 `reconciliationCandidates()`：v1.1 寫死「`discount` 填 `null`」只是省一次 join 的預設值，不是有理由的限制，**改為 `null` 或實際快照都接受**，不為了對齊文字要求 PR #31 改回來。§12 另補兩條施工提醒（POS 收款、驗收 11 的四種 404 必須有測試）並修正原本重複的編號 6 |
 | 2026-09-21 | **登記現況對齊：G14 實作已隨 [PR #29](https://github.com/choka1227/coffee_GPT6/pull/29) 合併（S1–S3 全數完成，Flyway 實際占用 V8），G07 實作在 [PR #31](https://github.com/choka1227/coffee_GPT6/pull/31) 審查中。** 主線這份仍把第 7 項（G14）標成「← 目前這一項」、P1 表兩項都寫「規格書已完成，待實作」—— 照舊文字會讓實作端去續作一支任務已完成的分支，且誤以為 G07 還沒輪到。P1 表 G14 改為「實作已合併」、G07 改為「實作審查中」；工作順序第 7 項標為完成並註明 `codex/g14-branch-business-hours` 不要再續作，**第 8 項（G07）改標為目前這一項**並寫明續作留在 `codex/g07-order-discounts`、待修哪兩項；排程注意的待實作規格由兩份改為一份，Flyway 現況補上 V8 已進主線、V9 由 PR #31 占用、**下一份規格自 V10 起算** |
 | 2026-09-21 | G07 規格書 v1.1（依 PR #27 上 Codex 的 `REQUEST_CHANGES`）：v1.0 把「使用次數上限與兌換計數」單獨切成 S4，但 `max_redemptions` 從 S1 起就在 `Rule`／`save()` 裡、S2 的維護 UI 又把它開放給總部設定 —— **S2 或 S3 單獨合併進主線的期間，總部設 `max_redemptions=1` 的碼仍然無限可用、`redeemed_count` 永遠是 0**。這不是破壞既有行為，而是讓一個新開放的設定說謊，說謊的方向是促銷成本無上限。**決定：把 §5.2 第 6、8 步併進 S1（強制先於開放），原 S4 剩下的「UI 顯示已用／上限」併入 S2，階段數四變三**，驗收編號不動只改分組（17／18 移到 S1 並改為直接對 `apply()` 測，19 移到 S3 因為回滾必須有訂單才驗得到）。同批在規格 §9.0 寫下一般化規則供後續規格沿用：**一個設定欄位的「可設定」與「生效」必須在同一階段；可以切成「還沒有人用」，不可以切成「有人能設但不作用」** |
