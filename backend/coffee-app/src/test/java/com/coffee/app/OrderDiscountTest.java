@@ -91,6 +91,30 @@ class OrderDiscountTest {
         - ((Number) before.get("revenue")).longValue()).isEqualTo(order.total());
   }
 
+  @Test
+  void cashUsesDiscountedTotalAndInsufficientTenderKeepsPendingOrder() {
+    insert("CASH-10", "PERCENT", 10, 0, 0, null);
+
+    Orders.Order paid = create("CASH-10", UUID.randomUUID().toString());
+    assertThat(paid.subtotal()).isEqualTo(140);
+    assertThat(paid.discountAmount()).isEqualTo(14);
+    assertThat(paid.total()).isEqualTo(126);
+    Orders.Order settled = orders.cash(cashier, paid.id(), 130);
+    assertThat(settled.tendered()).isEqualTo(130);
+    assertThat(settled.changeAmount()).isEqualTo(4);
+
+    Orders.Order pending = create("CASH-10", UUID.randomUUID().toString());
+    int redeemedAfterCreation = count("CASH-10");
+    assertThatThrownBy(() -> orders.cash(cashier, pending.id(), 120))
+        .isInstanceOfSatisfying(Problem.class, p -> assertThat(p.status).isEqualTo(400));
+    assertThat(orders.get(cashier, pending.id()).status()).isEqualTo("PENDING_PAYMENT");
+    assertThat(count("CASH-10")).isEqualTo(redeemedAfterCreation);
+
+    Orders.Order retried = orders.cash(cashier, pending.id(), 130);
+    assertThat(retried.status()).isEqualTo("PAID");
+    assertThat(retried.changeAmount()).isEqualTo(4);
+  }
+
   private Orders.Order create(String code, String key) {
     return orders.create(
         cashier,

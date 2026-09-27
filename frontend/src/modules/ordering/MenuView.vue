@@ -47,6 +47,7 @@ const auth = useAuth(),
   selected = ref<Product | null>(null),
   selectedOptionIds = ref<string[]>([]),
   quantity = ref(1),
+  pendingCashOrder = ref<Order | null>(null),
   receipt = ref<Order | null>(null),
   branchHours = ref<BranchHours[]>([]),
   config = ref({ enabled: false, environment: "stage" });
@@ -169,7 +170,13 @@ watch(branchId, async () => {
   loading.value = false;
 });
 function choose(p: Product) {
-  if (busy.value || customerClosed.value || p.availability === "SOLD_OUT") return;
+  if (
+    busy.value ||
+    pendingCashOrder.value ||
+    customerClosed.value ||
+    p.availability === "SOLD_OUT"
+  )
+    return;
   selected.value = p;
   selectedOptionIds.value = p.optionGroups
     .filter((g) => g.minSelect > 0)
@@ -230,7 +237,35 @@ function adjust(i: number, n: number) {
   if (l.quantity > 50) l.quantity = 50;
 }
 async function checkout() {
-  if (busy.value || !cart.value.length) return;
+  if (busy.value) return;
+  if (pendingCashOrder.value) {
+    const order = pendingCashOrder.value;
+    const cash = tendered.value;
+    if (
+      cash === undefined ||
+      !Number.isInteger(cash) ||
+      cash < order.total ||
+      cash > 1000000
+    ) {
+      notify("請輸入足夠的實收金額");
+      return;
+    }
+    busy.value = true;
+    try {
+      receipt.value = await send<Order>("/orders/" + order.id + "/cash", {
+        tendered: cash,
+      });
+      pendingCashOrder.value = null;
+      tendered.value = undefined;
+      mobileCart.value = false;
+    } catch (e) {
+      notify((e as Error).message);
+    } finally {
+      busy.value = false;
+    }
+    return;
+  }
+  if (!cart.value.length) return;
   if (!branchId.value) {
     notify("請先選擇分店");
     return;
@@ -244,9 +279,11 @@ async function checkout() {
     return;
   }
   const cashAtPos = !auth.customer && payment.value === "CASH";
+  const discountedCashAtPos = cashAtPos && discountCode.value.trim().length > 0;
   const cash = tendered.value ?? total.value;
   if (
     cashAtPos &&
+    !discountedCashAtPos &&
     (!Number.isInteger(cash) || cash < total.value || cash > 1000000)
   ) {
     notify("請輸入足夠的實收金額");
@@ -282,6 +319,12 @@ async function checkout() {
     retryKey = "";
     if (payment.value === "ECPAY") {
       await openEcpay(order.id);
+      return;
+    }
+    if (discountedCashAtPos) {
+      pendingCashOrder.value = order;
+      tendered.value = undefined;
+      notify("訂單已建立，請輸入實收金額完成收款");
       return;
     }
     if (cashAtPos) {
@@ -345,7 +388,7 @@ async function toggleAvailability(p: Product) {
           <MapPin :size="17" /><select
             v-model="branchId"
             aria-label="選擇取餐分店"
-            :disabled="busy || permittedBranches.length <= 1"
+            :disabled="busy || !!pendingCashOrder || permittedBranches.length <= 1"
           >
             <option v-for="b in permittedBranches" :key="b.id!" :value="b.id">
               {{ b.name }}{{ auth.customer ? (b.openNow ? " · 營業中" : " · 已打烊") : "" }}
@@ -534,12 +577,13 @@ async function toggleAvailability(p: Product) {
         ><label class="payment-choice"
           >優惠碼 <span>選填</span><input
             v-model="discountCode"
+            :disabled="!!pendingCashOrder"
             maxlength="20"
             autocomplete="off"
             placeholder="輸入優惠碼"
           /></label
         ><label class="payment-choice"
-          >付款方式<select v-model="payment">
+          >付款方式<select v-model="payment" :disabled="!!pendingCashOrder">
             <option value="CASH">
               {{ auth.customer ? "櫃台付款" : "現金收銀" }}
             </option>
@@ -553,22 +597,48 @@ async function toggleAvailability(p: Product) {
               }}
             </option>
           </select></label
-        ><label v-if="!auth.customer && payment === 'CASH'"
+        ><div v-if="pendingCashOrder">
+          <div class="change-row">
+            <span>小計</span><b>{{ money(pendingCashOrder.subtotal) }}</b>
+          </div>
+          <div class="change-row">
+            <span>優惠折抵</span><b>-{{ money(pendingCashOrder.discountAmount) }}</b>
+          </div>
+          <div class="cart-total">
+            <span>應收</span><strong>{{ money(pendingCashOrder.total) }}</strong>
+          </div>
+        </div>
+        <label v-if="!auth.customer && payment === 'CASH' && (!discountCode.trim() || pendingCashOrder)"
           >實收金額<input
             v-model.number="tendered"
             type="number"
-            min="0"
+            :min="pendingCashOrder?.total ?? 0"
             max="1000000"
             step="1"
-            :placeholder="String(total)"
+            :placeholder="pendingCashOrder ? '請輸入實收金額' : String(total)"
         /></label>
-        <div class="cart-total">
-          <span>總計 <small>含稅</small></span
+        <div v-if="!pendingCashOrder" class="cart-total">
+          <span>{{ discountCode.trim() ? "小計（折扣前）" : "總計" }} <small>含稅</small></span
           ><strong>{{ money(total) }}</strong>
         </div>
-        <div v-if="!auth.customer && payment === 'CASH'" class="change-row">
+        <div
+          v-if="
+            !auth.customer &&
+            payment === 'CASH' &&
+            (!discountCode.trim() || pendingCashOrder)
+          "
+          class="change-row"
+        >
           <span>應找零</span
-          ><b>{{ money(Math.max(0, (tendered ?? total) - total)) }}</b>
+          ><b>{{
+            money(
+              Math.max(
+                0,
+                (tendered ?? (pendingCashOrder?.total ?? total)) -
+                  (pendingCashOrder?.total ?? total),
+              ),
+            )
+          }}</b>
         </div>
         <p v-if="unavailableCart.length" class="error-state">
           點餐單中有 {{ unavailableCart.map((line) => line.name).join("、") }} 已售完或未供應，請先移除。
@@ -576,17 +646,27 @@ async function toggleAvailability(p: Product) {
       </div>
       <button
         class="btn primary checkout"
-        :disabled="!cart.length || busy || !branchId || customerClosed || !!unavailableCart.length"
+        :disabled="
+          (!cart.length && !pendingCashOrder) ||
+          busy ||
+          !branchId ||
+          customerClosed ||
+          !!unavailableCart.length
+        "
         @click="checkout"
       >
         {{
           busy
             ? "訂單處理中…"
-            : auth.customer
-              ? "確認點餐"
-              : payment === "CASH"
-                ? "確認收款"
-                : "前往付款"
+            : pendingCashOrder
+              ? "確認收款"
+              : auth.customer
+                ? "確認點餐"
+                : payment === "CASH"
+                  ? discountCode.trim()
+                    ? "建立訂單並計算應收"
+                    : "確認收款"
+                  : "前往付款"
         }}<ArrowRight :size="18" /></button
       ><small class="cart-caption">{{
         payment === "CASH"
