@@ -4,11 +4,11 @@
 | --- | --- |
 | 缺口編號 | G09 |
 | 優先順序 | P2 → **升為 P1**（理由見 §1.3） |
-| 版本 | v1.0（2026-09-21） |
+| 版本 | v1.1（2026-09-27）—— 依 Codex 在 PR #33 的 `REQUEST_CHANGES` 移除重複索引要求，見 §12 |
 | 規格作者 | Claude（PM / SA） |
 | 實作 | Codex（PG / SD） |
 | 前置相依 | **G07（訂單折扣）必須已合併**，理由見 §2.3 |
-| Flyway 版號 | **V10**（V9 由 G07 占用，見 §4.1） |
+| Flyway 版號 | **不適用 —— 本規格不新增任何 migration**（既有索引已足夠，見 §4） |
 | 施工階段 | S1 / S2 / S3，三階段。S1／S2 是純內部重寫（對外 JSON 一個位元都不變），S3 是型別化 |
 
 ---
@@ -95,8 +95,9 @@ sales.stream().filter(s -> s.method().equals("CASH")).count();   // 再三次全
 3. 月總計（`revenue`、`orders`、`discount`、`cashOrders`、`onlineOrders`、`takeawayOrders`）下推 SQL
 4. 分店績效（`branches`）下推 SQL
 5. 刪除 `Sale` record 與 `sales` 全載入
-6. `V10__report_indexes.sql`：`orders(paid_at)` 相關索引
-7. `coffee-reporting` 新增 `api/Reports.java`（interface + record），`ReportService implements Reports`，`ReportController` 改依賴介面
+6. `coffee-reporting` 新增 `api/Reports.java`（interface + record），`ReportService implements Reports`，`ReportController` 改依賴介面
+
+**不含任何 migration。** 下推所需的索引 `V1__coffee_schema.sql:7-8` 已經有了，見 §4。
 
 ### 2.2 不在範圍
 
@@ -117,7 +118,6 @@ G07（PR #31）正在改**同一個方法**：`ReportService.java:18-25` 的 `Sa
 | 模組 | 變更 |
 | --- | --- |
 | `coffee-reporting` | **新增** `api/Reports.java`；改寫 `internal/ReportService.java`；`internal/ReportController.java` 改依賴 `Reports` |
-| `coffee-app` | Flyway `V10__report_indexes.sql` |
 | `frontend` | **零變更** |
 
 ### 3.1 唯讀投影例外維持不變
@@ -146,29 +146,50 @@ com/coffee/reporting/internal/ReportController.java ← 建構子注入 Reports�
 
 ## 4. DB schema 與 migration
 
-### 4.1 版號
+### 4.1 本規格不新增任何 migration
 
-**檔名 `V10__report_indexes.sql`。** V9 由 G07 規格指定並已由 PR #31 實際占用（該 PR 尚未合併）。
+**沒有 `V10`，沒有新索引，沒有 schema 變更。** `coffee-app` 的 `db/migration/` 一個檔都不動。
 
-**即使開工時 V9 還沒進主線，也一樣用 V10**，理由與 G07 §4.0 相同：Flyway 預設不接受事後補插較小版號（out-of-order），占走 V9 會讓 G07 在既有資料庫上無號可用。空一個版號的成本是零。
-
-### 4.2 索引
+v1.0 曾要求用 `V10__report_indexes.sql` 新增 `idx_orders_paid_at ON orders(paid_at)` 與
+`idx_orders_branch_paid_at ON orders(branch_id, paid_at)`。**那是錯的** —— 盤點時漏查既有 schema，
+而 `V1__coffee_schema.sql:7-8` 早就有欄位與順序完全相同的兩支：
 
 ```sql
--- 月報的主要述詞：paid_at 區間 +（可選的）branch_id
-CREATE INDEX idx_orders_paid_at ON orders(paid_at);
-CREATE INDEX idx_orders_branch_paid_at ON orders(branch_id, paid_at);
+-- V1__coffee_schema.sql:7-8（既有，本規格不動）
+CREATE INDEX idx_orders_branch_paid ON orders(branch_id,paid_at);
+CREATE INDEX idx_orders_paid ON orders(paid_at);
 ```
 
-**為什麼兩支都要：** 總部不指定分店時（跨店月報，`filter` 為空字串）述詞只有 `paid_at`，走 `idx_orders_paid_at`；分店帳號或總部指定分店時述詞是 `branch_id = ? and paid_at between ...`，走 `idx_orders_branch_paid_at`（前導欄位是等值述詞，範圍述詞在後，是正確的複合索引順序）。
+只有名稱不同。照 v1.0 實作的結果是同一組欄位上並存兩份 B-tree：每筆訂單寫入都要多維護一份
+（下單是本系統最頻繁的寫入路徑），vacuum、備份與儲存成本跟著加倍，而**查詢規劃器不會因此
+多出任何存取路徑**——純成本，零收益。**驗收 11 已改為「不得新增任何 migration 檔」**，把這條
+變成可驗證的紅線，而不是刪掉一條驗收就算了。
 
-**`orders.paid_at` 可為 NULL**（未付款訂單）。兩支索引都不加 `WHERE paid_at IS NOT NULL` 的部分索引 —— H2 不支援部分索引，而本專案測試跑 H2、生產跑 PostgreSQL，寫了會讓兩邊行為分岔。全索引的額外成本在這個資料量下可忽略。
+### 4.2 既有索引為什麼已經夠
 
-**不對 `order_items` 加索引。** `products` / `topToday` 兩支查詢 join `order_items`，但它們的過濾條件在 `orders.paid_at` 上，join 走的是既有的 `order_items.order_id`（V1 建表時的外鍵）。要不要加要看真實執行計畫，現在加是猜的 —— 登記在 §11.4。
+本規格七支查詢的述詞形狀只有兩種，兩種都已經有對應索引：
 
-### 4.3 沒有 schema 變更
+| 情境 | 述詞 | 走哪支既有索引 |
+| --- | --- | --- |
+| 總部跨店月報（`filter` 為空字串） | `paid_at between ? and ?` | `idx_orders_paid(paid_at)` |
+| 分店帳號，或總部指定分店 | `branch_id = ? and paid_at between ? and ?` | `idx_orders_branch_paid(branch_id,paid_at)` |
 
-**本規格不新增、不修改任何資料表或欄位。** 只有兩支索引。既有資料零遷移，migration 可以在任何時間點對任何既有資料庫執行。
+`idx_orders_branch_paid` 的前導欄位是等值述詞、範圍述詞在後，正是複合索引的正確順序 ——
+第二種情境本來就走得到它。**下推改寫不改變述詞形狀，只改變「誰做彙整」**（從 Java 迴圈改成
+`GROUP BY`），所以效能目標與 §5.4 的查詢次數完全不受本次修正影響。
+
+`orders.paid_at` 可為 NULL（未付款訂單），既有兩支索引都是全索引、不是部分索引 —— 這正是本專案
+要的：H2 不支援部分索引，而測試跑 H2、生產跑 PostgreSQL，部分索引會讓兩邊行為分岔。
+
+### 4.3 不對 `order_items` 加索引
+
+`products` / `topToday` 兩支查詢 join `order_items`，但它們的過濾條件在 `orders.paid_at` 上，
+join 走的是既有的 `order_items.order_id`（V1 建表時的外鍵）。要不要加要看真實執行計畫，
+現在加是猜的 —— 登記在 §11.4。
+
+### 4.4 既有資料零遷移
+
+不動 schema、不動索引，等於**沒有任何升級動作**。既有資料庫直接跑新程式即可。
 
 ---
 
@@ -383,11 +404,11 @@ if (!a.global() && requestedBranch != null && !requestedBranch.isBlank())
 
 三個階段的切法是「先立測試網、再改、最後型別化」：
 
-### S1 — 輸出等價測試 + 索引 + `daily` / `hourly` 下推
+### S1 — 輸出等價測試 + `daily` / `hourly` 下推
 
 | 項目 | 內容 |
 | --- | --- |
-| 檔案 | `V10__report_indexes.sql`、`internal/ReportService.java`（只改 `daily` / `hourly` 兩段） |
+| 檔案 | `internal/ReportService.java`（只改 `daily` / `hourly` 兩段）—— **不新增任何檔案** |
 | 測試 | **新增 `ReportAggregationTest`**（輸出等價 + 查詢次數 + 空桶） |
 | 驗收子集 | 驗收 1–5、11 |
 
@@ -481,7 +502,7 @@ public interface Reports {
 
 ```markdown
 ## 施工進度（G09）
-- [ ] S1 輸出等價測試 + 索引 + daily/hourly 下推 —— 未開始
+- [ ] S1 輸出等價測試 + daily/hourly 下推 —— 未開始
 - [ ] S2 月總計與分店績效下推、刪除 sales —— 未開始
 - [ ] S3 coffee-reporting 的 api package —— 未開始
 ```
@@ -499,7 +520,7 @@ public interface Reports {
 3. [ ] `daily` 恰好有當月天數筆，`day` 是零補位兩位字串；**沒有訂單的那一天存在且 `revenue: 0, orders: 0`**
 4. [ ] `hourly` 恰好 24 筆，`hour` 格式 `"HH:00"`；**沒有訂單的小時存在且 `orders: 0`**
 5. [ ] 台北時間 00:30 與 23:30 的訂單分別落在**正確的台北日期與小時**（偏移方向與整數除法都正確）
-11. [ ] 全新資料庫跑完 Flyway 後有 `idx_orders_paid_at` 與 `idx_orders_branch_paid_at`；既有資料庫升級後訂單列數不變
+11. [ ] **`backend/coffee-app/src/main/resources/db/migration/` 沒有新增任何檔案**（`git diff --name-only origin/feature/init-project...HEAD -- '*/db/migration/*'` 必須是空的），且既有的 `idx_orders_paid` / `idx_orders_branch_paid` 沒有被改名、刪除或重建
 
 **S2**
 
@@ -541,11 +562,13 @@ public interface Reports {
 
 **推翻的代價**：新增一支 `GET /api/reports/range`，共用本規格改好的 `GROUP BY` 查詢（它們本來就只是 `paid_at` 區間查詢，不在乎那個區間是不是一個月）。**本規格的改寫正好讓這件事變便宜** —— 這是把它排除的附帶好處，不是損失。
 
-### 11.4 只加 `orders` 的兩支索引，不碰 `order_items` —— **不碰**
+### 11.4 完全不加索引（v1.1 修正：原為「只加 `orders` 的兩支」）
 
-**理由**：`products` / `topToday` 兩支查詢本規格一個字不動，它們的 join 走既有的 `order_items.order_id`。要不要加索引取決於真實資料分布與執行計畫，現在加是猜的，而每一支索引都是寫入時的固定成本（下單是本系統最頻繁的寫入）。
+**決定**：本規格不新增任何索引 —— `orders` 的不加（`V1` 已有等價的兩支，見 §4.1），`order_items` 的也不加。
 
-**推翻的代價**：加一支 `V11` 的索引 migration，純加法，任何時候都能做。**做之前請先有 `EXPLAIN` 的輸出**，不要因為「看起來應該要有索引」就加。
+**理由**：`orders(paid_at)` 與 `orders(branch_id,paid_at)` 在 `V1__coffee_schema.sql:7-8` 已經存在且欄位順序正確，再建一份只是換個名字的重複索引，純成本零收益。`order_items` 那邊，`products` / `topToday` 兩支查詢本規格一個字不動，join 走既有的 `order_items.order_id`；要不要加取決於真實資料分布與執行計畫，現在加是猜的，而每一支索引都是寫入時的固定成本（下單是本系統最頻繁的寫入）。
+
+**推翻的代價**：加一支 `V11` 的索引 migration，純加法，任何時候都能做。但**推翻它的前提是 `EXPLAIN (ANALYZE, BUFFERS)` 的實際輸出顯示既有索引沒有被採用**（例如規劃器選了 seq scan，或選擇性不足），不是「看起來應該要有索引」。若證據指向 `orders`，正確的動作是檢查為什麼既有索引沒被用（統計值過期？述詞被函式包住？），而不是再建一支同欄位的。
 
 ### 11.5 為什麼是 G09，不是其他 P2 項目
 
@@ -587,5 +610,5 @@ public interface Reports {
 7. **S2 結束時 `Sale` record 與 `sales` 必須不存在**。留著等於這份規格白做（驗收 6）
 8. **`Reports` record 的每一個元件名必須與 §5.1 的表格逐字相同**，那就是 JSON 的 key。S3 要另外補一個真實 HTTP 的 JSON key 斷言（驗收 13）
 9. **前端零變更**（§6）。`git diff --stat` 出現 `frontend/` 就是做錯了
-10. **Flyway 用 V10**，即使開工時 V9 還沒進主線（§4.1）
+10. **不要新增任何 Flyway migration，也不要新增索引。** 需要的索引 `V1__coffee_schema.sql:7-8` 已經有了（§4.1／§4.2）。v1.0 曾要求 `V10` 加兩支索引，那是規格的錯誤，**已於 v1.1 移除**；驗收 11 現在會驗 `db/migration/` 沒有新增檔案
 11. **開工前確認 G07 已經合併進主線**（§2.3）。沒合併就等，不要繞過 —— 兩份規格改同一個方法，而且一邊加欄位一邊刪 record，衝突解不乾淨
