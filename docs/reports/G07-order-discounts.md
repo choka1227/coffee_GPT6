@@ -1,7 +1,7 @@
 # G07 訂單折扣與優惠碼實作紀錄
 
-- 來源規格：`docs/specs/G07-order-discounts.md` v1.4
-- 主線來源：`55aca7bf37f6422ceb088e7333e8028347d836b9`
+- 來源規格：`docs/specs/G07-order-discounts.md` v1.5
+- 主線來源：`eb38891029b0d34923f8707b854614b6450ead4d`
 - 工作順序：`docs/GAP-ANALYSIS.md` 第 8 項；G06、G10、G14 已合併
 
 ## 施工進度
@@ -40,16 +40,116 @@
 - POS 帶碼現金訂單改為兩段式收款：先以後端回應顯示小計、折抵與應收，再要求店員明確輸入實收；未帶碼的既有單段流程不變。
 - `OrderDiscountTest` 另覆蓋驗收 21a：折後應收 126 元時，實收 130 元找零 4 元；實收 120 元失敗後訂單仍待付款、兌換次數不變且可以補收。
 
-## §6.6 人工驗收
+## §6.6 原始碼佐證
 
-依規格 v1.4，以下為前端流程的可追溯驗收腳本與預期畫面數字；最新 head 部署後需逐條實際操作確認，完成前 PR 維持 draft。
+以下行號以本 PR 最新版 `frontend/src/modules/ordering/MenuView.vue` 為準。它們證明程式碼的分支與欄位來源；依規格 v1.5，瀏覽器實機操作由 PO 於合併後驗收，不擋本 PR。
 
-- [ ] 21b：員工 POS 建立小計 140 元、折抵 14 元的有效碼現金訂單；建單後畫面顯示「小計 140／優惠折抵 14／應收 126」。輸入實收 130 後，收款成功且收據顯示找零 4；輸入 120 時不得收款，訂單保留 `PENDING_PAYMENT`。
-- [ ] 22：同一情境未輸入實收時，不得自動用折扣前小計呼叫收款；畫面要求輸入實收，收款按鈕不會產生已付款訂單。
-- [ ] 23：未帶優惠碼的員工 POS 現金訂單仍維持既有單段流程；以小計 140、實收 150 為例，建單與收款一次完成，收據顯示合計 140、實收 150、找零 10。
+### 21b：帶碼 POS 現金兩段式收款
+
+建單時先辨識帶碼現金 POS，建立訂單後把後端回傳的 `Order` 保存為待收款訂單，清空實收欄位並停止本次流程（281–282、312–328）：
+
+```ts
+const cashAtPos = !auth.customer && payment.value === "CASH";
+const discountedCashAtPos = cashAtPos && discountCode.value.trim().length > 0;
+// ...
+order = await send<Order>("/orders", body, "POST", {
+  "Idempotency-Key": retryKey,
+});
+// ...
+if (discountedCashAtPos) {
+  pendingCashOrder.value = order;
+  tendered.value = undefined;
+  notify("訂單已建立，請輸入實收金額完成收款");
+  return;
+}
+```
+
+畫面三個數字都直接來自後端訂單欄位，而不是購物車重算值（600–609）：小計取 `pendingCashOrder.subtotal`、折抵取 `pendingCashOrder.discountAmount`、應收取 `pendingCashOrder.total`。
+
+```vue
+<div class="change-row">
+  <span>小計</span><b>{{ money(pendingCashOrder.subtotal) }}</b>
+</div>
+<div class="change-row">
+  <span>優惠折抵</span><b>-{{ money(pendingCashOrder.discountAmount) }}</b>
+</div>
+<div class="cart-total">
+  <span>應收</span><strong>{{ money(pendingCashOrder.total) }}</strong>
+</div>
+```
+
+第二次按下收款時，實收取自店員輸入的 `tendered.value`，並與後端回傳的折後 `order.total` 比較；未輸入、非整數、低於應收或超過上限都提示後直接 `return`，`pendingCashOrder` 不會清除（241–266）。只有通過才呼叫 `/cash`。收款回應的收據總額、實收與找零分別取 `receipt.total`、`receipt.tendered`、`receipt.changeAmount`（738–746），因此 140／14／126、實收 130、找零 4 的欄位鏈可追溯到後端回應。
+
+```ts
+const order = pendingCashOrder.value;
+const cash = tendered.value;
+if (
+  cash === undefined ||
+  !Number.isInteger(cash) ||
+  cash < order.total ||
+  cash > 1000000
+) {
+  notify("請輸入足夠的實收金額");
+  return;
+}
+receipt.value = await send<Order>("/orders/" + order.id + "/cash", {
+  tendered: cash,
+});
+```
+
+### 22：帶碼訂單未輸入實收不得自動收款
+
+帶碼第一階段會把 `tendered.value` 明確清為 `undefined` 並返回；待收款分支只讀 `tendered.value`，沒有購物車小計的預設值。未輸入時命中 `cash === undefined`，在任何 `/cash` 呼叫前返回（241–266）。模板的實收欄在待收款狀態以後端 `pendingCashOrder.total` 作為 `min`，placeholder 明示輸入實收（611–619）。
+
+```vue
+<input
+  v-model.number="tendered"
+  type="number"
+  :min="pendingCashOrder?.total ?? 0"
+  max="1000000"
+  step="1"
+  :placeholder="pendingCashOrder ? '請輸入實收金額' : String(total)"
+/>
+```
+
+購物車小計預設實收只留在明確的「未帶碼」分支；帶碼分支不會計算或送出該預設值（283–291）：
+
+```ts
+let cash = tendered.value;
+if (cashAtPos && !discountedCashAtPos) {
+  cash ??= total.value;
+  if (!Number.isInteger(cash) || cash < total.value || cash > 1000000) {
+    notify("請輸入足夠的實收金額");
+    return;
+  }
+}
+```
+
+### 23：未帶碼 POS 現金維持單段流程
+
+分支條件 `cashAtPos && !discountedCashAtPos` 專門保留既有未帶碼檢核與 `tendered.value ?? total.value` 的預設語意；建單完成後只有 `discountedCashAtPos` 會進待收款並返回，未帶碼則直接進 `cashAtPos` 呼叫 `/cash`（281–291、324–335）。
+
+```ts
+if (discountedCashAtPos) {
+  pendingCashOrder.value = order;
+  tendered.value = undefined;
+  notify("訂單已建立，請輸入實收金額完成收款");
+  return;
+}
+if (cashAtPos) {
+  receipt.value = await send<Order>("/orders/" + order.id + "/cash", {
+    tendered: cash,
+  });
+  tendered.value = undefined;
+  mobileCart.value = false;
+}
+```
+
+因此未帶碼的建單與收款仍在同一次 `checkout()` 完成；收據依舊從後端回應的 `receipt.total`、`receipt.tendered`、`receipt.changeAmount` 顯示合計、實收與找零（738–746）。
 
 ## 驗證
 
 - 本地 backend：Maven Central DNS 無法解析，未能啟動測試。
-- 本地 frontend：環境沒有 `node_modules`，`vue-tsc` 不存在，未能啟動 build。
+- 本地 frontend：待執行 production build。
+- 靜態檢查：文件內的引用行與最新 `MenuView.vue` 分支、欄位來源逐條核對。
 - 遠端 CI：待最新 head 推送後確認。

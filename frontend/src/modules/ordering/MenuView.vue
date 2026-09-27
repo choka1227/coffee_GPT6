@@ -280,14 +280,13 @@ async function checkout() {
   }
   const cashAtPos = !auth.customer && payment.value === "CASH";
   const discountedCashAtPos = cashAtPos && discountCode.value.trim().length > 0;
-  const cash = tendered.value ?? total.value;
-  if (
-    cashAtPos &&
-    !discountedCashAtPos &&
-    (!Number.isInteger(cash) || cash < total.value || cash > 1000000)
-  ) {
-    notify("請輸入足夠的實收金額");
-    return;
+  let cash = tendered.value;
+  if (cashAtPos && !discountedCashAtPos) {
+    cash ??= total.value;
+    if (!Number.isInteger(cash) || cash < total.value || cash > 1000000) {
+      notify("請輸入足夠的實收金額");
+      return;
+    }
   }
   busy.value = true;
   let order: Order | undefined;
