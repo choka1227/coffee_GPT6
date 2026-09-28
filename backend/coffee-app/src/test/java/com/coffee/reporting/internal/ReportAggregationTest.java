@@ -3,8 +3,11 @@ package com.coffee.reporting.internal;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.coffee.reporting.api.Reports;
 import com.coffee.shared.Actor;
 import com.coffee.shared.Problem;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -30,7 +33,7 @@ class ReportAggregationTest {
   private static final String MONTH = "2024-02";
 
   private JdbcTemplate db;
-  private ReportService reports;
+  private Reports reports;
   private AtomicInteger statements;
 
   @BeforeEach
@@ -129,9 +132,9 @@ class ReportAggregationTest {
   void completeOutputPreservesBucketsOrderingTypesAndTaipeiBoundaries() {
     statements.set(0);
 
-    Map<String, Object> actual = reports.report(global(), MONTH, null);
+    Reports.MonthlyReport actual = reports.report(global(), MONTH, null);
 
-    assertThat(actual).isEqualTo(expected());
+    assertThat(asMap(actual)).isEqualTo(expected());
     assertThat(statements).hasValue(7);
   }
 
@@ -152,24 +155,23 @@ class ReportAggregationTest {
   void emptyMonthKeepsZeroTotalsAndEveryEmptyBucket() {
     statements.set(0);
 
-    Map<String, Object> report = reports.report(global(), "2024-03", null);
+    Reports.MonthlyReport report = reports.report(global(), "2024-03", null);
 
-    assertThat(report)
-        .containsEntry("revenue", 0L)
-        .containsEntry("discount", 0L)
-        .containsEntry("orders", 0L)
-        .containsEntry("averageOrder", 0L)
-        .containsEntry("grossMargin", 0.0)
-        .containsEntry("cashOrders", 0L)
-        .containsEntry("onlineOrders", 0L)
-        .containsEntry("takeawayOrders", 0L);
-    assertThat((List<?>) report.get("daily")).hasSize(31);
-    assertThat((List<?>) report.get("hourly")).hasSize(24);
-    assertThat((List<Map<String, Object>>) report.get("branches"))
+    assertThat(report.revenue()).isZero();
+    assertThat(report.discount()).isZero();
+    assertThat(report.orders()).isZero();
+    assertThat(report.averageOrder()).isZero();
+    assertThat(report.grossMargin()).isZero();
+    assertThat(report.cashOrders()).isZero();
+    assertThat(report.onlineOrders()).isZero();
+    assertThat(report.takeawayOrders()).isZero();
+    assertThat(report.daily()).hasSize(31);
+    assertThat(report.hourly()).hasSize(24);
+    assertThat(report.branches())
         .allSatisfy(
             row -> {
-              assertThat(row.get("revenue")).isEqualTo(0L);
-              assertThat(row.get("orders")).isEqualTo(0);
+              assertThat(row.revenue()).isZero();
+              assertThat(row.orders()).isZero();
             });
     assertThat(statements).hasValue(7);
   }
@@ -178,15 +180,20 @@ class ReportAggregationTest {
   void branchScopeCannotSeeOrRequestAnotherBranch() {
     Actor alpha = branchActor("alpha");
 
-    Map<String, Object> report = reports.report(alpha, MONTH, null);
+    Reports.MonthlyReport report = reports.report(alpha, MONTH, null);
 
-    assertThat(report).containsEntry("revenue", 300L).containsEntry("orders", 2L);
-    assertThat((List<Map<String, Object>>) report.get("branches"))
+    assertThat(report.revenue()).isEqualTo(300L);
+    assertThat(report.orders()).isEqualTo(2L);
+    assertThat(report.branches())
         .singleElement()
-        .satisfies(row -> assertThat(row.get("id")).isEqualTo("alpha"));
+        .satisfies(row -> assertThat(row.id()).isEqualTo("alpha"));
     assertThatThrownBy(() -> reports.report(alpha, MONTH, "beta"))
         .isInstanceOf(Problem.class)
         .hasMessage("只能存取所屬分店資料");
+  }
+
+  private Map<String, Object> asMap(Reports.MonthlyReport report) {
+    return new ObjectMapper().convertValue(report, new TypeReference<>() {});
   }
 
   private Map<String, Object> expected() {
