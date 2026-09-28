@@ -104,6 +104,43 @@ class CoffeeIntegrationTest {
     return create(session, branch, payment, 2, UUID.randomUUID().toString());
   }
 
+  @Test
+  void reportResponseKeepsExactContractKeys() throws Exception {
+    var manager = login("manager");
+    JsonNode report =
+        json.readTree(
+            mvc.perform(
+                    get("/api/reports")
+                        .param("month", YearMonth.now(ZoneId.of("Asia/Taipei")).toString())
+                        .session(manager))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString());
+    Set<String> keys = new HashSet<>();
+    report.fieldNames().forEachRemaining(keys::add);
+    assertThat(keys)
+        .containsExactlyInAnyOrder(
+            "month",
+            "today",
+            "revenue",
+            "discount",
+            "orders",
+            "averageOrder",
+            "quantity",
+            "grossProfit",
+            "grossMargin",
+            "daily",
+            "products",
+            "topToday",
+            "branches",
+            "categories",
+            "hourly",
+            "cashOrders",
+            "onlineOrders",
+            "takeawayOrders");
+  }
+
   String optionBody(List<String> optionIds) throws Exception {
     return json.writeValueAsString(
         Map.of(

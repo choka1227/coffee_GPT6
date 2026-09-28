@@ -1,20 +1,20 @@
 package com.coffee.reporting.internal;
 
+import com.coffee.reporting.api.Reports;
 import com.coffee.shared.Actor;
-import java.util.Map;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/reports")
 class ReportController {
-  private final ReportService s;
+  private final Reports s;
 
-  ReportController(ReportService s) {
+  ReportController(Reports s) {
     this.s = s;
   }
 
   @GetMapping
-  Map<String, Object> report(
+  Reports.MonthlyReport report(
       @RequestAttribute Actor actor,
       @RequestParam String month,
       @RequestParam(required = false) String branchId) {
