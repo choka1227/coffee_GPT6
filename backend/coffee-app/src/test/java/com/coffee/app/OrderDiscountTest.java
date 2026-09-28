@@ -3,7 +3,7 @@ package com.coffee.app;
 import static org.assertj.core.api.Assertions.*;
 
 import com.coffee.orders.api.Orders;
-import com.coffee.reporting.internal.ReportService;
+import com.coffee.reporting.api.Reports;
 import com.coffee.shared.Actor;
 import com.coffee.shared.Problem;
 import java.time.YearMonth;
@@ -25,7 +25,7 @@ import org.springframework.test.context.ActiveProfiles;
 class OrderDiscountTest {
   @Autowired Orders orders;
   @Autowired JdbcTemplate db;
-  @Autowired ReportService reports;
+  @Autowired Reports reports;
 
   private final Actor cashier =
       new Actor("cashier", "cashier", "收銀員", "CASHIER", "BRANCH", "taipei",
@@ -85,10 +85,8 @@ class OrderDiscountTest {
     Orders.Order order = create("LESS-20", UUID.randomUUID().toString());
     orders.cash(cashier, order.id(), order.total());
     var report = reports.report(headquarters, month, null);
-    assertThat(((Number) report.get("discount")).longValue()
-        - ((Number) before.get("discount")).longValue()).isEqualTo(20L);
-    assertThat(((Number) report.get("revenue")).longValue()
-        - ((Number) before.get("revenue")).longValue()).isEqualTo(order.total());
+    assertThat(report.discount() - before.discount()).isEqualTo(20L);
+    assertThat(report.revenue() - before.revenue()).isEqualTo(order.total());
   }
 
   @Test
