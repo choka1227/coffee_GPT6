@@ -1,8 +1,10 @@
 package com.coffee.reporting.internal;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.coffee.shared.Actor;
+import com.coffee.shared.Problem;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -130,7 +132,61 @@ class ReportAggregationTest {
     Map<String, Object> actual = reports.report(global(), MONTH, null);
 
     assertThat(actual).isEqualTo(expected());
-    assertThat(statements).hasValue(6);
+    assertThat(statements).hasValue(7);
+  }
+
+  @Test
+  void queryCountIsSevenForThirtyAndThreeHundredOrders() {
+    for (int i = 4; i < 30; i++) seedExtra(i);
+    statements.set(0);
+    reports.report(global(), MONTH, null);
+    assertThat(statements).hasValue(7);
+
+    for (int i = 30; i < 300; i++) seedExtra(i);
+    statements.set(0);
+    reports.report(global(), MONTH, null);
+    assertThat(statements).hasValue(7);
+  }
+
+  @Test
+  void emptyMonthKeepsZeroTotalsAndEveryEmptyBucket() {
+    statements.set(0);
+
+    Map<String, Object> report = reports.report(global(), "2024-03", null);
+
+    assertThat(report)
+        .containsEntry("revenue", 0L)
+        .containsEntry("discount", 0L)
+        .containsEntry("orders", 0L)
+        .containsEntry("averageOrder", 0L)
+        .containsEntry("grossMargin", 0.0)
+        .containsEntry("cashOrders", 0L)
+        .containsEntry("onlineOrders", 0L)
+        .containsEntry("takeawayOrders", 0L);
+    assertThat((List<?>) report.get("daily")).hasSize(31);
+    assertThat((List<?>) report.get("hourly")).hasSize(24);
+    assertThat((List<Map<String, Object>>) report.get("branches"))
+        .allSatisfy(
+            row -> {
+              assertThat(row.get("revenue")).isEqualTo(0L);
+              assertThat(row.get("orders")).isEqualTo(0);
+            });
+    assertThat(statements).hasValue(7);
+  }
+
+  @Test
+  void branchScopeCannotSeeOrRequestAnotherBranch() {
+    Actor alpha = branchActor("alpha");
+
+    Map<String, Object> report = reports.report(alpha, MONTH, null);
+
+    assertThat(report).containsEntry("revenue", 300L).containsEntry("orders", 2L);
+    assertThat((List<Map<String, Object>>) report.get("branches"))
+        .singleElement()
+        .satisfies(row -> assertThat(row.get("id")).isEqualTo("alpha"));
+    assertThatThrownBy(() -> reports.report(alpha, MONTH, "beta"))
+        .isInstanceOf(Problem.class)
+        .hasMessage("只能存取所屬分店資料");
   }
 
   private Map<String, Object> expected() {
@@ -208,6 +264,29 @@ class ReportAggregationTest {
 
   private Actor global() {
     return new Actor("hq", "hq", "HQ", "test", "GLOBAL", null, Set.of("REPORT_ALL"));
+  }
+
+  private Actor branchActor(String branch) {
+    return new Actor("staff", "staff", "Staff", "test", "BRANCH", branch, Set.of("REPORT_STORE"));
+  }
+
+  private void seedExtra(int number) {
+    seed(
+        "X-" + number,
+        number % 2 == 0 ? "alpha" : "beta",
+        100,
+        0,
+        "2024-02-10T12:00",
+        "DINE_IN",
+        "CASH",
+        "extra",
+        "Extra",
+        "coffee",
+        100,
+        50,
+        1,
+        0,
+        0);
   }
 
   private void seed(
