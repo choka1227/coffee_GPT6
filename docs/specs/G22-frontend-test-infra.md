@@ -4,7 +4,7 @@
 | --- | --- |
 | 缺口編號 | G22 |
 | 優先順序 | P2 → **升為 P1**（理由見 §13.1） |
-| 版本 | v1.1（2026-09-28，Claude 定案） |
+| 版本 | v1.2（2026-09-28，Claude 定案） |
 | 前置相依 | G07（PR #31，已合併）、G09（PR #36，**已於 2026-09-28 合併**，主線 SHA `ee9861c`） |
 | Flyway | **不新增任何 migration** |
 | 後端變更 | **零** |
@@ -268,9 +268,38 @@ export function validateTendered(input: {
 
 失敗訊息一律 `"請輸入足夠的實收金額"`（`AGENTS.md`：終端使用者看到的訊息用繁體中文）。
 
-**單段式的 `cash ??= total` 留在呼叫端，不進這支函式。** 上面「`tendered === undefined` → 失敗」描述的是**驗證函式本身**的契約（與兩段式那一份 `MenuView.vue:243-250` 逐字等價）；單段式目前未輸入實收時會先 `cash ??= total.value` 帶入，帶入後才驗證，所以它傳進來的永遠不是 `undefined`。這個分工由驗收 23 釘住。
+**「`tendered === undefined` → 失敗」描述的是驗證函式本身的契約**（與兩段式那一份 `MenuView.vue:243-250` 逐字等價）。單段式目前未輸入實收時會先 `cash ??= total.value` 帶入，帶入後才驗證，所以單段式傳進來的永遠不是 `undefined`。
+
+**那個「先帶入」不留在呼叫端，抽成 §6.4a 的 `effectiveTendered()`。** v1.1 曾把它留在 `MenuView.vue` 裡，靠驗收 23 的文字說明「呼叫端會做」—— 但文字說明不會變紅。理由見 §6.4a。
 
 **`amountDue` 是參數，由呼叫端決定要傳 `pendingCashOrder.total` 還是 `total`。** 這個函式本身不知道也不該知道折扣的存在 —— 把「該用哪個數字」的決定留在呼叫端並用 §6.5 釘住它，比在這裡多塞一個 `discountCode` 參數乾淨。
+
+### 6.4a `modules/ordering/checkout.ts` —— 未輸入實收時的預設帶入
+
+目前是 `MenuView.vue:284` 的一行 `cash ??= total.value`，藏在 `if (cashAtPos && !discountedCashAtPos)` 裡面。
+
+```ts
+export function effectiveTendered(input: {
+  path: CheckoutPath;
+  tendered: number | undefined;
+  amountDue: number;
+}): number | undefined;
+```
+
+規則：
+
+- `path === "POS_CASH_SINGLE"` 且 `tendered === undefined` → 回 `amountDue`
+- 其餘一律原樣回傳 `tendered`（含 `undefined`）
+
+`checkout()` 改成先取 `effectiveTendered()`，拿到的值再交給 `validateTendered()`。
+
+**為什麼要多這一支函式（v1.2 新增，依 Codex 在 PR #37 的第二輪 `REQUEST_CHANGES`）**
+
+v1.1 把這個預設留在呼叫端，只用 §12.3 驗收 23 的一句文字說明它。這讓驗收 23 成為**假綠燈**：實作端若漏掉 `cash ??= total.value`，`checkoutPath()`、`amountDue()`、`validateTendered()` 三支函式的所有指定斷言仍然全綠，但單段收款會在店員沒輸入實收時直接顯示「請輸入足夠的實收金額」並拒絕結帳 —— 這正是驗收 23 標題那句「不得退化」要擋的事。**函式測試綠、行為壞掉、沒有任何東西變紅**，而規格卻據此宣稱 G07 的人工驗收 23 已被自動化取代。抽成函式之後，漏掉它就是驗收 16 轉紅。
+
+**兩段式必須維持回 `undefined`，不可「順手」也帶入。** 兩段式的應收是後端算的折後金額，在店員真的輸入實收之前，那一格**沒有值**；自動帶入應收等於「系統自己按了確認」，是 §1.2 抽屜短少的另一種寫法。這個方向由驗收 16 的第二個案例釘住。
+
+**這支函式不做驗證。** 它只回答「該拿哪個數字去驗」，能不能結帳由 `validateTendered()` 決定。兩支分開，是因為「帶入」與「驗證」壞掉的症狀不同（前者拒絕合法結帳，後者放行不合法結帳），分開才能讓轉紅的測試直接指出是哪一個。
 
 ### 6.5 `modules/ordering/checkout.ts` —— 應收金額的來源
 
@@ -440,13 +469,13 @@ G22 不改變這條，而且**加強**它。抽出來的函式裡：
 
 **做什麼**
 
-1. 建 `modules/ordering/checkout.ts`，實作 §6.3–§6.7 五支函式
+1. 建 `modules/ordering/checkout.ts`，實作 §6.3–§6.7（含 §6.4a）六支函式
 2. 寫 `checkout.spec.ts` 覆蓋它們
 3. `MenuView.vue` 的 `checkout()` 改成呼叫這些函式；模板 `:636` 的找零改呼叫 `changeAmount`
 
 **行為必須零變更。** 改完之後 `checkout()` 會短很多，但每一條路徑走到的結果要和改之前完全一樣。
 
-**驗收子集**：4、5、6、7、9
+**驗收子集**：4、5、6、7、9、15、16
 
 **為什麼獨立可合併**：`checkout.ts` 是新檔；`MenuView.vue` 的改動是等價替換。
 
@@ -499,6 +528,7 @@ S2 是三者中最大的一個（一個新檔 + `MenuView.vue` 的等價替換�
 6. [ ] `validateTendered()` 的測試涵蓋：`undefined`、非整數（如 `100.5`）、小於應收、等於應收、大於應收、超過 `1000000`；失敗訊息為 `"請輸入足夠的實收金額"`
 7. [ ] `checkoutBlock()` 的測試涵蓋四個條件**與它們的優先順序**（同時成立時回傳順序在前的那則訊息）；空車回 `{ blocked: true, message: "" }`；四則訊息逐字比對
 15. [ ] `changeAmount()` 的測試涵蓋：未輸入實收（`tendered: undefined`）回 `0`；實收等於應收回 `0`；實收大於應收回差額；**實收小於應收回 `0`（不是負數）** —— 這一條釘住 `Math.max(0, ...)` 的下限箝制，見 §6.6
+16. [ ] `effectiveTendered()` 的測試**同時釘住兩個方向**：`POS_CASH_SINGLE` + `tendered: undefined` + `amountDue: 140` 回 `140`（漏掉這個預設就轉紅）；`POS_CASH_TWO_STAGE` + `tendered: undefined` 回 `undefined`（**不得自動帶入**）；且兩條路徑在 `tendered` 有值時都原樣回傳，見 §6.4a
 9. [ ] `checkout.ts` **不 import `vue`、不 import `shared/api`、不 import `identity/store`**。寫一條測試用 `import` 的靜態檢查或讀檔斷言釘住這件事（做法見 §12.4）
    - [ ] `MenuView.vue` 改呼叫後，`npm run build` 仍綠；`checkout()` 的四條路徑行為與改之前一致
 
@@ -528,9 +558,11 @@ S2 是三者中最大的一個（一個新檔 + `MenuView.vue` 的等價替換�
 | --- | --- |
 | **21b** 收款欄顯示「小計／折抵／應收」正確 | 給 `pendingOrderTotal = 126`、`cartTotal = 140`，`amountDue()` 回 `126`（不是 140）；`changeAmount({ tendered: 130, amountDue: 126 })` 回 `4` |
 | **22** 未輸入實收不得自動以購物車小計送出 | `checkoutPath({ isCustomer:false, paymentMethod:"CASH", discountCode:"X10" })` 回 `POS_CASH_TWO_STAGE`；且 `amountDue({ path:"POS_CASH_TWO_STAGE", cartTotal:140, pendingOrderTotal:null })` **丟 `Error`** —— 小計 140 沒有任何路徑能變成實收 |
-| **23** 未帶碼的單段流程不得退化 | `checkoutPath({ isCustomer:false, paymentMethod:"CASH", discountCode:"" })` 回 `POS_CASH_SINGLE`；`amountDue({ path:"POS_CASH_SINGLE", cartTotal:140, pendingOrderTotal:null })` 回 `140`；`validateTendered({ tendered: undefined, amountDue: 140 })` 失敗（單段式允許 `cash ??= total` 的那一步由呼叫端做，但驗證函式本身不接受 `undefined`） |
+| **23** 未帶碼的單段流程不得退化 | `checkoutPath({ isCustomer:false, paymentMethod:"CASH", discountCode:"" })` 回 `POS_CASH_SINGLE`；`amountDue({ path:"POS_CASH_SINGLE", cartTotal:140, pendingOrderTotal:null })` 回 `140`；**`effectiveTendered({ path:"POS_CASH_SINGLE", tendered: undefined, amountDue: 140 })` 回 `140`**；把該值交給 `validateTendered({ tendered: 140, amountDue: 140 })` **成功**。另加反向：`effectiveTendered({ path:"POS_CASH_TWO_STAGE", tendered: undefined, amountDue: 126 })` 回 `undefined`，交給 `validateTendered` 失敗 |
 
 **這三條取代人工驗收的前提是：`MenuView.vue` 確實改成呼叫這些函式**（S2 做的事）。函式綠但沒人用等於沒驗，所以驗收 9 的第二個子項與驗收 13 是綁在一起的。
+
+> v1.1 的驗收 23 只斷言 `validateTendered({ tendered: undefined, ... })` **失敗**，把「呼叫端會先帶入應收」留在文字裡。那是假綠燈：漏掉帶入時三條斷言仍全綠，單段收款卻已經壞掉。v1.2 用 §6.4a 的 `effectiveTendered()` 把它變成可轉紅的斷言，見該節。
 
 ### 12.4 驗收 9 的「純度」檢查怎麼寫
 
@@ -670,6 +702,7 @@ it("checkout.ts 維持純函式，不依賴 vue、api 或 store", () => {
 3. **`.trim()` 不可省**，兩個方向都會出事（§6.3）
 4. **`checkoutBlock()` 的四個條件順序不可調**，順序決定使用者看到哪一則訊息（§6.7）
 5. **空車那條保留「不 notify」的既有行為**，不要順手補訊息（§6.7）
+5a. **`effectiveTendered()` 只有 `POS_CASH_SINGLE` 會帶入預設**，兩段式維持 `undefined`。`MenuView.vue` 要實際呼叫它，不可把 `cash ??= total.value` 留在原地 —— 留在原地驗收 16 抓不到，驗收 23 就是假綠燈（§6.4a）
 6. **`nextIdempotency` 的 `newKey` 要當參數傳**，不要在函式裡直接呼叫 `crypto.randomUUID()`（§6.8）
 7. **`verify.yml` 的 job 名稱維持 `verify`。** 改了名字，分支保護的 required check 就找不到它，所有 PR 會卡住等一個永遠不會出現的檢查（§13.5）
 8. **S2 改完 `MenuView.vue` 後要逐條走過四條付款路徑**，確認行為與改之前一致。這是等價替換，不是重構機會
@@ -688,3 +721,4 @@ it("checkout.ts 維持純函式，不依賴 vue、api 或 store", () => {
 | --- | --- | --- |
 | v1.0 | 2026-09-28 | 初版。Claude 定案。G07 §11.10／§11.11 登記的缺口，由 §11.11 升排為 G09 之後的下一份規格 |
 | v1.1 | 2026-09-28 | 依 Codex 在 [PR #37](https://github.com/choka1227/coffee_GPT6/pull/37) 的 `REQUEST_CHANGES` 修正兩項。**(a) §6.6 `changeAmount()` 不是等價抽取**：v1.0 寫「等價於 `(tendered ?? amountDue) - amountDue`」，漏掉模板實際有的 `Math.max(0, ...)` 下限箝制。照 v1.0 實作，實收小於應收時會由目前顯示 `0` 變成顯示**負數找零**，違反 S2「行為零變更」與 §1.5 的紅線 —— 這是規格會直接誤導實作的缺陷，不是文字瑕疵。已把函式契約改為逐字寫出 `Math.max(0, ...)`、寫明兩個要保留的部分與拿掉的後果，並新增**驗收 15**（四個案例，含實收小於應收回 `0`）把下限箝制變成可驗證的紅線。**(b) G09 主線狀態過時**：§0 前置相依與 §2.3 仍寫「已核准待合併／合併在即」，但 [PR #36](https://github.com/choka1227/coffee_GPT6/pull/36) 已於 2026-09-28 06:22:26Z 合併為 `ee9861c`（即本規格所在分支的 parent），已改為已合併並附主線 SHA。另補 §6.4 一句，說明單段式的 `cash ??= total` 留在呼叫端、驗證函式本身不接受 `undefined`（原本只寫在驗收 23，本文的「逐字等價」單看容易誤讀成單段式也要拒絕 `undefined`）|
+| v1.2 | 2026-09-28 | 依 Codex 在 [PR #37](https://github.com/choka1227/coffee_GPT6/pull/37) 的第二輪 `REQUEST_CHANGES` 修正**一項阻擋**：**驗收 23 是假綠燈**。v1.1 把單段式的 `cash ??= total.value` 留在 `MenuView.vue` 呼叫端，只用 §12.3 的一句文字說明「呼叫端會做」，而該列的自動化斷言只驗 `validateTendered({ tendered: undefined, amountDue: 140 })` **失敗**。實作端若漏掉那個預設帶入，`checkoutPath()`／`amountDue()`／`validateTendered()` 的所有指定斷言**仍然全綠**，但單段收款會在店員沒輸入實收時直接拒絕結帳 —— 正是驗收 23 標題「不得退化」要擋的事。**函式測試綠、行為壞掉、沒有任何東西變紅**，而規格據此宣稱 G07 的人工驗收 23 已被自動化取代，等於用一條驗不到東西的測試換掉一條真的人工驗收，比不換更糟。**修正**：新增 §6.4a `effectiveTendered({ path, tendered, amountDue })` 第六支純函式（僅 `POS_CASH_SINGLE` 在 `undefined` 時回 `amountDue`，兩段式維持 `undefined` —— 自動帶入折後應收等於系統自己按了確認，是 §1.2 抽屜短少的另一種寫法）；`MenuView.vue` 改為實際呼叫它；新增**驗收 16** 同時釘住兩個方向；§12.3 驗收 23 那一列改為「`effectiveTendered` 回 `140` → `validateTendered` 成功」並補反向案例；S2 的函式數由五支改為六支、驗收子集補上 15／16；§14 加第 5a 條施工提醒。採用 Codex 在 review 中提出的函式簽章，未另立等價設計。**本輪不放寬任何驗收、不改變任何設計決策**，`vitest`、`environment: "node"`、三階段切分維持原樣 |
