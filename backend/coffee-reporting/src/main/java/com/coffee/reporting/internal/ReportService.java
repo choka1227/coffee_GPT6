@@ -1,5 +1,6 @@
 package com.coffee.reporting.internal;
 
+import com.coffee.reporting.api.Reports;
 import com.coffee.shared.*;
 import java.time.*;
 import java.util.*;
@@ -7,7 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 @Service
-public class ReportService {
+public class ReportService implements Reports {
   private final JdbcTemplate db;
   private final ZoneId zone = ZoneId.of("Asia/Taipei");
 
@@ -15,7 +16,8 @@ public class ReportService {
     this.db = db;
   }
 
-  public Map<String, Object> report(Actor a, String month, String requestedBranch) {
+  @Override
+  public MonthlyReport report(Actor a, String month, String requestedBranch) {
     if (a.global()) a.require("REPORT_ALL");
     else a.require("REPORT_STORE");
     YearMonth m;
@@ -51,16 +53,9 @@ public class ReportService {
       dailyRevenue[day - 1] = row[1];
       dailyOrders[day - 1] = Math.toIntExact(row[2]);
     }
-    List<Map<String, Object>> daily = new ArrayList<>();
+    List<Daily> daily = new ArrayList<>();
     for (int day = 1; day <= m.lengthOfMonth(); day++) {
-      daily.add(
-          Map.of(
-              "day",
-              String.format("%02d", day),
-              "revenue",
-              dailyRevenue[day - 1],
-              "orders",
-              dailyOrders[day - 1]));
+      daily.add(new Daily(String.format("%02d", day), dailyRevenue[day - 1], dailyOrders[day - 1]));
     }
     var products =
         db.queryForList(
@@ -104,25 +99,19 @@ public class ReportService {
             params.toArray());
     Map<String, Object[]> branchTotals = new HashMap<>();
     for (Object[] row : branchRows) branchTotals.put((String) row[0], row);
-    List<Map<String, Object>> performance = new ArrayList<>();
+    List<BranchPerformance> performance = new ArrayList<>();
     for (var b : branches) {
       Object[] totals = branchTotals.get((String) b.get("id"));
       long rev = totals == null ? 0L : (long) totals[1];
       int orders = totals == null ? 0 : (int) totals[2];
       int target = ((Number) b.get("monthly_target")).intValue();
       performance.add(
-          Map.of(
-              "id",
-              b.get("id"),
-              "name",
-              b.get("name"),
-              "revenue",
+          new BranchPerformance(
+              (String) b.get("id"),
+              (String) b.get("name"),
               rev,
-              "orders",
               orders,
-              "target",
               target,
-              "achievement",
               target == 0 ? 0 : Math.round(rev * 1000.0 / target) / 10.0));
     }
     var categories = new LinkedHashMap<String, Long>();
@@ -139,9 +128,9 @@ public class ReportService {
             params.toArray());
     long[] hourlyOrders = new long[24];
     for (long[] row : hourlyRows) hourlyOrders[Math.toIntExact(row[0])] = row[1];
-    var hourly = new ArrayList<Map<String, Object>>();
+    var hourly = new ArrayList<Hourly>();
     for (int h = 0; h < 24; h++) {
-      hourly.add(Map.of("hour", String.format("%02d:00", h), "orders", hourlyOrders[h]));
+      hourly.add(new Hourly(String.format("%02d:00", h), hourlyOrders[h]));
     }
     long[] totals =
         db.queryForObject(
@@ -157,26 +146,24 @@ public class ReportService {
                 },
             params.toArray());
     long revenue = totals[0], discount = totals[1], count = totals[2];
-    return Map.ofEntries(
-        Map.entry("month", month),
-        Map.entry("today", today.toString()),
-        Map.entry("revenue", revenue),
-        Map.entry("discount", discount),
-        Map.entry("orders", count),
-        Map.entry("averageOrder", count == 0 ? 0 : Math.round((double) revenue / count)),
-        Map.entry("quantity", quantity),
-        Map.entry("grossProfit", revenue - cost),
-        Map.entry(
-            "grossMargin",
-            revenue == 0 ? 0 : Math.round((revenue - cost) * 1000.0 / revenue) / 10.0),
-        Map.entry("daily", daily),
-        Map.entry("products", products),
-        Map.entry("topToday", topToday),
-        Map.entry("branches", performance),
-        Map.entry("categories", categories),
-        Map.entry("hourly", hourly),
-        Map.entry("cashOrders", totals[3]),
-        Map.entry("onlineOrders", totals[4]),
-        Map.entry("takeawayOrders", totals[5]));
+    return new MonthlyReport(
+        month,
+        today.toString(),
+        revenue,
+        discount,
+        count,
+        count == 0 ? 0 : Math.round((double) revenue / count),
+        quantity,
+        revenue - cost,
+        revenue == 0 ? 0 : Math.round((revenue - cost) * 1000.0 / revenue) / 10.0,
+        daily,
+        products,
+        topToday,
+        performance,
+        categories,
+        hourly,
+        totals[3],
+        totals[4],
+        totals[5]);
   }
 }
