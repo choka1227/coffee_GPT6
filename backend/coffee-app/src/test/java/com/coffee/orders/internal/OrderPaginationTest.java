@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import com.coffee.audit.api.Audit;
 import com.coffee.branches.api.Branches;
 import com.coffee.catalog.api.Catalog;
+import com.coffee.catalog.api.Discounts;
 import com.coffee.orders.api.Orders;
 import com.coffee.shared.Actor;
 import com.coffee.shared.Problem;
@@ -35,7 +36,7 @@ class OrderPaginationTest {
     db.execute("create table branches(id varchar(36) primary key,name varchar(80) not null)");
     db.execute(
         "create table orders(id varchar(20) primary key,branch_id varchar(36),account_id varchar(36),"
-            + "status varchar(24),fulfillment varchar(20),payment_method varchar(10),total integer,"
+            + "status varchar(24),fulfillment varchar(20),payment_method varchar(10),total integer,discount_amount integer default 0,"
             + "note varchar(200),created_at bigint,paid_at bigint,tendered integer,change_amount integer)");
     db.execute(
         "create table order_items(id varchar(36) primary key,order_id varchar(20),product_id varchar(36),"
@@ -44,10 +45,13 @@ class OrderPaginationTest {
     db.execute(
         "create table order_item_options(id varchar(36) primary key,order_item_id varchar(36),"
             + "group_name varchar(80),option_name varchar(80),price_delta integer)");
+    db.execute(
+        "create table order_discounts(order_id varchar(20) primary key,code varchar(20),name varchar(40),"
+            + "kind varchar(8),percent integer,amount integer,discount_amount integer)");
     db.update("insert into branches values('taipei','台北店'),('taichung','台中店')");
     orders =
         new OrderService(
-            db, mock(Catalog.class), mock(Branches.class), mock(Audit.class));
+            db, mock(Catalog.class), mock(Discounts.class), mock(Branches.class), mock(Audit.class));
   }
 
   @Test
@@ -64,7 +68,7 @@ class OrderPaginationTest {
   }
 
   @Test
-  void pagesWithoutDuplicatesAndUsesThreeQueriesRegardlessOfPageSize() {
+  void pagesWithoutDuplicatesAndUsesFourQueriesRegardlessOfPageSize() {
     for (int i = 0; i < 25; i++) seed(i, "owner", "taipei", 1_000L + i, "PAID", "Latte");
     Actor manager = actor("manager", "GLOBAL", null, "ORDER_MANAGE");
 
@@ -72,11 +76,11 @@ class OrderPaginationTest {
     Orders.Page first = orders.page(manager, query(null, null, null, 5));
     assertThat(first.items()).hasSize(5);
     assertThat(first.nextCursor()).isNotNull();
-    assertThat(statements).hasValue(3);
+    assertThat(statements).hasValue(4);
 
     statements.set(0);
     assertThat(orders.page(manager, query(null, null, null, 50)).items()).hasSize(25);
-    assertThat(statements).hasValue(3);
+    assertThat(statements).hasValue(4);
 
     Set<String> ids = new HashSet<>();
     String cursor = null;
@@ -190,7 +194,8 @@ class OrderPaginationTest {
     String orderId = "ORD-" + String.format("%02d", number);
     String itemId = "ITEM-" + number;
     db.update(
-        "insert into orders values(?,?,?,?,?,'CASH',100,'',?,null,null,null)",
+        "insert into orders(id,branch_id,account_id,status,fulfillment,payment_method,total,discount_amount,note,created_at,paid_at,tendered,change_amount)"
+            + " values(?,?,?,?,?,'CASH',100,0,'',?,null,null,null)",
         orderId,
         branch,
         account,

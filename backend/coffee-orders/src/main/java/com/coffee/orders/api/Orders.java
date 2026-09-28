@@ -11,7 +11,11 @@ public interface Orders {
       String fulfillment,
       String paymentMethod,
       String note,
+      String discountCode,
       List<LineInput> items) {}
+
+  record OrderDiscount(
+      String code, String name, String kind, int percent, int amount, int discountAmount) {}
 
   record LineOption(String groupName, String optionName, int priceDelta) {}
 
@@ -36,6 +40,9 @@ public interface Orders {
       String fulfillment,
       String paymentMethod,
       int total,
+      int subtotal,
+      int discountAmount,
+      OrderDiscount discount,
       String note,
       long createdAt,
       Long paidAt,

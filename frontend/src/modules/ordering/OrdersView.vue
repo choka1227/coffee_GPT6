@@ -304,6 +304,13 @@ async function pay(o: Order) {
         ><b>{{ money(l.lineTotal) }}</b>
       </div>
       <div class="receipt-row">
+        <span>商品小計</span><b>{{ money(selected.subtotal) }}</b>
+      </div>
+      <div v-if="selected.discountAmount" class="receipt-row">
+        <span>優惠折抵<small>{{ selected.discount?.name }} · {{ selected.discount?.code }}</small></span>
+        <b>-{{ money(selected.discountAmount) }}</b>
+      </div>
+      <div class="receipt-row">
         <b>合計</b><strong>{{ money(selected.total) }}</strong>
       </div>
       <p v-if="selected.note">備註：{{ selected.note }}</p>

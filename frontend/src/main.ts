@@ -36,6 +36,11 @@ const routes = [
     meta: { permissions: ["MENU_MANAGE"] },
   },
   {
+    path: "/discounts",
+    component: () => import("./modules/catalog/DiscountsView.vue"),
+    meta: { permissions: ["MENU_MANAGE"] },
+  },
+  {
     path: "/accounts",
     component: () => import("./modules/identity/AccountsView.vue"),
     meta: { permissions: ["ACCOUNT_MANAGE"] },

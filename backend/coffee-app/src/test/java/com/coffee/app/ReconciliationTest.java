@@ -73,6 +73,7 @@ class ReconciliationTest {
             "TAKEAWAY",
             method,
             "",
+            null,
             List.of(new Orders.LineInput("latte", 1, List.of("temp-hot", "sugar-none")))),
         UUID.randomUUID().toString());
   }

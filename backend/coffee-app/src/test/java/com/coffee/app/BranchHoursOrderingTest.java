@@ -121,6 +121,7 @@ class BranchHoursOrderingTest {
             "TAKEAWAY",
             "CASH",
             "營業時間測試",
+            null,
             List.of(new LineInput("latte", 1, List.of("temp-hot", "sugar-none")))),
         key);
   }

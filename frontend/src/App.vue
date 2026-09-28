@@ -16,6 +16,7 @@ import {
   X,
   KeyRound,
   WalletCards,
+  Tags,
 } from "lucide-vue-next";
 import { useAuth } from "./modules/identity/store";
 import { notice, notify } from "./shared/notice";
@@ -67,6 +68,12 @@ const links = computed(() =>
       label: "菜單管理",
       icon: BookOpen,
       show: auth.can("MENU_MANAGE"),
+    },
+    {
+      path: "/discounts",
+      label: "優惠碼",
+      icon: Tags,
+      show: auth.can("MENU_MANAGE") && auth.user?.scope === "GLOBAL",
     },
     {
       path: "/accounts",
