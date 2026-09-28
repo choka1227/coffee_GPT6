@@ -27,6 +27,14 @@ import { minuteTime, money } from "../../shared/format";
 import { notify } from "../../shared/notice";
 import Modal from "../../shared/Modal.vue";
 import { openEcpay } from "../payments/ecpay";
+import {
+  amountDue,
+  changeAmount,
+  checkoutBlock,
+  checkoutPath,
+  effectiveTendered,
+  validateTendered,
+} from "./checkout";
 const auth = useAuth(),
   router = useRouter(),
   products = ref<Product[]>([]),
@@ -240,20 +248,15 @@ async function checkout() {
   if (busy.value) return;
   if (pendingCashOrder.value) {
     const order = pendingCashOrder.value;
-    const cash = tendered.value;
-    if (
-      cash === undefined ||
-      !Number.isInteger(cash) ||
-      cash < order.total ||
-      cash > 1000000
-    ) {
-      notify("請輸入足夠的實收金額");
+    const validation = validateTendered({ tendered: tendered.value, amountDue: order.total });
+    if (!validation.ok) {
+      notify(validation.message);
       return;
     }
     busy.value = true;
     try {
       receipt.value = await send<Order>("/orders/" + order.id + "/cash", {
-        tendered: cash,
+        tendered: validation.tendered,
       });
       pendingCashOrder.value = null;
       tendered.value = undefined;
@@ -265,28 +268,31 @@ async function checkout() {
     }
     return;
   }
-  if (!cart.value.length) return;
-  if (!branchId.value) {
-    notify("請先選擇分店");
+  const block = checkoutBlock({
+    cartLineCount: cart.value.length,
+    branchId: branchId.value,
+    customerClosed: customerClosed.value,
+    unavailableCount: unavailableCart.value.length,
+  });
+  if (block.blocked) {
+    if (block.message) notify(block.message);
     return;
   }
-  if (customerClosed.value) {
-    notify("分店目前未營業，請選擇其他分店或於營業時間再下單");
-    return;
-  }
-  if (unavailableCart.value.length) {
-    notify("點餐單中有商品已售完或本店未供應，請先移除");
-    return;
-  }
-  const cashAtPos = !auth.customer && payment.value === "CASH";
-  const discountedCashAtPos = cashAtPos && discountCode.value.trim().length > 0;
+  const path = checkoutPath({
+    isCustomer: auth.customer,
+    paymentMethod: payment.value,
+    discountCode: discountCode.value,
+  });
   let cash = tendered.value;
-  if (cashAtPos && !discountedCashAtPos) {
-    cash ??= total.value;
-    if (!Number.isInteger(cash) || cash < total.value || cash > 1000000) {
-      notify("請輸入足夠的實收金額");
+  if (path === "POS_CASH_SINGLE") {
+    const due = amountDue({ path, cartTotal: total.value, pendingOrderTotal: null });
+    cash = effectiveTendered({ path, tendered: cash, amountDue: due });
+    const validation = validateTendered({ tendered: cash, amountDue: due });
+    if (!validation.ok) {
+      notify(validation.message);
       return;
     }
+    cash = validation.tendered;
   }
   busy.value = true;
   let order: Order | undefined;
@@ -316,17 +322,17 @@ async function checkout() {
     discountCode.value = "";
     retryBody = "";
     retryKey = "";
-    if (payment.value === "ECPAY") {
+    if (path === "ECPAY") {
       await openEcpay(order.id);
       return;
     }
-    if (discountedCashAtPos) {
+    if (path === "POS_CASH_TWO_STAGE") {
       pendingCashOrder.value = order;
       tendered.value = undefined;
       notify("訂單已建立，請輸入實收金額完成收款");
       return;
     }
-    if (cashAtPos) {
+    if (path === "POS_CASH_SINGLE") {
       receipt.value = await send<Order>("/orders/" + order.id + "/cash", {
         tendered: cash,
       });
@@ -631,11 +637,10 @@ async function toggleAvailability(p: Product) {
           <span>應找零</span
           ><b>{{
             money(
-              Math.max(
-                0,
-                (tendered ?? (pendingCashOrder?.total ?? total)) -
-                  (pendingCashOrder?.total ?? total),
-              ),
+              changeAmount({
+                tendered,
+                amountDue: pendingCashOrder?.total ?? total,
+              }),
             )
           }}</b>
         </div>
