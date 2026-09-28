@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "test": "vitest run",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0"
   },
@@ -19,6 +20,7 @@
     "@vitejs/plugin-vue": "^5.2.1",
     "vite": "^6.1.0",
     "typescript": "~5.7.3",
-    "vue-tsc": "^2.2.0"
+    "vue-tsc": "^2.2.0",
+    "vitest": "^3.2.7"
   }
 }

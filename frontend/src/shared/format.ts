@@ -53,8 +53,8 @@ export const roleNames: Record<string, string> = {
   MANAGER: "店長",
   HQ: "總部人員",
 };
-export function csv(name: string, rows: (string | number)[][]) {
-  const body =
+export function csvBody(rows: (string | number)[][]): string {
+  return (
     "\uFEFF" +
     rows
       .map((row) =>
@@ -69,9 +69,12 @@ export function csv(name: string, rows: (string | number)[][]) {
           )
           .join(","),
       )
-      .join("\r\n");
+      .join("\r\n")
+  );
+}
+export function csv(name: string, rows: (string | number)[][]) {
   const url = URL.createObjectURL(
-    new Blob([body], { type: "text/csv;charset=utf-8" }),
+    new Blob([csvBody(rows)], { type: "text/csv;charset=utf-8" }),
   );
   const a = document.createElement("a");
   a.href = url;
