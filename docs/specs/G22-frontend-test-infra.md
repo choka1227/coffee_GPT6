@@ -4,8 +4,8 @@
 | --- | --- |
 | 缺口編號 | G22 |
 | 優先順序 | P2 → **升為 P1**（理由見 §13.1） |
-| 版本 | v1.0（2026-09-28，Claude 定案） |
-| 前置相依 | G07（PR #31，已合併）、G09（PR #36，已核准待合併） |
+| 版本 | v1.1（2026-09-28，Claude 定案） |
+| 前置相依 | G07（PR #31，已合併）、G09（PR #36，**已於 2026-09-28 合併**，主線 SHA `ee9861c`） |
 | Flyway | **不新增任何 migration** |
 | 後端變更 | **零** |
 | 新增第三方相依 | **有** —— `vitest`（devDependency，唯一一個）。這是 `AGENTS.md` 禁止事項第 3 條的例外案例，理由與替代方案見 §13.2 |
@@ -104,7 +104,7 @@ if (cashAtPos && !discountedCashAtPos) {
 
 ### 2.3 為什麼排在 G09 之後
 
-G09（PR #36）不動 `frontend/` 一個字（那是它的驗收條件 1），所以嚴格說沒有檔案衝突。排在後面是因為「一次一份」的通則，以及 G09 已經在審查中、合併在即。**G22 可以在 G09 合併後立刻開工，不需要等任何其他東西。**
+G09（PR #36）不動 `frontend/` 一個字（那是它的驗收條件 1），所以嚴格說沒有檔案衝突。排在後面是因為「一次一份」的通則。**G09 已於 2026-09-28 合併（主線 SHA `ee9861c`，即本規格所在分支的 parent），閘門已解除，G22 可立刻開工。**
 
 ---
 
@@ -268,6 +268,8 @@ export function validateTendered(input: {
 
 失敗訊息一律 `"請輸入足夠的實收金額"`（`AGENTS.md`：終端使用者看到的訊息用繁體中文）。
 
+**單段式的 `cash ??= total` 留在呼叫端，不進這支函式。** 上面「`tendered === undefined` → 失敗」描述的是**驗證函式本身**的契約（與兩段式那一份 `MenuView.vue:243-250` 逐字等價）；單段式目前未輸入實收時會先 `cash ??= total.value` 帶入，帶入後才驗證，所以它傳進來的永遠不是 `undefined`。這個分工由驗收 23 釘住。
+
 **`amountDue` 是參數，由呼叫端決定要傳 `pendingCashOrder.total` 還是 `total`。** 這個函式本身不知道也不該知道折扣的存在 —— 把「該用哪個數字」的決定留在呼叫端並用 §6.5 釘住它，比在這裡多塞一個 `discountCode` 參數乾淨。
 
 ### 6.5 `modules/ordering/checkout.ts` —— 應收金額的來源
@@ -292,7 +294,7 @@ export function amountDue(input: {
 
 ### 6.6 `modules/ordering/checkout.ts` —— 找零
 
-目前是模板裡的裸算術（`MenuView.vue:636`）。
+目前是模板裡的裸算術（`MenuView.vue:630-641`）。
 
 ```ts
 export function changeAmount(input: {
@@ -301,7 +303,18 @@ export function changeAmount(input: {
 }): number;
 ```
 
-等價於 `(tendered ?? amountDue) - amountDue`，也就是未輸入實收時顯示 0。模板改成呼叫它。
+**必須逐字等價於目前的**：
+
+```ts
+Math.max(0, (tendered ?? amountDue) - amountDue)
+```
+
+兩件事都要保留：
+
+- **`tendered ?? amountDue`** —— 未輸入實收時差額為 0，顯示 0
+- **`Math.max(0, ...)` 的下限箝制不可省** —— 實收**小於**應收時（店員邊打邊看，輸入到一半的中間狀態），目前顯示 **0**。拿掉 `Math.max` 會顯示**負數找零**，那是本規格 §1.5 明文禁止的「順手改前端行為」。「應找零 -26 元」在收銀台上沒有意義，而且會讓店員以為系統算錯
+
+模板改成呼叫它。
 
 ### 6.7 `modules/ordering/checkout.ts` —— 下單前的守門條件
 
@@ -485,6 +498,7 @@ S2 是三者中最大的一個（一個新檔 + `MenuView.vue` 的等價替換�
 5. [ ] `amountDue()` 的測試涵蓋：有 `pendingOrderTotal` 時一律回它（即使 `cartTotal` 不同）；`POS_CASH_SINGLE` 且無 `pendingOrderTotal` 時回 `cartTotal`；**`POS_CASH_TWO_STAGE` 且無 `pendingOrderTotal` 時丟 `Error`**
 6. [ ] `validateTendered()` 的測試涵蓋：`undefined`、非整數（如 `100.5`）、小於應收、等於應收、大於應收、超過 `1000000`；失敗訊息為 `"請輸入足夠的實收金額"`
 7. [ ] `checkoutBlock()` 的測試涵蓋四個條件**與它們的優先順序**（同時成立時回傳順序在前的那則訊息）；空車回 `{ blocked: true, message: "" }`；四則訊息逐字比對
+15. [ ] `changeAmount()` 的測試涵蓋：未輸入實收（`tendered: undefined`）回 `0`；實收等於應收回 `0`；實收大於應收回差額；**實收小於應收回 `0`（不是負數）** —— 這一條釘住 `Math.max(0, ...)` 的下限箝制，見 §6.6
 9. [ ] `checkout.ts` **不 import `vue`、不 import `shared/api`、不 import `identity/store`**。寫一條測試用 `import` 的靜態檢查或讀檔斷言釘住這件事（做法見 §12.4）
    - [ ] `MenuView.vue` 改呼叫後，`npm run build` 仍綠；`checkout()` 的四條路徑行為與改之前一致
 
@@ -673,3 +687,4 @@ it("checkout.ts 維持純函式，不依賴 vue、api 或 store", () => {
 | 版本 | 日期 | 變更 |
 | --- | --- | --- |
 | v1.0 | 2026-09-28 | 初版。Claude 定案。G07 §11.10／§11.11 登記的缺口，由 §11.11 升排為 G09 之後的下一份規格 |
+| v1.1 | 2026-09-28 | 依 Codex 在 [PR #37](https://github.com/choka1227/coffee_GPT6/pull/37) 的 `REQUEST_CHANGES` 修正兩項。**(a) §6.6 `changeAmount()` 不是等價抽取**：v1.0 寫「等價於 `(tendered ?? amountDue) - amountDue`」，漏掉模板實際有的 `Math.max(0, ...)` 下限箝制。照 v1.0 實作，實收小於應收時會由目前顯示 `0` 變成顯示**負數找零**，違反 S2「行為零變更」與 §1.5 的紅線 —— 這是規格會直接誤導實作的缺陷，不是文字瑕疵。已把函式契約改為逐字寫出 `Math.max(0, ...)`、寫明兩個要保留的部分與拿掉的後果，並新增**驗收 15**（四個案例，含實收小於應收回 `0`）把下限箝制變成可驗證的紅線。**(b) G09 主線狀態過時**：§0 前置相依與 §2.3 仍寫「已核准待合併／合併在即」，但 [PR #36](https://github.com/choka1227/coffee_GPT6/pull/36) 已於 2026-09-28 06:22:26Z 合併為 `ee9861c`（即本規格所在分支的 parent），已改為已合併並附主線 SHA。另補 §6.4 一句，說明單段式的 `cash ??= total` 留在呼叫端、驗證函式本身不接受 `undefined`（原本只寫在驗收 23，本文的「逐字等價」單看容易誤讀成單段式也要拒絕 `undefined`）|
