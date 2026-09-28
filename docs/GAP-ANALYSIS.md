@@ -99,9 +99,9 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 | G15 | 現金日結與交班 | 規格書（與 G11 合併為一份）已合併（PR #17，v1.2）；**實作已合併（PR #22，S3／S4）** | [`specs/G11-G15-audit-and-cash-sessions.md`](specs/G11-G15-audit-and-cash-sessions.md) |
 | G10 | 訂單清單分頁與 N+1 | 實作已合併（PR #26，2026-09-21） | [`specs/G10-order-list-pagination.md`](specs/G10-order-list-pagination.md) |
 | G14 | 分店營業時間 | 實作已合併（PR #29，2026-09-21，Flyway 占用 V8） | [`specs/G14-branch-business-hours.md`](specs/G14-branch-business-hours.md) |
-| G07 | 訂單折扣與優惠碼 | 實作已合併（PR #31，2026-09-28，Flyway 占用 V9）；規格書 v1.5。**驗收 21b／22／23 仍列在「待 PO 驗收」，將由 G22 S3 自動化** | [`specs/G07-order-discounts.md`](specs/G07-order-discounts.md) |
+| G07 | 訂單折扣與優惠碼 | 實作已合併（PR #31，2026-09-28，Flyway 占用 V9）；規格書 v1.5。**驗收 21b／22／23 已由 G22 S3 自動化** | [`specs/G07-order-discounts.md`](specs/G07-order-discounts.md) |
 | G09 | 報表彙整下推 SQL（原 P2，升為 P1） | 實作已合併（PR #36，2026-09-28，主線 SHA `ee9861c`，零 migration） | [`specs/G09-report-aggregation.md`](specs/G09-report-aggregation.md) |
-| G22 | 前端測試基礎設施與可測純函式抽離（原 P2，升為 P1） | **規格書已完成（v1.2），待實作** | [`specs/G22-frontend-test-infra.md`](specs/G22-frontend-test-infra.md) |
+| G22 | 前端測試基礎設施與可測純函式抽離（原 P2，升為 P1） | **S1–S3 已完成（PR #39，待 review／合併）** | [`specs/G22-frontend-test-infra.md`](specs/G22-frontend-test-infra.md) |
 
 **G11 稽核紀錄** —— `audit_log` 表存在，但全專案**只有 `IdentityService.java:221` 一處寫入**，且沒有任何查詢端點。等於有稽核資料卻無法稽核。現金收款（`OrderService.cash()`）、訂單狀態轉換（`transition()`）、菜單改價（`CatalogService.save()`）、分店改設定（`BranchService.save()`）全部沒有紀錄。金額相關操作都應該進稽核軌跡。
 
@@ -179,7 +179,7 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 8. ~~**Codex 依 [`specs/G07-order-discounts.md`](specs/G07-order-discounts.md) 實作訂單折扣與優惠碼**~~ —— 已完成，[PR #31](https://github.com/choka1227/coffee_GPT6/pull/31) 於 **2026-09-28** 合併（S1–S3 三階段全數完成，Flyway 實際占用 **V9**，進度報告見 [`reports/G07-order-discounts.md`](reports/G07-order-discounts.md)）。審查歷經兩輪 `REQUEST_CHANGES`，規格書更新至 v1.5 才解除閘門。**`codex/g07-order-discounts` 分支已完成任務，不要再從它續作或開新分支。** **注意：下列歷程紀錄中「不要為它們引入 Vitest 等前端測試依賴」一句已被 G22 取代** —— 當時的判斷是「前端測試基礎設施是獨立缺口，不要夾在 G07 裡做」，那句話約束的是 G07 的範圍，不是永久禁令。G22 規格 §13.2 已由 Claude 明確裁決引入 `vitest`。以下為歷程紀錄，保留給日後判斷用：**續作請留在 `codex/g07-order-discounts` 分支，不要另開分支、不要重做已完成的階段。** 待修兩項：(a) §6.6（v1.2 新增）POS 收現金用購物車小計驗證實收金額，會擋掉合法金額並讓抽屜短少；(b) 驗收 11 的四種 404 完全沒有測試。其餘為不擋合併的意見，列在 PR 的 review 裡。**Flyway 已實際占用 V9**。**規格 §6.1 仍是紅線：`Create` 不得有任何金額欄位**（本次實作有守住） **規格已更新為 v1.4**（2026-09-27；v1.3／v1.4 兩輪皆依 Codex 在 PR #32 的 `REQUEST_CHANGES`）：驗收 21 拆成 **21a（後端自動化）** 與 **21b（人工）**，22／23 同為人工驗收，**不要為它們引入 Vitest 等前端測試依賴** —— 前端測試基礎設施是獨立缺口 G22。§12 的施工提醒編號也已順排為 1–14（原本第 9 項之後重覆 7／8／9）。**v1.4 另修正 21a 的保護範圍**：21a 只釘住後端以折後 `total` 驗證 `tendered` 與保留 `PENDING_PAYMENT` 的契約，**它擋不住「前端自動以小計 140 當實收送出」那個缺陷**（請求與帳面一致，21a 全綠）。在 G22 之前擋住抽屜短少的只有 21b／22／23。**規格已再更新為 v1.5**（2026-09-27，Claude 主動修補，非任何一方的 `REQUEST_CHANGES`）：v1.3／v1.4 把「實機人工驗收紀錄」寫成 PR #31 轉 ready for review 的閘門，但**沒有指定執行者，而且沒有任何一方做得到** —— Codex 的環境沒有瀏覽器、沒有可用 backend JAR、`./mvnw verify` 因 Maven Central DNS 解析失敗跑不起來；押在 PO 身上則是「停工等人」。結果是 PR #31 三階段全綠、CI 通過卻永遠 draft，硬相依的 G09 也連帶開不了工（2026-09-27 Codex 兩次執行產出零行程式碼）。**v1.5 把 21b／22／23 改為「原始碼佐證」並解除閘門**（§11.11）：Codex 在 `docs/reports/G07-order-discounts.md` 附一節「§6.6 原始碼佐證」，貼出 `MenuView.vue` 的實際行並說明每個顯示／驗證數字的來源，Claude 在 review 時對照 diff 覆核；實機操作降為**PO 的合併後驗收**（見下「待 PO 驗收」）。**Codex 下一步：補上該節、勾完 S3、PR #31 轉 ready for review 並啟用 auto-merge，不要再等實機驗收**
 9. ~~**Codex 依 [`specs/G09-report-aggregation.md`](specs/G09-report-aggregation.md) 把報表彙整下推 SQL，並補 `coffee-reporting` 的 `api` package**~~ —— 已完成，[PR #36](https://github.com/choka1227/coffee_GPT6/pull/36) 於 **2026-09-28 合併**（Claude 於 head `91fac14` 送出 `APPROVE` 後由 auto-merge 合入，**主線合併提交 `ee9861c`**，S1–S3 三階段全數完成、CI 綠、零 migration、零 frontend 變更、18 個 JSON key 由真實 HTTP 測試鎖定）。硬相依的 G07 已於同日先行合併，閘門解除。**`codex/g09-report-aggregation` 分支已完成任務，不要再從它續作或開新分支。**
 10. ~~**Claude 產出 G22 前端測試基礎設施規格書**~~ —— 已完成，[`specs/G22-frontend-test-infra.md`](specs/G22-frontend-test-infra.md) v1.2 於 2026-09-28 產出（G07 §11.11 升排；庫存在 G07 合併、G09 核准後降到 1 份才動，符合上限規則）。
-11. **← 目前這一項：Codex 依 [`specs/G22-frontend-test-infra.md`](specs/G22-frontend-test-infra.md) 建立前端測試基礎設施並抽出可測純函式** —— 三個施工階段：**S1** 裝 `vitest`、`npm run test` 進 CI 的既有 `verify` job、抽出 `csvBody()` 並補測試；**S2** 新增 `modules/ordering/checkout.ts`（純函式：付款路徑、實收驗證、應收來源、找零、守門條件），`MenuView.vue` 改呼叫，行為零變更；**S3** 冪等鍵重用狀態機，並把 G07 驗收 21b／22／23 三條人工項目換成自動化斷言。**本規格不新增任何 Flyway migration**，下一份需要 migration 的規格自 **V10** 起算。**紅線一：`.github/workflows/verify.yml` 的 job 名稱必須維持 `verify`** —— 改了名字分支保護的 required status check 就找不到它，所有 PR 會卡住等一個永遠不會出現的檢查（規格 §13.5）。**紅線二：`npm run test` 的 script 必須是 `vitest run`** —— 漏了 `run` 會進 watch 模式，CI 掛到 timeout（§5.3）。**紅線三：本規格是「把既有邏輯搬到可測的位置並釘住它」，不得順手改任何前端行為**（§1.5）。`vitest` 是 `AGENTS.md` 禁止事項第 3 條的例外，已由 Claude 在規格 §13.2 明確裁決引入，**且只引入這一個**（devDependency，不進生產 bundle）。
+11. **← 目前這一項：Codex 依 [`specs/G22-frontend-test-infra.md`](specs/G22-frontend-test-infra.md) 建立前端測試基礎設施並抽出可測純函式** —— **S1–S3 已完成於 PR #39，待 review／合併**。S1 裝 `vitest`、把 `npm run test` 放進既有 `verify` job、抽出 `csvBody()`；S2 抽出六支 checkout 決策純函式並由 `MenuView.vue` 實際呼叫；S3 完成冪等鍵重用與 G07 21b／22／23 自動化。本規格零 migration，下一份需要 migration 的規格自 **V10** 起算。
 12. 金流那條線（G01–G04 其餘部分）待進入綠界串接階段再排
 
 ### 待 PO 驗收（不擋合併）
@@ -188,9 +188,7 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 
 | 項目 | 來源 | 內容 | 對照資料 |
 | --- | --- | --- | --- |
-| G07 驗收 21b／22／23 | G07 §6.6／§11.11（v1.5） | 員工 POS 現金 + 優惠碼：收款欄顯示「小計／折抵／應收」是否正確；店員未輸入實收時不得自動以購物車小計送出；未帶碼的單段流程不得退化 | `docs/reports/G07-order-discounts.md` 的「§6.6 原始碼佐證」一節 |
-
-**這一列有終點了：G22 S3（驗收 13）會把這三條換成自動化斷言**（G22 §12.3，用同一組數字：小計 140、折抵 14、應收 126），完成後由 Codex 在 G22 的 PR 裡把本列刪除。在那之前仍靠原始碼佐證與互審把關。**注意自動化替代的邊界**：G22 只測純函式，能證明「顯示與送出的數字對不對」，證明不了「欄位有沒有出現在畫面上」（模板 `v-if` 的可見性，登記為 G23）。那一半仍是 PO 的合併後驗收。
+目前沒有未完成項目。G07 驗收 21b／22／23 已由 G22 S3（驗收 13）以同一組數字（小計 140、折抵 14、應收 126）轉為自動化斷言。模板欄位是否可見仍不在純函式測試範圍，已登記為 G23。
 
 ### 排程注意
 
@@ -198,11 +196,11 @@ PR #9（G01 對帳）已於 2026-09-17 08:32 合併，`OrderService` 的衝突�
 
 G01 留在主線的缺陷已寫成獨立規格 [`specs/G01a-reconciliation-fixes.md`](specs/G01a-reconciliation-fixes.md)，用分支 `codex/g01-fixes`，**不要**夾在 G06 的 PR 裡 —— 兩件事、兩支分支。兩者動的是不同模組（`coffee-payments` vs `coffee-orders` / `coffee-catalog`），可以並行。**兩者皆已合併（#14、#15），此段保留為紀錄。**
 
-**目前（2026-09-28）待實作的規格一份：G22**（第 11 項，[`specs/G22-frontend-test-infra.md`](specs/G22-frontend-test-infra.md) v1.2，隨本 PR 登記，**無前置閘門，可立刻開工**）。G07 的實作已隨 [PR #31](https://github.com/choka1227/coffee_GPT6/pull/31) 於 2026-09-28 合併，G09 的實作隨 [PR #36](https://github.com/choka1227/coffee_GPT6/pull/36) 於同日合併（主線 SHA `ee9861c`）；G14 隨 PR #29、G10 隨 PR #26、G11+G15 隨 PR #22、G13 隨 PR #20、G06 隨 PR #14、G01a 隨 PR #15，**全部沒有未解除的閘門**。
+**目前 G22 S1–S3 已完成於 PR #39，等待 review／合併；沒有其他已排定且可開工的規格。** G07 的實作已隨 PR #31、G09 隨 PR #36 合併；其他既有 P1 工作也已完成。
 
 Flyway 版號現況：`V1__coffee_schema.sql`、`V2__payment_reconciliation.sql`（#9）、`V3__product_options.sql`（#14）、`V4__branch_menu_availability.sql`（#20）、`V5__audit_trail.sql`、`V6__cash_sessions.sql`（#22）、`V7__order_list_indexes.sql`（#26）、`V8__branch_business_hours.sql`（#29）、**`V9__order_discounts.sql`（#31，已於 2026-09-28 合併）** 全部已進主線。**G09（#36，已合併）與 G22 都不新增任何 migration**，所以 **下一份需要 migration 的規格自 `V10` 起算**。
 
-**規格庫存目前是 1 份**（G22 待實作）。上限 2 份的規則不變 —— 下一份新規格要等 G22 開工、或 G22 合併後才產出。
+**規格庫存目前是 0 份**（G22 實作在 PR #39 待合併）。上限 2 份的規則不變。
 
 **版號不得互換**（原因保留為紀錄）：Flyway 預設不接受事後補插較小版號（out-of-order），所以 G07 就算先於 G14 開工也一樣要用 V9，空一個版號的成本是零。G14 先合併，這條規則這一輪沒有被動用到，但規則本身不變。
 

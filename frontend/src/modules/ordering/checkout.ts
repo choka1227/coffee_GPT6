@@ -82,3 +82,13 @@ export function checkoutBlock(input: {
     };
   return { blocked: false };
 }
+
+export function nextIdempotency(
+  previous: { body: string; key: string },
+  serializedBody: string,
+  newKey: () => string,
+): { body: string; key: string } {
+  return serializedBody === previous.body
+    ? previous
+    : { body: serializedBody, key: newKey() };
+}

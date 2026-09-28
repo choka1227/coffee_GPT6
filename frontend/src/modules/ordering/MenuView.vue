@@ -33,6 +33,7 @@ import {
   checkoutBlock,
   checkoutPath,
   effectiveTendered,
+  nextIdempotency,
   validateTendered,
 } from "./checkout";
 const auth = useAuth(),
@@ -310,10 +311,13 @@ async function checkout() {
       })),
     };
     const serialized = JSON.stringify(body);
-    if (serialized !== retryBody) {
-      retryBody = serialized;
-      retryKey = crypto.randomUUID();
-    }
+    const idempotency = nextIdempotency(
+      { body: retryBody, key: retryKey },
+      serialized,
+      () => crypto.randomUUID(),
+    );
+    retryBody = idempotency.body;
+    retryKey = idempotency.key;
     order = await send<Order>("/orders", body, "POST", {
       "Idempotency-Key": retryKey,
     });

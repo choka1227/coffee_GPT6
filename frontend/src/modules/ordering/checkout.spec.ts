@@ -5,6 +5,7 @@ import {
   checkoutBlock,
   checkoutPath,
   effectiveTendered,
+  nextIdempotency,
   validateTendered,
 } from "./checkout";
 
@@ -84,6 +85,78 @@ describe("checkoutBlock", () => {
   it("條件均通過時放行", () => expect(checkoutBlock(valid)).toEqual({ blocked: false }));
 });
 
+describe("nextIdempotency", () => {
+  it("相同 request body 沿用原 key 且不產生新 key", () => {
+    let calls = 0;
+    const previous = { body: '{"branchId":"B1"}', key: "same-key" };
+    expect(
+      nextIdempotency(previous, previous.body, () => {
+        calls += 1;
+        return "new-key";
+      }),
+    ).toBe(previous);
+    expect(calls).toBe(0);
+  });
+
+  it("request body 改變時只產生一次新 key", () => {
+    let calls = 0;
+    expect(
+      nextIdempotency({ body: "old", key: "old-key" }, "new", () => {
+        calls += 1;
+        return "new-key";
+      }),
+    ).toEqual({ body: "new", key: "new-key" });
+    expect(calls).toBe(1);
+  });
+});
+
+describe("G07 驗收 21b／22／23 自動化替代", () => {
+  it("21b 使用後端折後應收並正確找零", () => {
+    const due = amountDue({
+      path: "POS_CASH_TWO_STAGE",
+      cartTotal: 140,
+      pendingOrderTotal: 126,
+    });
+    expect(due).toBe(126);
+    expect(changeAmount({ tendered: 130, amountDue: due })).toBe(4);
+  });
+
+  it("22 帶碼兩段式在後端應收產生前不得拿小計充當應收", () => {
+    const path = checkoutPath({
+      isCustomer: false,
+      paymentMethod: "CASH",
+      discountCode: "X10",
+    });
+    expect(path).toBe("POS_CASH_TWO_STAGE");
+    expect(() => amountDue({ path, cartTotal: 140, pendingOrderTotal: null })).toThrow();
+  });
+
+  it("23 未帶碼單段式預設帶入應收，兩段式維持未輸入", () => {
+    const single = checkoutPath({
+      isCustomer: false,
+      paymentMethod: "CASH",
+      discountCode: "",
+    });
+    expect(single).toBe("POS_CASH_SINGLE");
+    const due = amountDue({ path: single, cartTotal: 140, pendingOrderTotal: null });
+    expect(due).toBe(140);
+    const tendered = effectiveTendered({ path: single, tendered: undefined, amountDue: due });
+    expect(tendered).toBe(140);
+    expect(validateTendered({ tendered, amountDue: due })).toEqual({ ok: true, tendered: 140 });
+
+    const twoStageTendered = effectiveTendered({
+      path: "POS_CASH_TWO_STAGE",
+      tendered: undefined,
+      amountDue: 126,
+    });
+    expect(twoStageTendered).toBeUndefined();
+    expect(validateTendered({ tendered: twoStageTendered, amountDue: 126 })).toEqual({
+      ok: false,
+      message: "請輸入足夠的實收金額",
+    });
+  });
+});
+
 it("純函式模組不依賴 Vue、API 或 identity store", () => {
   const source = import.meta.glob("./checkout.ts", {
     query: "?raw",
@@ -93,4 +166,24 @@ it("純函式模組不依賴 Vue、API 或 identity store", () => {
   expect(source).not.toMatch(/from ["']vue["']/);
   expect(source).not.toContain("shared/api");
   expect(source).not.toContain("identity/store");
+});
+
+it("建立訂單 request body 不含任何金額欄位", () => {
+  const source = import.meta.glob("./MenuView.vue", {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  })["./MenuView.vue"] as string;
+  const body = source.match(/const body = \{([\s\S]*?)\n    \};/)?.[1];
+  expect(body).toBeDefined();
+  expect(body).toContain("branchId: branchId.value");
+  expect(body).toContain("fulfillment: fulfillment.value");
+  expect(body).toContain("paymentMethod: payment.value");
+  expect(body).toContain("note: note.value");
+  expect(body).toContain("discountCode: discountCode.value");
+  expect(body).toContain("items: cart.value.map(({ productId, quantity, optionIds })");
+  expect(body).toContain("productId,");
+  expect(body).toContain("quantity,");
+  expect(body).toContain("optionIds,");
+  expect(body).not.toMatch(/\b(total|subtotal|discountAmount|tendered|changeAmount|unitPrice|lineTotal|optionsPrice)\b/);
 });
