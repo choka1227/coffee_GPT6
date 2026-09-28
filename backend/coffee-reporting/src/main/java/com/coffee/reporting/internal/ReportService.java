@@ -15,16 +15,6 @@ public class ReportService {
     this.db = db;
   }
 
-  record Sale(
-      String id,
-      String branchId,
-      String branchName,
-      int total,
-      int discountAmount,
-      long paidAt,
-      String fulfillment,
-      String method) {}
-
   public Map<String, Object> report(Actor a, String month, String requestedBranch) {
     if (a.global()) a.require("REPORT_ALL");
     else a.require("REPORT_STORE");
@@ -46,27 +36,6 @@ public class ReportService {
     String filter = branch == null ? "" : " and o.branch_id=?";
     List<Object> params = new ArrayList<>(List.of(start, end));
     if (branch != null) params.add(branch);
-    var sales =
-        db.query(
-            "select"
-                + " o.id,o.branch_id,b.name,o.total,o.discount_amount,o.paid_at,o.fulfillment,o.payment_method"
-                + " from orders o join branches b on b.id=o.branch_id where o.paid_at>=? and"
-                + " o.paid_at<?"
-                + filter,
-            (r, n) ->
-                new Sale(
-                    r.getString(1),
-                    r.getString(2),
-                    r.getString(3),
-                    r.getInt(4),
-                    r.getInt(5),
-                    r.getLong(6),
-                    r.getString(7),
-                    r.getString(8)),
-            params.toArray());
-    long revenue = sales.stream().mapToLong(Sale::total).sum();
-    long discount = sales.stream().mapToLong(Sale::discountAmount).sum();
-    long count = sales.size();
     var dailyRows =
         db.query(
             "select (o.paid_at+28800000)/86400000 as taipei_day,sum(o.total) as revenue,count(*) as"
@@ -125,10 +94,21 @@ public class ReportService {
                 + (branch == null ? "" : " where id=?")
                 + " order by name",
             branch == null ? new Object[] {} : new Object[] {branch});
+    var branchRows =
+        db.query(
+            "select o.branch_id,sum(o.total) as revenue,count(*) as orders from orders o where"
+                + " o.paid_at>=? and o.paid_at<?"
+                + filter
+                + " group by o.branch_id",
+            (r, n) -> new Object[] {r.getString(1), r.getLong(2), r.getInt(3)},
+            params.toArray());
+    Map<String, Object[]> branchTotals = new HashMap<>();
+    for (Object[] row : branchRows) branchTotals.put((String) row[0], row);
     List<Map<String, Object>> performance = new ArrayList<>();
     for (var b : branches) {
-      var bs = sales.stream().filter(s -> s.branchId().equals(b.get("id"))).toList();
-      long rev = bs.stream().mapToLong(Sale::total).sum();
+      Object[] totals = branchTotals.get((String) b.get("id"));
+      long rev = totals == null ? 0L : (long) totals[1];
+      int orders = totals == null ? 0 : (int) totals[2];
       int target = ((Number) b.get("monthly_target")).intValue();
       performance.add(
           Map.of(
@@ -139,7 +119,7 @@ public class ReportService {
               "revenue",
               rev,
               "orders",
-              bs.size(),
+              orders,
               "target",
               target,
               "achievement",
@@ -163,6 +143,20 @@ public class ReportService {
     for (int h = 0; h < 24; h++) {
       hourly.add(Map.of("hour", String.format("%02d:00", h), "orders", hourlyOrders[h]));
     }
+    long[] totals =
+        db.queryForObject(
+            "select coalesce(sum(o.total),0),coalesce(sum(o.discount_amount),0),count(*),"
+                + "coalesce(sum(case when o.payment_method='CASH' then 1 else 0 end),0),"
+                + "coalesce(sum(case when o.payment_method='ECPAY' then 1 else 0 end),0),"
+                + "coalesce(sum(case when o.fulfillment='TAKEAWAY' then 1 else 0 end),0)"
+                + " from orders o where o.paid_at>=? and o.paid_at<?"
+                + filter,
+            (r, n) ->
+                new long[] {
+                  r.getLong(1), r.getLong(2), r.getLong(3), r.getLong(4), r.getLong(5), r.getLong(6)
+                },
+            params.toArray());
+    long revenue = totals[0], discount = totals[1], count = totals[2];
     return Map.ofEntries(
         Map.entry("month", month),
         Map.entry("today", today.toString()),
@@ -181,10 +175,8 @@ public class ReportService {
         Map.entry("branches", performance),
         Map.entry("categories", categories),
         Map.entry("hourly", hourly),
-        Map.entry("cashOrders", sales.stream().filter(s -> s.method().equals("CASH")).count()),
-        Map.entry("onlineOrders", sales.stream().filter(s -> s.method().equals("ECPAY")).count()),
-        Map.entry(
-            "takeawayOrders",
-            sales.stream().filter(s -> s.fulfillment().equals("TAKEAWAY")).count()));
+        Map.entry("cashOrders", totals[3]),
+        Map.entry("onlineOrders", totals[4]),
+        Map.entry("takeawayOrders", totals[5]));
   }
 }
