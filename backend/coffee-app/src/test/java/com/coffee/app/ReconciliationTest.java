@@ -12,6 +12,7 @@ import com.coffee.orders.api.Orders;
 import com.coffee.payments.api.*;
 import com.coffee.payments.internal.EcpayTradeQuery;
 import com.coffee.payments.internal.ReconciliationService;
+import com.coffee.reporting.api.Reports;
 import com.coffee.shared.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.*;
@@ -43,7 +44,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @ActiveProfiles("dev")
 @AutoConfigureMockMvc
 class ReconciliationTest {
-  @Autowired com.coffee.reporting.internal.ReportService reports;
+  @Autowired Reports reports;
   @Autowired Orders orders;
   @Autowired Identity identity;
   @Autowired ReconciliationService service;
