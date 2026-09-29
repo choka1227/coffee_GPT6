@@ -20,7 +20,11 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: maven
-      - run: npm ci --no-audit --no-fund && npm run build
+      - run: npm ci --no-audit --no-fund
+        working-directory: frontend
+      - run: npm run test
+        working-directory: frontend
+      - run: npm run build
         working-directory: frontend
       - run: chmod +x ./mvnw
         working-directory: backend
