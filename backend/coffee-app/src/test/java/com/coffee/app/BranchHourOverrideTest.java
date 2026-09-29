@@ -54,6 +54,8 @@ class BranchHourOverrideTest {
     db.update("delete from branch_day_overrides");
     db.update("delete from branch_hours");
     db.update("delete from audit_log where action like 'BRANCH_HOURS_OVERRIDE_%'");
+    db.update(
+        "delete from role_permissions where role_code='MANAGER' and permission='BRANCH_MANAGE'");
     hq = identity.find("hq");
   }
 
@@ -266,6 +268,8 @@ class BranchHourOverrideTest {
                 Integer.class))
         .isEqualTo(1);
 
+    db.update(
+        "insert into role_permissions(role_code,permission) values('MANAGER','BRANCH_MANAGE')");
     for (String account : List.of("manager", "cashier", "customer")) {
       mvc.perform(
               put("/api/branches/taipei/hour-overrides/20261011")
