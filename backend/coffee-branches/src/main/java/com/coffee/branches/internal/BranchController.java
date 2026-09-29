@@ -35,6 +35,8 @@ class BranchController {
   record OverridesResponse(
       String branchId, int from, int to, List<DayOverrideResponse> overrides) {}
 
+  record OverrideRequest(Integer onDate, boolean closed, String note, List<Branches.Hours> hours) {}
+
   private final Branches service;
 
   BranchController(Branches s) {
@@ -102,7 +104,7 @@ class BranchController {
       @RequestAttribute Actor actor,
       @PathVariable String id,
       @PathVariable int onDate,
-      @RequestBody(required = false) Branches.DayOverride request) {
+      @RequestBody(required = false) OverrideRequest request) {
     Branches.DayOverride saved =
         service.saveOverride(
             actor,
