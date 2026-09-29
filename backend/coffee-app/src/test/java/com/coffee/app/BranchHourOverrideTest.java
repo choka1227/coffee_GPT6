@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -15,12 +16,14 @@ import com.coffee.branches.api.Branches.Hours;
 import com.coffee.branches.internal.BranchService;
 import com.coffee.branches.internal.BranchService.DaySchedule;
 import com.coffee.identity.api.Identity;
+import com.coffee.orders.api.Orders;
 import com.coffee.shared.Actor;
 import com.coffee.shared.Problem;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,6 +46,7 @@ class BranchHourOverrideTest {
 
   @Autowired Branches branches;
   @Autowired Identity identity;
+  @Autowired Orders orders;
   @Autowired JdbcTemplate db;
   @Autowired MockMvc mvc;
 
@@ -301,6 +305,129 @@ class BranchHourOverrideTest {
         .andExpect(status().isNoContent());
   }
 
+  @Test
+  void closedOverrideBlocksNewCustomerOrdersButNotExistingOrderCash() throws Exception {
+    Actor customer = identity.find("customer");
+    Actor cashier = identity.find("cashier");
+    Orders.Order existing =
+        orders.create(
+            customer,
+            new Orders.Create(
+                "taipei",
+                "TAKEAWAY",
+                "CASH",
+                "例外日測試",
+                null,
+                List.of(
+                    new Orders.LineInput(
+                        "latte", 1, List.of("temp-hot", "sugar-none")))),
+            "override-existing-" + UUID.randomUUID());
+    db.update(
+        "update orders set created_at=created_at-86400000 where id=?", existing.id());
+
+    int today = dateInt(LocalDate.now(TAIPEI));
+    branches.saveOverride(hq, "taipei", new DayOverride(today, true, "國定假日", List.of()));
+
+    mvc.perform(
+            post("/api/orders/" + existing.id() + "/cash")
+                .session(session(cashier.id()))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"tendered\":" + existing.total() + "}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("PAID"));
+
+    mvc.perform(
+            post("/api/orders")
+                .session(session(customer.id()))
+                .with(csrf())
+                .header("Idempotency-Key", "override-new-" + UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"branchId\":\"taipei\",\"fulfillment\":\"TAKEAWAY\","
+                        + "\"paymentMethod\":\"CASH\",\"note\":\"\",\"items\":[{"
+                        + "\"productId\":\"latte\",\"quantity\":1,"
+                        + "\"optionItemIds\":[\"temp-hot\",\"sugar-none\"]}]}"))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.message").value("分店今日公休（國定假日）"));
+  }
+
+  @Test
+  void requireOrderableUsesAllFourSpecifiedMessages() {
+    long saturdayMorning = taipei(2026, 10, 10, 8, 0);
+
+    branches.saveOverride(
+        hq, "taipei", new DayOverride(20261010, true, "國定假日", List.of()));
+    assertProblem(
+        "分店今日公休（國定假日）",
+        () -> branches.requireOrderable("taipei", saturdayMorning));
+
+    branches.saveOverride(hq, "taipei", new DayOverride(20261010, true, "", List.of()));
+    assertProblem("分店今日公休", () -> branches.requireOrderable("taipei", saturdayMorning));
+
+    branches.deleteOverride(hq, "taipei", 20261010);
+    branches.saveHours(hq, "taipei", List.of(new Hours(6, 540, 720)));
+    assertProblem(
+        "分店目前未營業（今日營業時間 09:00–12:00）",
+        () -> branches.requireOrderable("taipei", saturdayMorning));
+
+    branches.saveHours(hq, "taipei", List.of(new Hours(7, 540, 720)));
+    assertProblem("分店今日未營業", () -> branches.requireOrderable("taipei", saturdayMorning));
+  }
+
+  @Test
+  void branchListOpenNowUsesOverridesAndWeeklyHoursForThreeBranches() throws Exception {
+    var now = java.time.Instant.now().atZone(TAIPEI);
+    int today = dateInt(now.toLocalDate());
+    int weekday = now.getDayOfWeek().getValue();
+    branches.saveOverride(hq, "taipei", new DayOverride(today, true, "", List.of()));
+    branches.saveOverride(
+        hq,
+        "banqiao",
+        new DayOverride(today, false, "", List.of(new Hours(weekday, 0, 1440))));
+    branches.saveHours(hq, "taichung", List.of(new Hours(weekday, 0, 1440)));
+
+    mvc.perform(get("/api/branches").session(session("customer")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$[?(@.id == 'taipei' && @.openNow == false)]").isNotEmpty())
+        .andExpect(jsonPath("$[?(@.id == 'banqiao' && @.openNow == true)]").isNotEmpty())
+        .andExpect(jsonPath("$[?(@.id == 'taichung' && @.openNow == true)]").isNotEmpty());
+  }
+
+  @Test
+  void overrideAuditsAreQueryableThroughAuditApi() throws Exception {
+    String body = "{\"closed\":true,\"note\":\"稽核測試\",\"hours\":[]}";
+    mvc.perform(
+            put("/api/branches/taipei/hour-overrides/20261010")
+                .session(session("hq"))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isOk());
+    mvc.perform(
+            get("/api/audit")
+                .session(session("hq"))
+                .param("action", "BRANCH_HOURS_OVERRIDE_SAVE")
+                .param("branchId", "taipei"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items[0].targetId").value("taipei:20261010"))
+        .andExpect(jsonPath("$.items[0].branchId").value("taipei"));
+
+    mvc.perform(
+            delete("/api/branches/taipei/hour-overrides/20261010")
+                .session(session("hq"))
+                .with(csrf()))
+        .andExpect(status().isNoContent());
+    mvc.perform(
+            get("/api/audit")
+                .session(session("hq"))
+                .param("action", "BRANCH_HOURS_OVERRIDE_DELETE")
+                .param("branchId", "taipei"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items[0].targetId").value("taipei:20261010"))
+        .andExpect(jsonPath("$.items[0].branchId").value("taipei"));
+  }
+
   private int deleteAudits() {
     return db.queryForObject(
         "select count(*) from audit_log where action='BRANCH_HOURS_OVERRIDE_DELETE'",
@@ -319,6 +446,10 @@ class BranchHourOverrideTest {
         .atZone(TAIPEI)
         .toInstant()
         .toEpochMilli();
+  }
+
+  private static int dateInt(LocalDate date) {
+    return Integer.parseInt(date.format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE));
   }
 
   private static void assertProblem(
