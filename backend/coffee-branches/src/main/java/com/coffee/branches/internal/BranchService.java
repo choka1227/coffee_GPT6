@@ -11,6 +11,7 @@ import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -83,7 +84,7 @@ public class BranchService implements Branches {
             + " on h.branch_id=o.branch_id and h.on_date=o.on_date"
             + " where o.branch_id=? and o.on_date between ? and ?"
             + " order by o.on_date,h.open_minute",
-        result -> addOverrideRow(rows, result, branchId),
+        (RowCallbackHandler) result -> addOverrideRow(rows, result),
         branchId,
         fromDate,
         toDate);
@@ -119,22 +120,23 @@ public class BranchService implements Branches {
               + " from branch_day_overrides o left join branch_day_override_hours h"
               + " on h.branch_id=o.branch_id and h.on_date=o.on_date"
               + " where o.on_date in (?,?) order by o.branch_id,o.on_date,h.open_minute",
-          result -> {
-            String branchId = result.getString(1);
-            Map<LocalDate, DayOverride> branch =
-                overrides.computeIfAbsent(branchId, ignored -> new LinkedHashMap<>());
-            LocalDate date = parseDate(result.getInt(2), "日期格式不正確");
-            DayOverride current = branch.get(date);
-            List<Hours> periods =
-                current == null ? new ArrayList<>() : new ArrayList<>(current.hours());
-            Integer open = (Integer) result.getObject(5);
-            if (open != null)
-              periods.add(new Hours(date.getDayOfWeek().getValue(), open, result.getInt(6)));
-            branch.put(
-                date,
-                new DayOverride(
-                    result.getInt(2), result.getBoolean(3), result.getString(4), periods));
-          },
+          (RowCallbackHandler)
+              result -> {
+                String branchId = result.getString(1);
+                Map<LocalDate, DayOverride> branch =
+                    overrides.computeIfAbsent(branchId, ignored -> new LinkedHashMap<>());
+                LocalDate date = parseDate(result.getInt(2), "日期格式不正確");
+                DayOverride current = branch.get(date);
+                List<Hours> periods =
+                    current == null ? new ArrayList<>() : new ArrayList<>(current.hours());
+                Integer open = (Integer) result.getObject(5);
+                if (open != null)
+                  periods.add(new Hours(date.getDayOfWeek().getValue(), open, result.getInt(6)));
+                branch.put(
+                    date,
+                    new DayOverride(
+                        result.getInt(2), result.getBoolean(3), result.getString(4), periods));
+              },
           dateInt(today),
           dateInt(today.minusDays(1)));
     }
@@ -426,8 +428,7 @@ public class BranchService implements Branches {
     }
   }
 
-  private static void addOverrideRow(
-      Map<Integer, MutableOverride> rows, java.sql.ResultSet result, String branchId)
+  private static void addOverrideRow(Map<Integer, MutableOverride> rows, java.sql.ResultSet result)
       throws java.sql.SQLException {
     int onDate = result.getInt(1);
     MutableOverride row =
