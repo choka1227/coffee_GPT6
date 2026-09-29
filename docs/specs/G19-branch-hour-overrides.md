@@ -4,7 +4,8 @@
 | --- | --- |
 | 缺口編號 | G19 |
 | 優先順序 | P2 → **升為 P1**（理由見 §13.1） |
-| 版本 | v1.0（2026-09-29，Claude 定案） |
+| 版本 | v1.1（依 PR #40 上 Codex 的 `REQUEST_CHANGES` 修正跨夜尾段與例外日的優先序，見 §6.3a） |
+| 日期 | 2026-09-29（v1.0）／2026-09-29（v1.1），Asia/Taipei |
 | 前置相依 | G14（PR #29，已合併，Flyway 占用 V8）、G22（PR #39，**已於 2026-09-29 合併**，前端測試框架可用） |
 | Flyway | **`V10__branch_hour_overrides.sql`**（本規格占用 V10，下一份需要 migration 的規格自 V11 起算） |
 | 前端變更 | 有（S3） |
@@ -299,7 +300,8 @@ void deleteOverride(Actor actor, String branchId, int onDate)
 sealed interface DaySchedule {
   record AlwaysOpen() implements DaySchedule {}
   record Closed() implements DaySchedule {}
-  record Periods(List<Hours> periods) implements DaySchedule {}
+  /** fromOverride：這一天的時段是否來自例外列（§6.3a 用它判斷要不要擋掉前一日的跨夜尾段）。 */
+  record Periods(List<Hours> periods, boolean fromOverride) implements DaySchedule {}
 }
 
 static DaySchedule resolveDay(
@@ -312,9 +314,11 @@ static DaySchedule resolveDay(
 規則，**順序就是優先序**：
 
 1. `overrideForThatDate != null && closed` → `Closed`
-2. `overrideForThatDate != null && !closed` → `Periods(override.hours())`
+2. `overrideForThatDate != null && !closed` → `Periods(override.hours(), fromOverride = true)`
 3. `weeklyEmpty` → `AlwaysOpen`
-4. 其餘 → `Periods(weeklyForThatWeekday)`（該星期沒有列時就是空 list，代表那天不營業）
+4. 其餘 → `Periods(weeklyForThatWeekday, fromOverride = false)`（該星期沒有列時就是空 list，代表那天不營業）
+
+`fromOverride` 只有 `Periods` 需要：`Closed` 只可能來自例外列，`AlwaysOpen` 只可能來自「沒有例外且 `weeklyEmpty`」，兩者的來源都由型別本身決定。
 
 **第 3 條放在第 1、2 條之後是本規格最關鍵的一行。** 目前「完全沒有 `branch_hours` 列」的分店是 24 小時營業（示範資料就是這種）。如果先判 `weeklyEmpty`，那麼對這些分店設公休會完全沒有效果 —— 而「臨時公休」正是本規格最主要的用例。**例外日必須贏過「沒設定＝全天營業」這條預設。** 驗收 4 專門釘住這個組合。
 
@@ -328,24 +332,55 @@ static boolean isOpenAt(Resolver resolver, long atEpochMs)
 2. `today = local.toLocalDate()`、`previous = today.minusDays(1)` —— **用 `LocalDate.minusDays`，不要對 `yyyyMMdd` 做整數減一**（`20261001 - 1 = 20261000`）
 3. `minute = local.getHour() * 60 + local.getMinute()`
 4. 令 `D = resolveDay(today, ...)`、`P = resolveDay(previous, ...)`
-5. **開著** ⟺ 下列任一成立：
+5. **`D` 是 `Closed` → 立刻回 `false`，後面一條都不看**（§6.3a）
+6. 其餘情形，**開著** ⟺ 下列任一成立：
    - `D` 是 `AlwaysOpen`
    - `D` 是 `Periods` 且某段 `close > open` 且 `open <= minute < close`（當天正常段）
    - `D` 是 `Periods` 且某段 `close <= open` 且 `minute >= open`（當天跨夜起始段）
-   - **`P` 是 `Periods`** 且某段 `close <= open` 且 `minute < close`（前一天的跨夜尾段）
+   - **`D` 是 `Periods` 且 `D.fromOverride()` 為 `false`**，而且 **`P` 是 `Periods`** 且某段 `close <= open` 且 `minute < close`（前一天的跨夜尾段；§6.3a）
 
-三條 `Periods` 的判斷式與目前 `isOpenAt()` 的三個 `anyMatch` 分支**逐字相同**，只是資料來源從「同一份 weekly schedule」換成「兩個各自解析過的日期」。
+三條 `D` 的 `Periods` 判斷式與目前 `isOpenAt()` 的三個 `anyMatch` 分支**逐字相同**，只是資料來源從「同一份 weekly schedule」換成「兩個各自解析過的日期」；差別只在第四條多了一個「今日不是例外日」的前提。
 
-### 6.4 兩個必須寫進實作註解的邊界
+`P` 那一條不必再檢查 `P.fromOverride()`：§5.4 驗證讓例外日的每一段都 `close > open`，所以來自例外的 `Periods` 永遠不可能滿足 `close <= open`。**這是一條不變條件，不是巧合** —— 實作請在該處寫一行註解指回 §13.4，日後若放寬例外日的跨夜限制，這裡要一起改。
 
-**(a) `AlwaysOpen` 不貢獻跨夜尾段。** 第 5 步的第四條只接受 `P` 是 `Periods`。若 `P` 是 `AlwaysOpen`（完全沒設每週時段的分店）而 `D` 被設為 `Closed`，`P` 一旦能貢獻尾段，公休就永遠被前一天的「24 小時」蓋掉，整個功能形同失效。**`AlwaysOpen` 是「這一天全天開著」的陳述，不是「跨到隔天」的陳述。**
+### 6.3a 例外日完全決定當天，前一日的尾段不跨進來
+
+**這是 v1.1 修正的一條錯誤。** v1.0 的第 5 步第四條只要求 `P` 是 `Periods`，沒有看 `D`。於是：
+
+> 分店每週日 22:00–週一 02:00，總部把某個星期一設為 `closed=true`。
+> 那個星期一的 01:00 仍會因為「前一天的跨夜尾段」得到 `open = true`。
+
+顧客因此能在公休日的凌晨下單，與 §1.3 第 2 項（例外覆蓋當天的每週時段）、§6.4b（例外日是完整替換）以及驗收 9（公休日顧客 `POST /orders` 必須回 400）直接衝突。**v1.0 的 §6.4a 只擋住了 `P` 是 `AlwaysOpen` 的那個方向，漏掉了 `P` 是 weekly `Periods` 的這個方向 —— 而後者才是設了每週時段的分店的常態。**
+
+v1.1 的規則一句話：**某一天只要有例外列（不論 `closed` 或自訂時段），那一天就完全由例外決定，不接受前一天的任何跨夜尾段。**
+
+兩個方向各自的落點：
+
+| 今日 `D` | 前一日 `P` 有跨夜尾段時 | 結果 |
+| --- | --- | --- |
+| `Closed`（例外） | weekly `Periods` 22:00–02:00 | `false` —— 第 5 步直接回 |
+| `Closed`（例外） | `AlwaysOpen` | `false` —— 第 6 步第四條要求 `P` 是 `Periods`（§6.4a） |
+| `Periods`（例外，`fromOverride=true`） | weekly `Periods` 22:00–02:00 | `false` —— 第 6 步第四條要求 `D.fromOverride()` 為 `false` |
+| `Periods`（weekly，`fromOverride=false`） | weekly `Periods` 22:00–02:00 | `true` —— 既有行為，一個字不變 |
+
+**為什麼例外時段也要擋，而不是只擋 `closed`：** §6.4b 已經定案「例外日是完整替換不是相加」。總部設「10/10 只開 09:00–12:00」時期望的是那一天只有那一段；若前一日的尾段還能滲進 10/10 的凌晨，那個「只」就是假的，而且兩種語意的差別只在凌晨出現 —— 是最不會被發現、最晚才爆的那一種。
+
+**推翻它的代價**：要讓尾段跨進例外日，就得先回答「前一日的尾段與今日例外誰贏」，而那正是 §13.4 拒絕例外日跨夜的同一個問題。推翻等於把那個問題請回來，且必須為每個組合寫測試。
+
+### 6.4 三個必須寫進實作註解的邊界
+
+**(a) `AlwaysOpen` 不貢獻跨夜尾段。** 第 6 步的第四條只接受 `P` 是 `Periods`。若 `P` 是 `AlwaysOpen`（完全沒設每週時段的分店）而 `D` 被設為 `Closed`，`P` 一旦能貢獻尾段，公休就永遠被前一天的「24 小時」蓋掉，整個功能形同失效。**`AlwaysOpen` 是「這一天全天開著」的陳述，不是「跨到隔天」的陳述。**
 
 **(b) 例外日不繼承每週時段。** `closed=false` 的例外日是**完整替換**當天的時段，不是「在每週時段之上再加幾段」。要「當天多開兩小時」就把完整的時段寫進例外日。理由：合併語意有兩種都說得通的方向（聯集或覆蓋），任何一種都要在 UI 上向使用者解釋，而總部設「10/10 只開 09:00–12:00」時期望的必然是覆蓋。驗收 5 釘住這件事。
+
+**(c) 例外日不接受任何跨夜尾段。** 第 5 步（`Closed` 立刻回 `false`）與第 6 步第四條的 `D.fromOverride()` 前提，合起來是 §6.3a 的那一句話。**這兩處是同一條規則的兩半，不要只實作一半** —— 只做第 5 步會讓「例外時段日」漏掉，只做第四條會讓 `Closed` 漏掉。
 
 ### 6.5 零例外列時的等價性
 
 例外列為零時，對任何日期 `resolveDay` 都拿到 `override == null`，於是：
-- `weeklyEmpty` → 兩天都是 `AlwaysOpen` → 第 5 步第一條成立 → `true`，與目前 `schedule.isEmpty() → true` 相同
+- `D` 永遠不可能是 `Closed`（`Closed` 只從例外列產生），所以第 5 步永遠不觸發
+- 任何 `Periods` 的 `fromOverride` 都是 `false`，所以第 6 步第四條的新前提恆為真，等於沒加
+- `weeklyEmpty` → 兩天都是 `AlwaysOpen` → 第 6 步第一條成立 → `true`，與目前 `schedule.isEmpty() → true` 相同
 - 否則 → `D`／`P` 都是該星期的 weekly 時段 → 三條判斷式與目前的三個 `anyMatch` 逐字相同 → 結果相同
 
 **所以 S1 合併進主線時，既有行為零變更。** 驗收 1 會把這件事釘成測試：G14 留下的 `BranchHoursTest` 全部案例不得修改一個字元且必須全綠。
@@ -549,11 +584,16 @@ S1 是三者中最大的一個（一張 migration + 解析器重寫 + 完整單�
 **S1**
 
 1. [ ] **零例外列時行為零變更**：`BranchHoursTest` 的既有案例**一個字元都不修改**且全綠；`BranchHoursAdminTest` 同樣全綠
-2. [ ] `resolveDay()` 的四條優先序各有測試：`closed` 例外 → `Closed`；有時段例外 → `Periods(例外的時段)`；無例外且 `weeklyEmpty` → `AlwaysOpen`；無例外且該星期有列 → `Periods(該星期的列)`
+2. [ ] `resolveDay()` 的四條優先序各有測試：`closed` 例外 → `Closed`；有時段例外 → `Periods(例外的時段, fromOverride=true)`；無例外且 `weeklyEmpty` → `AlwaysOpen`；無例外且該星期有列 → `Periods(該星期的列, fromOverride=false)`。**`fromOverride` 的值一併斷言**
 3. [ ] 無例外且該星期**沒有**列（例如只設週一到週五的分店在星期六）→ `Periods(空)`，`openAt` 回 `false`
 4. [ ] **例外日贏過「沒設定＝全天營業」**：一家 `branch_hours` 零列的分店，設某日 `closed=true`，該日任一時刻 `openAt` 回 `false`，而前一日與後一日回 `true`（§6.2 第 3 條的順序）
 5. [ ] **例外日是覆蓋不是相加**：每週時段 09:00–21:00 的分店，某日例外設 14:00–16:00 → 該日 10:00 回 `false`、15:00 回 `true`（§6.4b）
-6. [ ] **跨夜尾段的兩個方向**：(a) 每週段 22:00–隔日 02:00，隔日 01:00 回 `true`（既有行為不變）；(b) 前一日是 `AlwaysOpen`（`weeklyEmpty`）而當日 `closed=true` 時，當日 01:00 回 **`false`**（§6.4a，`AlwaysOpen` 不貢獻尾段）
+6. [ ] **跨夜尾段的五個方向**（§6.3a 的表，逐列一條測試）：
+     - [ ] (a) 每週段 22:00–隔日 02:00，隔日 01:00 回 `true` —— 既有行為不變
+     - [ ] (b) 前一日是 `AlwaysOpen`（`weeklyEmpty`）而當日 `closed=true`，當日 01:00 回 **`false`**（§6.4a）
+     - [ ] (c) 前一日是每週段 22:00–02:00 而**當日 `closed=true`**，當日 01:00 回 **`false`**，且當日 10:00 也回 `false`（§6.3a，v1.1 修正的那一條）
+     - [ ] (d) 前一日是每週段 22:00–02:00 而**當日是例外時段 09:00–12:00**，當日 01:00 回 **`false`**、10:00 回 `true`（§6.3a 第三列）
+     - [ ] (e) **前一日**設 `closed=true` 而當日照每週段 09:00–21:00，當日 10:00 仍回 `true` —— 前一日的例外不影響今日自己的正常段
 7. [ ] `saveOverride()` 驗證：`closed=true` 帶時段 → 400；`closed=false` 不帶時段 → 400；`closeMinute <= openMinute` → 400「例外日的時段不能跨夜」；5 段 → 400；重疊 → 400；`note` 41 字 → 400；`onDate=20261345` → 400「日期格式不正確」
 8. [ ] `deleteOverride()` 刪不存在的日期**不丟錯**且不寫稽核；刪存在的日期會連帶刪掉時段列（查 `branch_day_override_hours` 為零列）
 11. [ ] `overrides()`：分店不存在 → 404；`from > to` → 400；相差 401 天 → 400；正常範圍依 `on_date` 升冪且每日時段依 `openMinute` 升冪
@@ -650,7 +690,7 @@ S1 是三者中最大的一個（一張 migration + 解析器重寫 + 完整單�
 
 不支援的代價很小：真實的跨夜例外只有跨年夜，而它可以寫成「12/31 開到 24:00」+「1/1 從 00:00 開始」兩列，行為完全一樣且沒有歧義。
 
-**推翻它的代價**：要支援就必須先回答上面那個優先序問題，並為它寫測試。§6.3 第 5 步的第四條也要放寬成接受例外日的尾段。這是可做的，但**不要在沒有真實需求時預支**。
+**推翻它的代價**：要支援就必須先回答上面那個優先序問題，並為它寫測試。§6.3 第 6 步的第四條也要放寬成接受例外日的尾段，連帶 §6.3a 的「例外日完全決定當天」也要重寫 —— 那一條目前正是靠「例外日不跨夜」才能成立。這是可做的，但**不要在沒有真實需求時預支**。
 
 ### 13.5 不做最後點餐時間（last order） —— **不做，另立 G25**
 
@@ -692,9 +732,9 @@ S1 是三者中最大的一個（一張 migration + 解析器重寫 + 完整單�
 
 **推翻它的代價**：若日後備註要放內部訊息（例如「店長休假」），就得把它拆成對外／對內兩個欄位，或在回應中依權限裁剪。屆時再處理，**但要記得：現在的 40 字備註是對外的**，不要在它裡面寫內部資訊。
 
-### 13.10 `AlwaysOpen` 不貢獻跨夜尾段 —— **不貢獻**
+### 13.10 例外日完全決定當天，前一日的跨夜尾段不跨進來 —— **不跨進來**
 
-**決定**：見 §6.4a。
+**決定**：見 §6.3a 與 §6.4a／§6.4c。這一條在 v1.1 從「`AlwaysOpen` 不貢獻尾段」擴大為「今日只要有例外列就不接受任何尾段」，起因是 Codex 在 PR #40 的 `REQUEST_CHANGES` 指出 v1.0 只擋住了兩個方向中的一個。**那個退回是對的**：v1.0 照原文施工，設了每週跨夜段的分店在公休日凌晨仍然可以下單，而驗收 6 的 (a)(b) 兩條都不會抓到。
 
 **理由**：若 `AlwaysOpen` 能貢獻尾段，任何一家沒設每週時段的分店（示範資料就是這種）都無法被設公休 —— 前一天的「24 小時」會永遠蓋掉今天的公休。那等於整個 G19 對這批分店失效，而它們正是最需要臨時公休的那批。
 
