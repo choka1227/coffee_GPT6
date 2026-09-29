@@ -13,12 +13,15 @@ import {
 import { api, send } from "../../shared/api";
 import type {
   Branch,
+  BranchDayOverride,
+  BranchDayOverridesResponse,
   BranchHours,
   BranchHoursResponse,
 } from "../../shared/types";
 import { minuteTime, money } from "../../shared/format";
 import { notify } from "../../shared/notice";
 import Modal from "../../shared/Modal.vue";
+import { formatOnDate, overrideSummary, sortOverrides } from "./overrides";
 const branches = ref<Branch[]>([]),
   editing = ref<Branch | null>(null),
   loading = ref(true),
@@ -26,6 +29,9 @@ const branches = ref<Branch[]>([]),
   saving = ref(false),
   hoursBranch = ref<Branch | null>(null),
   hours = ref<BranchHours[]>([]),
+  overrides = ref<BranchDayOverride[]>([]),
+  overrideDate = ref(""),
+  overrideDraft = ref<BranchDayOverride | null>(null),
   hoursLoading = ref(false),
   hoursSaving = ref(false);
 const dayNames = [
@@ -88,15 +94,109 @@ async function editHours(branch: Branch) {
   hoursBranch.value = branch;
   hoursLoading.value = true;
   try {
-    const result = await api<BranchHoursResponse>(
-      `/branches/${branch.id}/hours`,
-    );
-    hours.value = result.hours.map((period) => ({ ...period }));
+    const [hoursResult, overridesResult] = await Promise.all([
+      api<BranchHoursResponse>(`/branches/${branch.id}/hours`),
+      api<BranchDayOverridesResponse>(`/branches/${branch.id}/hour-overrides`),
+    ]);
+    hours.value = hoursResult.hours.map((period) => ({ ...period }));
+    overrides.value = sortOverrides(overridesResult.overrides);
+    overrideDraft.value = null;
   } catch (e) {
     notify((e as Error).message);
     hoursBranch.value = null;
   } finally {
     hoursLoading.value = false;
+  }
+}
+function inputDate(onDate: number) {
+  const value = String(onDate);
+  return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+}
+function dateValue(value: string) {
+  return Number(value.replaceAll("-", ""));
+}
+function todayInput() {
+  const taipei = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  return `${taipei.getUTCFullYear()}-${String(taipei.getUTCMonth() + 1).padStart(2, "0")}-${String(taipei.getUTCDate()).padStart(2, "0")}`;
+}
+function addOverride() {
+  overrideDate.value = todayInput();
+  overrideDraft.value = {
+    onDate: dateValue(overrideDate.value),
+    dayOfWeek: 1,
+    closed: true,
+    note: "",
+    hours: [],
+  };
+}
+function editOverride(value: BranchDayOverride) {
+  overrideDate.value = inputDate(value.onDate);
+  overrideDraft.value = {
+    ...value,
+    hours: value.hours.map((period) => ({ ...period })),
+  };
+}
+function setOverrideClosed(closed: boolean) {
+  if (!overrideDraft.value) return;
+  overrideDraft.value.closed = closed;
+  overrideDraft.value.hours = closed
+    ? []
+    : [{ dayOfWeek: 1, openMinute: 540, closeMinute: 1260 }];
+}
+function addOverrideHours() {
+  if (!overrideDraft.value || overrideDraft.value.hours.length >= 4) return;
+  overrideDraft.value.hours.push({ dayOfWeek: 1, openMinute: 540, closeMinute: 1260 });
+}
+function removeOverrideHours(period: BranchHours) {
+  if (!overrideDraft.value) return;
+  overrideDraft.value.hours = overrideDraft.value.hours.filter(
+    (candidate) => candidate !== period,
+  );
+}
+async function saveOverride() {
+  if (!hoursBranch.value?.id || !overrideDraft.value || !overrideDate.value) return;
+  hoursSaving.value = true;
+  try {
+    const onDate = dateValue(overrideDate.value);
+    const saved = await send<BranchDayOverride>(
+      `/branches/${hoursBranch.value.id}/hour-overrides/${onDate}`,
+      {
+        closed: overrideDraft.value.closed,
+        note: overrideDraft.value.note,
+        hours: overrideDraft.value.hours,
+      },
+      "PUT",
+    );
+    overrides.value = sortOverrides([
+      ...overrides.value.filter((value) => value.onDate !== saved.onDate),
+      saved,
+    ]);
+    overrideDraft.value = null;
+    notify("例外營業日已儲存");
+  } catch (e) {
+    notify((e as Error).message);
+  } finally {
+    hoursSaving.value = false;
+  }
+}
+async function deleteOverride(value: BranchDayOverride) {
+  if (!hoursBranch.value?.id) return;
+  hoursSaving.value = true;
+  try {
+    await send(
+      `/branches/${hoursBranch.value.id}/hour-overrides/${value.onDate}`,
+      undefined,
+      "DELETE",
+    );
+    overrides.value = overrides.value.filter(
+      (candidate) => candidate.onDate !== value.onDate,
+    );
+    if (overrideDraft.value?.onDate === value.onDate) overrideDraft.value = null;
+    notify("例外營業日已刪除");
+  } catch (e) {
+    notify((e as Error).message);
+  } finally {
+    hoursSaving.value = false;
   }
 }
 function dayHours(day: number) {
@@ -291,6 +391,118 @@ function updateTime(
         </div>
       </div>
       <p class="form-hint">結束時間早於或等於開始時間時，代表營業至隔日。</p>
+      <section class="override-section">
+        <div class="hours-day-title">
+          <div>
+            <strong>例外營業日</strong>
+            <p class="muted">設定未來 90 天的公休或特殊營業時段。</p>
+          </div>
+          <button class="btn secondary" type="button" @click="addOverride">
+            <Plus :size="15" />新增例外日
+          </button>
+        </div>
+        <p v-if="overrides.length === 0" class="muted">目前沒有例外營業日。</p>
+        <div
+          v-for="value in overrides"
+          :key="value.onDate"
+          class="override-row"
+        >
+          <div>
+            <strong>{{ formatOnDate(value.onDate) }}</strong>
+            <span>{{ overrideSummary(value) }}</span>
+          </div>
+          <div class="override-actions">
+            <button class="btn secondary" type="button" @click="editOverride(value)">
+              <Pencil :size="15" />編輯
+            </button>
+            <button
+              class="icon-btn"
+              type="button"
+              aria-label="刪除例外日"
+              :disabled="hoursSaving"
+              @click="deleteOverride(value)"
+            >
+              <Trash2 :size="17" />
+            </button>
+          </div>
+        </div>
+        <div v-if="overrideDraft" class="override-editor">
+          <label
+            >日期<input v-model="overrideDate" type="date" required
+          /></label>
+          <label
+            >備註<input
+              v-model="overrideDraft.note"
+              maxlength="40"
+              placeholder="會顯示給顧客，例如：國慶日"
+          /></label>
+          <div class="override-kind" role="group" aria-label="例外日類型">
+            <label class="checkbox-label"
+              ><input
+                type="radio"
+                :checked="overrideDraft.closed"
+                @change="setOverrideClosed(true)"
+              />整天公休</label
+            >
+            <label class="checkbox-label"
+              ><input
+                type="radio"
+                :checked="!overrideDraft.closed"
+                @change="setOverrideClosed(false)"
+              />自訂時段</label
+            >
+          </div>
+          <template v-if="!overrideDraft.closed">
+            <div
+              v-for="(period, index) in overrideDraft.hours"
+              :key="index"
+              class="hours-row"
+            >
+              <input
+                type="text"
+                inputmode="numeric"
+                pattern="[0-2][0-9]:[0-5][0-9]"
+                :value="minuteTime(period.openMinute)"
+                aria-label="例外日開始時間"
+                @change="updateTime(period, 'openMinute', $event)"
+              />
+              <span>至</span>
+              <input
+                type="text"
+                inputmode="numeric"
+                pattern="[0-2][0-9]:[0-5][0-9]"
+                :value="minuteTime(period.closeMinute)"
+                aria-label="例外日結束時間"
+                @change="updateTime(period, 'closeMinute', $event)"
+              />
+              <button
+                class="icon-btn"
+                type="button"
+                aria-label="刪除例外時段"
+                @click="removeOverrideHours(period)"
+              >
+                <Trash2 :size="17" />
+              </button>
+            </div>
+            <button
+              class="btn secondary"
+              type="button"
+              :disabled="overrideDraft.hours.length >= 4"
+              @click="addOverrideHours"
+            >
+              <Plus :size="15" />新增例外時段
+            </button>
+          </template>
+          <div class="override-actions">
+            <button class="btn primary" type="button" :disabled="hoursSaving" @click="saveOverride">
+              {{ hoursSaving ? "儲存中…" : "儲存例外日" }}
+            </button>
+            <button class="btn secondary" type="button" @click="overrideDraft = null">
+              取消
+            </button>
+          </div>
+        </div>
+      </section>
       <button class="btn primary" :disabled="hoursSaving">
         {{ hoursSaving ? "儲存中…" : "儲存營業時間" }}
       </button>
@@ -334,5 +546,38 @@ function updateTime(
 }
 .hours-day .muted {
   margin: 0.55rem 0 0;
+}
+.override-section {
+  display: grid;
+  gap: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border, #dedbd3);
+}
+.override-section .muted {
+  margin: 0.25rem 0 0;
+}
+.override-row,
+.override-actions,
+.override-kind {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.override-row {
+  justify-content: space-between;
+  padding: 0.7rem;
+  border: 1px solid var(--border, #dedbd3);
+  border-radius: 0.6rem;
+}
+.override-row > div:first-child {
+  display: grid;
+  gap: 0.2rem;
+}
+.override-editor {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem;
+  border-radius: 0.6rem;
+  background: var(--surface-soft, #f7f5ef);
 }
 </style>

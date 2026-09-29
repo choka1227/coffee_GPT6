@@ -26,6 +26,19 @@ export interface BranchHoursResponse {
   openNow: boolean;
   hours: BranchHours[];
 }
+export interface BranchDayOverride {
+  onDate: number;
+  dayOfWeek: number;
+  closed: boolean;
+  note: string;
+  hours: BranchHours[];
+}
+export interface BranchDayOverridesResponse {
+  branchId: string;
+  from: number;
+  to: number;
+  overrides: BranchDayOverride[];
+}
 export interface Product {
   id: string | null;
   name: string;
