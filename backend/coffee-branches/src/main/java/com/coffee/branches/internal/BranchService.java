@@ -4,7 +4,11 @@ import com.coffee.audit.api.Audit;
 import com.coffee.branches.api.Branches;
 import com.coffee.shared.*;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -13,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class BranchService implements Branches {
   private static final ZoneId TAIPEI = ZoneId.of("Asia/Taipei");
+  private static final DateTimeFormatter BASIC_DATE = DateTimeFormatter.BASIC_ISO_DATE;
   private final JdbcTemplate db;
   private final Audit audit;
 
@@ -47,9 +52,8 @@ public class BranchService implements Branches {
   }
 
   public List<Hours> hours(String branchId) {
-    if (db.queryForObject(
-            "select count(*) from branches where id=?", Integer.class, branchId)
-        == 0) throw new Problem(404, "找不到分店");
+    if (db.queryForObject("select count(*) from branches where id=?", Integer.class, branchId) == 0)
+      throw new Problem(404, "找不到分店");
     return loadHours(branchId);
   }
 
@@ -61,8 +65,37 @@ public class BranchService implements Branches {
         branchId);
   }
 
+  public List<DayOverride> overrides(String branchId, int fromDate, int toDate) {
+    if (db.queryForObject("select count(*) from branches where id=?", Integer.class, branchId) == 0)
+      throw new Problem(404, "找不到分店");
+    LocalDate from = parseDate(fromDate, "日期範圍不正確");
+    LocalDate to = parseDate(toDate, "日期範圍不正確");
+    if (from.isAfter(to)) throw new Problem(400, "日期範圍不正確");
+    if (ChronoUnit.DAYS.between(from, to) > 400) throw new Problem(400, "日期範圍最多 400 天");
+    return loadOverrides(branchId, fromDate, toDate);
+  }
+
+  private List<DayOverride> loadOverrides(String branchId, int fromDate, int toDate) {
+    Map<Integer, MutableOverride> rows = new LinkedHashMap<>();
+    db.query(
+        "select o.on_date,o.closed,o.note,h.open_minute,h.close_minute"
+            + " from branch_day_overrides o left join branch_day_override_hours h"
+            + " on h.branch_id=o.branch_id and h.on_date=o.on_date"
+            + " where o.branch_id=? and o.on_date between ? and ?"
+            + " order by o.on_date,h.open_minute",
+        result -> addOverrideRow(rows, result, branchId),
+        branchId,
+        fromDate,
+        toDate);
+    return rows.values().stream().map(MutableOverride::value).toList();
+  }
+
   public boolean openAt(String branchId, long atEpochMs) {
-    return isOpenAt(hours(branchId), atEpochMs);
+    List<Hours> weekly = hours(branchId);
+    LocalDate today = localDate(atEpochMs);
+    Map<LocalDate, DayOverride> overrides =
+        indexOverrides(loadOverrides(branchId, dateInt(today.minusDays(1)), dateInt(today)));
+    return isOpenAt(resolver(weekly, overrides), atEpochMs);
   }
 
   public Map<String, Boolean> openAt(List<String> branchIds, long atEpochMs) {
@@ -76,46 +109,120 @@ public class BranchService implements Branches {
               .computeIfAbsent(result.getString(1), ignored -> new ArrayList<>())
               .add(new Hours(result.getInt(2), result.getInt(3), result.getInt(4)));
         });
+    Map<String, Map<LocalDate, DayOverride>> overrides = new HashMap<>();
+    LocalDate today = localDate(atEpochMs);
+    // The production JdbcTemplate always has a DataSource. The guard keeps the existing pure
+    // counting test usable with its deliberately connection-less JdbcTemplate test double.
+    if (db.getDataSource() != null) {
+      db.query(
+          "select o.branch_id,o.on_date,o.closed,o.note,h.open_minute,h.close_minute"
+              + " from branch_day_overrides o left join branch_day_override_hours h"
+              + " on h.branch_id=o.branch_id and h.on_date=o.on_date"
+              + " where o.on_date in (?,?) order by o.branch_id,o.on_date,h.open_minute",
+          result -> {
+            String branchId = result.getString(1);
+            Map<LocalDate, DayOverride> branch =
+                overrides.computeIfAbsent(branchId, ignored -> new LinkedHashMap<>());
+            LocalDate date = parseDate(result.getInt(2), "日期格式不正確");
+            DayOverride current = branch.get(date);
+            List<Hours> periods =
+                current == null ? new ArrayList<>() : new ArrayList<>(current.hours());
+            Integer open = (Integer) result.getObject(5);
+            if (open != null)
+              periods.add(new Hours(date.getDayOfWeek().getValue(), open, result.getInt(6)));
+            branch.put(
+                date,
+                new DayOverride(
+                    result.getInt(2), result.getBoolean(3), result.getString(4), periods));
+          },
+          dateInt(today),
+          dateInt(today.minusDays(1)));
+    }
     Map<String, Boolean> result = new LinkedHashMap<>();
     for (String branchId : branchIds) {
-      result.put(branchId, isOpenAt(schedules.getOrDefault(branchId, List.of()), atEpochMs));
+      result.put(
+          branchId,
+          isOpenAt(
+              resolver(
+                  schedules.getOrDefault(branchId, List.of()),
+                  overrides.getOrDefault(branchId, Map.of())),
+              atEpochMs));
     }
     return result;
   }
 
   public Branch requireOrderable(String id, long atEpochMs) {
     Branch branch = requireOpen(id);
-    List<Hours> schedule = hours(id);
-    if (isOpenAt(schedule, atEpochMs)) return branch;
-    throw new Problem(400, closedMessage(schedule, atEpochMs));
+    List<Hours> weekly = hours(id);
+    LocalDate today = localDate(atEpochMs);
+    Map<LocalDate, DayOverride> overrides =
+        indexOverrides(loadOverrides(id, dateInt(today.minusDays(1)), dateInt(today)));
+    Resolver resolver = resolver(weekly, overrides);
+    if (isOpenAt(resolver, atEpochMs)) return branch;
+    throw new Problem(400, closedMessage(resolver.resolve(today)));
   }
 
   public static boolean isOpenAt(List<Hours> schedule, long atEpochMs) {
-    if (schedule.isEmpty()) return true;
-    var local = Instant.ofEpochMilli(atEpochMs).atZone(TAIPEI);
-    int today = local.getDayOfWeek().getValue();
-    int previous = today == 1 ? 7 : today - 1;
-    int minute = local.getHour() * 60 + local.getMinute();
-    return schedule.stream()
-        .anyMatch(
-            period ->
-                (period.dayOfWeek() == today
-                        && period.closeMinute() > period.openMinute()
-                        && period.openMinute() <= minute
-                        && minute < period.closeMinute())
-                    || (period.dayOfWeek() == today
-                        && period.closeMinute() <= period.openMinute()
-                        && minute >= period.openMinute())
-                    || (period.dayOfWeek() == previous
-                        && period.closeMinute() <= period.openMinute()
-                        && minute < period.closeMinute()));
+    return isOpenAt(resolver(schedule, Map.of()), atEpochMs);
   }
 
-  private static String closedMessage(List<Hours> schedule, long atEpochMs) {
-    int today = Instant.ofEpochMilli(atEpochMs).atZone(TAIPEI).getDayOfWeek().getValue();
+  public sealed interface DaySchedule {
+    record AlwaysOpen() implements DaySchedule {}
+
+    record Closed(String note) implements DaySchedule {}
+
+    record Periods(List<Hours> periods, boolean fromOverride) implements DaySchedule {}
+  }
+
+  @FunctionalInterface
+  public interface Resolver {
+    DaySchedule resolve(LocalDate date);
+  }
+
+  public static DaySchedule resolveDay(
+      LocalDate date, boolean weeklyEmpty, List<Hours> weeklyForThatWeekday, DayOverride override) {
+    if (override != null && override.closed()) return new DaySchedule.Closed(override.note());
+    // An override is a complete replacement, not an addition to the weekly schedule.
+    if (override != null) return new DaySchedule.Periods(override.hours(), true);
+    if (weeklyEmpty) return new DaySchedule.AlwaysOpen();
+    return new DaySchedule.Periods(weeklyForThatWeekday, false);
+  }
+
+  public static boolean isOpenAt(Resolver resolver, long atEpochMs) {
+    var local = Instant.ofEpochMilli(atEpochMs).atZone(TAIPEI);
+    LocalDate today = local.toLocalDate();
+    LocalDate previous = today.minusDays(1);
+    int minute = local.getHour() * 60 + local.getMinute();
+    DaySchedule current = resolver.resolve(today);
+    if (current instanceof DaySchedule.Closed) return false;
+    if (current instanceof DaySchedule.AlwaysOpen) return true;
+    DaySchedule.Periods periods = (DaySchedule.Periods) current;
+    if (periods.periods().stream()
+        .anyMatch(
+            period ->
+                (period.closeMinute() > period.openMinute()
+                        && period.openMinute() <= minute
+                        && minute < period.closeMinute())
+                    || (period.closeMinute() <= period.openMinute()
+                        && minute >= period.openMinute()))) return true;
+    if (periods.fromOverride()) return false;
+    DaySchedule prior = resolver.resolve(previous);
+    if (!(prior instanceof DaySchedule.Periods priorPeriods)) return false;
+    // G19 §13.4 forbids override periods from crossing midnight; only weekly tails can match.
+    return priorPeriods.periods().stream()
+        .anyMatch(
+            period -> period.closeMinute() <= period.openMinute() && minute < period.closeMinute());
+  }
+
+  private static String closedMessage(DaySchedule day) {
+    if (day instanceof DaySchedule.Closed closed)
+      return closed.note() == null || closed.note().isBlank()
+          ? "分店今日公休"
+          : "分店今日公休（" + closed.note() + "）";
+    if (day instanceof DaySchedule.AlwaysOpen) throw new IllegalStateException("always open");
+    List<Hours> schedule = ((DaySchedule.Periods) day).periods();
     String periods =
         schedule.stream()
-            .filter(period -> period.dayOfWeek() == today)
             .map(
                 period ->
                     formatMinute(period.openMinute())
@@ -124,9 +231,7 @@ public class BranchService implements Branches {
                         + formatMinute(period.closeMinute()))
             .reduce((left, right) -> left + "、" + right)
             .orElse(null);
-    return periods == null
-        ? "分店今日未營業"
-        : "分店目前未營業（今日營業時間 " + periods + "）";
+    return periods == null ? "分店今日未營業" : "分店目前未營業（今日營業時間 " + periods + "）";
   }
 
   private static String formatMinute(int minute) {
@@ -154,11 +259,7 @@ public class BranchService implements Branches {
           period.closeMinute());
     }
     audit.record(
-        actor,
-        "BRANCH_HOURS_SAVE",
-        branchId,
-        branchId,
-        "更新營業時間（" + schedule.size() + " 段）");
+        actor, "BRANCH_HOURS_SAVE", branchId, branchId, "更新營業時間（" + schedule.size() + " 段）");
     return loadHours(branchId);
   }
 
@@ -167,8 +268,8 @@ public class BranchService implements Branches {
     Map<Integer, Integer> counts = new HashMap<>();
     Map<Integer, List<MinuteRange>> ranges = new HashMap<>();
     for (Hours period : schedule) {
-      Problem.check(period != null && period.dayOfWeek() >= 1 && period.dayOfWeek() <= 7,
-          "星期格式不正確");
+      Problem.check(
+          period != null && period.dayOfWeek() >= 1 && period.dayOfWeek() <= 7, "星期格式不正確");
       Problem.check(period.openMinute() >= 0 && period.openMinute() <= 1439, "開始時間不正確");
       Problem.check(period.closeMinute() >= 1 && period.closeMinute() <= 1440, "結束時間不正確");
       Problem.check(counts.merge(period.dayOfWeek(), 1, Integer::sum) <= 4, "每天最多 4 個時段");
@@ -187,6 +288,190 @@ public class BranchService implements Branches {
         Problem.check(range.start() >= previousEnd, "同一天的營業時段不能重疊");
         previousEnd = Math.max(previousEnd, range.end());
       }
+    }
+  }
+
+  static void validateDayPeriods(List<Hours> periods) {
+    Problem.check(periods.size() <= 4, "每天最多 4 個時段");
+    List<MinuteRange> ranges = new ArrayList<>();
+    for (Hours period : periods) {
+      Problem.check(
+          period != null && period.openMinute() >= 0 && period.openMinute() <= 1439, "開始時間不正確");
+      Problem.check(period.closeMinute() >= 1 && period.closeMinute() <= 1440, "結束時間不正確");
+      Problem.check(period.closeMinute() > period.openMinute(), "例外日的時段不能跨夜");
+      ranges.add(new MinuteRange(period.openMinute(), period.closeMinute()));
+    }
+    ranges.sort(Comparator.comparingInt(MinuteRange::start));
+    int previousEnd = -1;
+    for (MinuteRange range : ranges) {
+      Problem.check(range.start() >= previousEnd, "同一天的營業時段不能重疊");
+      previousEnd = range.end();
+    }
+  }
+
+  @Transactional
+  public DayOverride saveOverride(Actor actor, String branchId, DayOverride override) {
+    actor.require("BRANCH_MANAGE");
+    if (!actor.global()) throw new Problem(403, "此功能限總部範圍");
+    Problem.check(override != null, "請提供例外日設定");
+    parseDate(override.onDate(), "日期格式不正確");
+    String note = override.note() == null ? "" : override.note();
+    Problem.check(note.length() <= 40, "備註請在 40 字內");
+    lockBranch(branchId);
+    List<Hours> periods = override.hours();
+    if (override.closed()) {
+      Problem.check(periods == null || periods.isEmpty(), "公休日不能同時設定營業時段");
+      periods = List.of();
+    } else {
+      Problem.check(periods != null && !periods.isEmpty(), "請至少設定一個營業時段，或改為整天公休");
+      validateDayPeriods(periods);
+    }
+    db.update(
+        "delete from branch_day_override_hours where branch_id=? and on_date=?",
+        branchId,
+        override.onDate());
+    long updatedAt = System.currentTimeMillis();
+    if (db.update(
+            "update branch_day_overrides set closed=?,note=?,updated_at=?,updated_by=?"
+                + " where branch_id=? and on_date=?",
+            override.closed(),
+            note,
+            updatedAt,
+            actor.id(),
+            branchId,
+            override.onDate())
+        == 0) {
+      db.update(
+          "insert into branch_day_overrides(branch_id,on_date,closed,note,updated_at,updated_by)"
+              + " values(?,?,?,?,?,?)",
+          branchId,
+          override.onDate(),
+          override.closed(),
+          note,
+          updatedAt,
+          actor.id());
+    }
+    for (Hours period : periods) {
+      db.update(
+          "insert into branch_day_override_hours(id,branch_id,on_date,open_minute,close_minute)"
+              + " values(?,?,?,?,?)",
+          Ids.next(),
+          branchId,
+          override.onDate(),
+          period.openMinute(),
+          period.closeMinute());
+    }
+    String summary =
+        override.closed()
+            ? "設定 " + override.onDate() + " 公休" + (note.isBlank() ? "" : "（" + note + "）")
+            : "設定 " + override.onDate() + " 例外時段（" + periods.size() + " 段）";
+    // target_id is at most 36 + 1 + 8 = 45 chars (audit_log.target_id is VARCHAR(80)).
+    audit.record(
+        actor, "BRANCH_HOURS_OVERRIDE_SAVE", branchId + ":" + override.onDate(), branchId, summary);
+    return loadOverrides(branchId, override.onDate(), override.onDate()).get(0);
+  }
+
+  @Transactional
+  public void deleteOverride(Actor actor, String branchId, int onDate) {
+    actor.require("BRANCH_MANAGE");
+    if (!actor.global()) throw new Problem(403, "此功能限總部範圍");
+    lockBranch(branchId);
+    db.update(
+        "delete from branch_day_override_hours where branch_id=? and on_date=?", branchId, onDate);
+    if (db.update(
+            "delete from branch_day_overrides where branch_id=? and on_date=?", branchId, onDate)
+        > 0)
+      audit.record(
+          actor,
+          "BRANCH_HOURS_OVERRIDE_DELETE",
+          branchId + ":" + onDate,
+          branchId,
+          "刪除 " + onDate + " 例外日");
+  }
+
+  private void lockBranch(String branchId) {
+    if (db.queryForList("select id from branches where id=? for update", String.class, branchId)
+        .isEmpty()) throw new Problem(404, "找不到分店");
+  }
+
+  private static Resolver resolver(List<Hours> weekly, Map<LocalDate, DayOverride> overrides) {
+    boolean weeklyEmpty = weekly.isEmpty();
+    return date ->
+        resolveDay(
+            date,
+            weeklyEmpty,
+            weekly.stream().filter(h -> h.dayOfWeek() == date.getDayOfWeek().getValue()).toList(),
+            overrides.get(date));
+  }
+
+  private static Map<LocalDate, DayOverride> indexOverrides(List<DayOverride> list) {
+    Map<LocalDate, DayOverride> result = new HashMap<>();
+    for (DayOverride override : list) result.put(parseDate(override.onDate(), "日期格式不正確"), override);
+    return result;
+  }
+
+  private static LocalDate localDate(long atEpochMs) {
+    return Instant.ofEpochMilli(atEpochMs).atZone(TAIPEI).toLocalDate();
+  }
+
+  private static int dateInt(LocalDate date) {
+    return Integer.parseInt(date.format(BASIC_DATE));
+  }
+
+  private static LocalDate parseDate(int value, String message) {
+    try {
+      return LocalDate.parse(String.valueOf(value), BASIC_DATE);
+    } catch (DateTimeParseException invalid) {
+      throw new Problem(400, message);
+    }
+  }
+
+  private static void addOverrideRow(
+      Map<Integer, MutableOverride> rows, java.sql.ResultSet result, String branchId)
+      throws java.sql.SQLException {
+    int onDate = result.getInt(1);
+    MutableOverride row =
+        rows.computeIfAbsent(
+            onDate,
+            ignored ->
+                new MutableOverride(onDate, resultBoolean(result, 2), resultString(result, 3)));
+    Integer open = (Integer) result.getObject(4);
+    if (open != null)
+      row.hours.add(
+          new Hours(
+              parseDate(onDate, "日期格式不正確").getDayOfWeek().getValue(), open, result.getInt(5)));
+  }
+
+  private static boolean resultBoolean(java.sql.ResultSet result, int column) {
+    try {
+      return result.getBoolean(column);
+    } catch (java.sql.SQLException error) {
+      throw new IllegalStateException(error);
+    }
+  }
+
+  private static String resultString(java.sql.ResultSet result, int column) {
+    try {
+      return result.getString(column);
+    } catch (java.sql.SQLException error) {
+      throw new IllegalStateException(error);
+    }
+  }
+
+  private static final class MutableOverride {
+    private final int onDate;
+    private final boolean closed;
+    private final String note;
+    private final List<Hours> hours = new ArrayList<>();
+
+    private MutableOverride(int onDate, boolean closed, String note) {
+      this.onDate = onDate;
+      this.closed = closed;
+      this.note = note;
+    }
+
+    private DayOverride value() {
+      return new DayOverride(onDate, closed, note, List.copyOf(hours));
     }
   }
 
