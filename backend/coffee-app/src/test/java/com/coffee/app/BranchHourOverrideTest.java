@@ -2,6 +2,12 @@ package com.coffee.app;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.coffee.branches.api.Branches;
 import com.coffee.branches.api.Branches.DayOverride;
@@ -18,21 +24,27 @@ import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest(
     properties = {
       "spring.datasource.url=jdbc:h2:mem:branch-hour-overrides;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1"
     })
 @ActiveProfiles("dev")
+@AutoConfigureMockMvc
 class BranchHourOverrideTest {
   private static final ZoneId TAIPEI = ZoneId.of("Asia/Taipei");
 
   @Autowired Branches branches;
   @Autowired Identity identity;
   @Autowired JdbcTemplate db;
+  @Autowired MockMvc mvc;
 
   Actor hq;
 
@@ -204,10 +216,98 @@ class BranchHourOverrideTest {
     assertThat(branches.overrides("taipei", 20261010, 20261010)).isEmpty();
   }
 
+  @Test
+  void authenticatedCustomersCanReadButAnonymousUsersCannot() throws Exception {
+    branches.saveOverride(hq, "taipei", new DayOverride(20261010, true, "國定假日", List.of()));
+
+    mvc.perform(
+            get("/api/branches/taipei/hour-overrides")
+                .param("from", "20261010")
+                .param("to", "20261010"))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(
+            get("/api/branches/taipei/hour-overrides")
+                .session(session("customer"))
+                .param("from", "20261010")
+                .param("to", "20261010"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.branchId").value("taipei"))
+        .andExpect(jsonPath("$.overrides[0].dayOfWeek").value(6))
+        .andExpect(jsonPath("$.overrides[0].note").value("國定假日"));
+  }
+
+  @Test
+  void putUsesPathDateCsrfAndHeadquartersScopeAndWritesAudit() throws Exception {
+    String body =
+        "{\"onDate\":20260101,\"closed\":false,\"note\":\"短日\","
+            + "\"hours\":[{\"dayOfWeek\":3,\"openMinute\":540,\"closeMinute\":720}]}";
+
+    mvc.perform(
+            put("/api/branches/taipei/hour-overrides/20261010")
+                .session(session("hq"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            put("/api/branches/taipei/hour-overrides/20261010")
+                .session(session("hq"))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.onDate").value(20261010))
+        .andExpect(jsonPath("$.dayOfWeek").value(6))
+        .andExpect(jsonPath("$.hours[0].dayOfWeek").value(6));
+
+    assertThat(
+            db.queryForObject(
+                "select count(*) from audit_log where action='BRANCH_HOURS_OVERRIDE_SAVE'"
+                    + " and target_id='taipei:20261010' and branch_id='taipei'",
+                Integer.class))
+        .isEqualTo(1);
+
+    for (String account : List.of("manager", "cashier", "customer")) {
+      mvc.perform(
+              put("/api/branches/taipei/hour-overrides/20261011")
+                  .session(session(account))
+                  .with(csrf())
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content("{\"closed\":true,\"note\":\"\",\"hours\":[]}"))
+          .andExpect(status().isForbidden())
+          .andExpect(
+              jsonPath("$.message").value(account.equals("manager") ? "此功能限總部範圍" : "沒有此功能的操作權限"));
+    }
+  }
+
+  @Test
+  void deleteEndpointIsIdempotentAndRequiresCsrf() throws Exception {
+    branches.saveOverride(hq, "taipei", new DayOverride(20261010, true, "", List.of()));
+
+    mvc.perform(delete("/api/branches/taipei/hour-overrides/20261010").session(session("hq")))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            delete("/api/branches/taipei/hour-overrides/20261010")
+                .session(session("hq"))
+                .with(csrf()))
+        .andExpect(status().isNoContent());
+    mvc.perform(
+            delete("/api/branches/taipei/hour-overrides/20261010")
+                .session(session("hq"))
+                .with(csrf()))
+        .andExpect(status().isNoContent());
+  }
+
   private int deleteAudits() {
     return db.queryForObject(
         "select count(*) from audit_log where action='BRANCH_HOURS_OVERRIDE_DELETE'",
         Integer.class);
+  }
+
+  private MockHttpSession session(String accountId) {
+    var session = new MockHttpSession();
+    session.setAttribute("ACCOUNT_ID", accountId);
+    session.setAttribute("ACCOUNT_VERSION", identity.sessionVersion(accountId));
+    return session;
   }
 
   private static long taipei(int year, int month, int day, int hour, int minute) {

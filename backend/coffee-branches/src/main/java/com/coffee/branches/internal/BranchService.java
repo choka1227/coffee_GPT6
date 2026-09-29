@@ -69,8 +69,8 @@ public class BranchService implements Branches {
   public List<DayOverride> overrides(String branchId, int fromDate, int toDate) {
     if (db.queryForObject("select count(*) from branches where id=?", Integer.class, branchId) == 0)
       throw new Problem(404, "找不到分店");
-    LocalDate from = parseDate(fromDate, "日期範圍不正確");
-    LocalDate to = parseDate(toDate, "日期範圍不正確");
+    LocalDate from = parseDate(fromDate, "日期格式不正確");
+    LocalDate to = parseDate(toDate, "日期格式不正確");
     if (from.isAfter(to)) throw new Problem(400, "日期範圍不正確");
     if (ChronoUnit.DAYS.between(from, to) > 400) throw new Problem(400, "日期範圍最多 400 天");
     return loadOverrides(branchId, fromDate, toDate);
@@ -377,6 +377,7 @@ public class BranchService implements Branches {
   public void deleteOverride(Actor actor, String branchId, int onDate) {
     actor.require("BRANCH_MANAGE");
     if (!actor.global()) throw new Problem(403, "此功能限總部範圍");
+    parseDate(onDate, "日期格式不正確");
     lockBranch(branchId);
     db.update(
         "delete from branch_day_override_hours where branch_id=? and on_date=?", branchId, onDate);
