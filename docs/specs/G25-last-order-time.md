@@ -1,6 +1,6 @@
 # G25 — 最後點餐時間（last order）與即將打烊提示
 
-規格版本 **v1.0**（2026-09-30，Claude 定案）
+規格版本 **v1.1**（2026-09-30，Claude 定案）
 狀態：**待實作**
 前置閘門：**無**（G14 PR #29、G19 PR #42、G23 PR #45 皆已合併進主線）
 Flyway：**新增 `V11__branch_last_order.sql`**（V10 由 G19 占用；下一份需要 migration 的規格自 `V12` 起算）
@@ -150,11 +150,13 @@ public static OpenWindow windowAt(Resolver resolver, long atEpochMs);
 | --- | --- |
 | `current instanceof Closed` → `false` | → `NotOpen()` |
 | `current instanceof AlwaysOpen` → `true` | → `NoClosingTime()` |
-| 今日時段 `close > open` 且 `open <= m < close` → `true` | → `ClosesIn(close - m)` |
-| 今日時段 `close <= open`（跨夜）且 `m >= open` → `true` | → `ClosesIn(close + 1440 - m)` |
+| 今日**命中的**時段 `close > open` 且 `open <= m < close` → `true` | → `ClosesIn(close - m)` |
+| 今日**命中的**時段 `close <= open`（跨夜）且 `m >= open` → `true` | → `ClosesIn(close + 1440 - m)` |
 | `periods.fromOverride()` → `false` | → `NotOpen()` |
 | 昨日跨夜時段 `close <= open` 且 `m < close` → `true` | → `ClosesIn(close - m)` |
 | 其餘 → `false` | → `NotOpen()` |
+
+> **一天最多命中一個時段。** `validateHours`（`BranchService.java`）強制「同一天的營業時段不能重疊」且每天最多 4 段，所以 `isOpenAt` 的 `anyMatch` 在任一分鐘最多只有一個時段成立。`windowAt` 因此可以直接回那一個時段的剩餘分鐘，**不需要**在多個候選裡取最大或最小值。但「一天有多個時段」這件事本身是常態（09:00–12:00、13:00–18:00），§5.4 的截止後訊息必須為此負責。
 
 **跨夜時段的 `close + 1440 - m` 是本規格唯一一處容易寫錯的算術。** 例：`open=1320`（22:00）、`close=120`（隔日 02:00）、現在 `m=1380`（23:00）→ 剩 `120 + 1440 - 1380 = 180` 分鐘，正確。若寫成 `close - m` 會得到 `-1260`，而負數在下游會被誤判成「早就過了截止點」，症狀是**跨夜營業的店晚上十一點就不能點餐**。
 
@@ -222,7 +224,8 @@ public Branch requireOrderable(String id, long atEpochMs) {
   if (window instanceof OpenWindow.NotOpen)
     throw new Problem(400, closedMessage(resolver.resolve(today)));   // 不變，四個既有訊息原封不動
   if (window instanceof OpenWindow.ClosesIn closes && closes.minutes() <= last)
-    throw new Problem(400, lastOrderMessage(atEpochMs, closes.minutes(), last));   // 新增
+    throw new Problem(
+        400, lastOrderMessage(atEpochMs, closes.minutes(), last, resolver.resolve(today)));  // 新增
   return branch;
 }
 ```
@@ -232,15 +235,52 @@ public Branch requireOrderable(String id, long atEpochMs) {
 新訊息：
 
 ```java
-private static String lastOrderMessage(long atEpochMs, int minutesUntilClose, int lastOrderMinutes) {
-  int nowMinute = Instant.ofEpochMilli(atEpochMs).atZone(TAIPEI).getHour() * 60
-                + Instant.ofEpochMilli(atEpochMs).atZone(TAIPEI).getMinute();
+private static String lastOrderMessage(
+    long atEpochMs, int minutesUntilClose, int lastOrderMinutes, DaySchedule today) {
+  var local = Instant.ofEpochMilli(atEpochMs).atZone(TAIPEI);
+  int nowMinute = local.getHour() * 60 + local.getMinute();
   int cutoff = Math.floorMod(nowMinute + minutesUntilClose - lastOrderMinutes, 1440);
-  return "分店已停止接單（最後點餐時間 " + formatMinute(cutoff) + "），請於明日營業時間再下單";
+  Integer next = nextOrderableStartToday(today, nowMinute, lastOrderMinutes);
+  String tail =
+      next == null
+          ? "請於下一個營業時段再下單"
+          : "請於今日 " + formatMinute(next) + " 起的營業時段再下單";
+  return "分店已停止接單（最後點餐時間 " + formatMinute(cutoff) + "），" + tail;
+}
+
+/** 今日還沒開始、且長度大於 L（整段不可下單的時段要跳過）的最早時段開始分鐘；沒有則回 null。 */
+static Integer nextOrderableStartToday(DaySchedule today, int nowMinute, int lastOrderMinutes) {
+  if (!(today instanceof DaySchedule.Periods periods)) return null;
+  return periods.periods().stream()
+      .filter(p -> p.openMinute() > nowMinute)
+      .filter(p -> periodLength(p) > lastOrderMinutes)
+      .map(Hours::openMinute)
+      .min(Integer::compare)
+      .orElse(null);
+}
+
+/** 跨夜時段的長度是 close + 1440 - open。 */
+static int periodLength(Hours period) {
+  return period.closeMinute() > period.openMinute()
+      ? period.closeMinute() - period.openMinute()
+      : period.closeMinute() + 1440 - period.openMinute();
 }
 ```
 
-為什麼用 `nowMinute + m - L` 而不是 `close - L`：`close` 在跨夜時段是隔日的分鐘數，直接減會得到負數或錯的日內分鐘。`nowMinute + m` 恆等於「以今天 0 點為原點的結束時刻」，再減 `L` 之後用 `Math.floorMod` 歸位，跨夜與不跨夜兩種情況用同一行處理。`formatMinute` 沿用既有的（`BranchService.java:235-238`）。
+**訊息絕對不能寫「明日」。** 一天可以有最多 4 個時段（§5.1 的備註），`09:00–12:00` 與 `13:00–18:00` 的分店在 `L=15` 時，`11:50` 只是**第一段**停止接單，`13:00` 當天就恢復 —— 叫顧客「明日再來」是明確錯誤的資訊，而且會流失當日下午的訂單。所以訊息分兩種結尾：
+
+| 今日是否還有後續可下單時段 | 訊息 |
+| --- | --- |
+| 有（例如 `13:00` 那段） | `分店已停止接單（最後點餐時間 11:45），請於今日 13:00 起的營業時段再下單` |
+| 沒有 | `分店已停止接單（最後點餐時間 17:45），請於下一個營業時段再下單` |
+
+**`nextOrderableStartToday` 要跳過長度 ≤ `L` 的時段。** 那種時段整段都不可下單（§5.2 第 3 點），把它當成「下一個可下單時段」會叫顧客白跑一趟。例：`09:00–12:00`、`13:00–13:10`、`L=15` → `11:50` 的訊息不得提到 `13:00`。
+
+**為什麼只看今日、不做跨日搜尋**：`requireOrderable` 手上已經有 `resolver.resolve(today)`，看今日的後續時段**零額外 DB 存取**，而它正好覆蓋唯一會講錯話的情境（同日多時段）。要講出「明日 09:00」則必須把 `loadOverrides` 的範圍從「昨日＋今日」擴大，並做有上限的多日掃描（公休一週的分店要掃幾天？），代價與收益不成比例 —— 顧客在同一個畫面上就看得到分店的營業時間列。推翻它的代價：低，訊息格式已經容得下一個時間，改成 7 日上限的前向掃描時只要換掉 `nextOrderableStartToday` 的實作與 `loadOverrides` 的日期範圍，訊息模板與測試斷言的形狀都不用動。
+
+`requireOrderable` 呼叫它時把 `resolver.resolve(today)` 一起傳進去（那個值 §5.4 的程式碼已經取過，不要為此多解析一次）。
+
+為什麼 `cutoff` 用 `nowMinute + m - L` 而不是 `close - L`：`close` 在跨夜時段是隔日的分鐘數，直接減會得到負數或錯的日內分鐘。`nowMinute + m` 恆等於「以今天 0 點為原點的結束時刻」，再減 `L` 之後用 `Math.floorMod` 歸位，跨夜與不跨夜兩種情況用同一行處理。`formatMinute` 沿用既有的（`BranchService.java:235-238`）。
 
 > **注意 `formatMinute(1440)` 會回 `"24:00"`，但 `Math.floorMod(..., 1440)` 永遠不會產出 1440**，所以截止點剛好是午夜時會顯示 `00:00` 而不是 `24:00`。這是可接受的，不要為此特別處理 —— 多一個分支就多一個要測的路徑，而 `00:00` 對使用者並不難懂。
 
@@ -309,10 +349,12 @@ export interface BranchHoursResponse { branchId: string; openNow: boolean; hours
    —— **`customerNotOrderable` 在 `customerClosed` 為真時必為真**（`openNow=false ⇒ orderableNow=false`），所以這是嚴格放寬觸發條件，不會漏掉原本擋住的情況
 4. `hours-status` 區塊（`433-443`）新增一個中間態：
    - 已打烊 → 現狀不變
-   - `orderableNow === false` 且 `openNow === true` → `<strong>已停止接單</strong>` + `今日已過最後點餐時間，歡迎明日再來`
+   - `orderableNow === false` 且 `openNow === true` → `<strong>已停止接單</strong>` + `已過最後點餐時間，請於下一個營業時段再下單`
    - `orderableNow === true` 且 `minutesUntilLastOrder !== null && minutesUntilLastOrder <= 30` → `<strong>即將停止接單</strong>` + `距離最後點餐還有 {{ minutesUntilLastOrder }} 分鐘`
    - 其餘 → 現狀不變
-5. `notify` 訊息（`MenuView.vue:231-232`）比照新增一則：停止接單時提示 `分店已過最後點餐時間，請於明日營業時間再下單`
+5. `notify` 訊息（`MenuView.vue:231-232`）比照新增一則：停止接單時提示 `分店已過最後點餐時間，請於下一個營業時段再下單`
+
+**前端的兩則文字不帶任何日期或時刻，而且不寫「明日」。** 理由與 §5.4 相同（一天可以有多個時段），但前端還多一層限制：`Branch` 這個 record 只帶 `openNow` / `orderableNow` / `minutesUntilLastOrder`，**沒有帶時段列**，所以前端根本算不出下一個可下單時段是幾點。刻意不為此新增欄位 —— 精確時刻只在後端 400 的訊息裡出現（那裡是免費的），顧客在同一個畫面上就看得到分店的營業時間。推翻它的代價：低，在 `OpenState` 加一個 `nextOrderableStartMinute` 欄位即可，全部是加法。
 
 **30 分鐘這個門檻是前端常數，不是後端欄位。** 後端只回事實（還有幾分鐘），要不要提示、幾分鐘開始提示是呈現決策。寫成 `const LAST_ORDER_WARNING_MINUTES = 30` 放在 `MenuView.vue` 的 script 頂端，改它不需要動後端。
 
@@ -333,7 +375,8 @@ export interface BranchHoursResponse { branchId: string; openNow: boolean; hours
 
 | 情境 | 狀態碼 | 訊息 |
 | --- | --- | --- |
-| 顧客在最後點餐時間之後下單 | 400 | `分店已停止接單（最後點餐時間 HH:mm），請於明日營業時間再下單` |
+| 顧客在最後點餐時間之後下單，**今日仍有後續可下單時段** | 400 | `分店已停止接單（最後點餐時間 HH:mm），請於今日 HH:mm 起的營業時段再下單` |
+| 顧客在最後點餐時間之後下單，**今日已無後續可下單時段** | 400 | `分店已停止接單（最後點餐時間 HH:mm），請於下一個營業時段再下單` |
 | `lastOrderMinutes` 超出 0–120 或非整數 | 400 | `最後點餐提前時間需為 0–120 分鐘` |
 | 非總部呼叫 `PUT /hours` | 403 | `此功能限總部範圍`（既有） |
 | 分店不存在 | 404 | `找不到分店`（既有） |
@@ -404,7 +447,7 @@ S1 合併後，`last_order_minutes` 全部是 0，`orderableNow` 恆等於 `open
 
 S2 合併後後端完整可用：總部設得了、顧客擋得住。**前端還沒接，所以顧客會在按下結帳時才收到 400** —— 這個中間狀態是可接受的（比現在好：現在根本擋不住），且不破壞任何既有行為。
 
-**S2 驗收子集**：6、7、8、9、10、11、13、14、17、18、19
+**S2 驗收子集**：6、7、8、9、10、11、13、14、17、18、19、21、22、23
 
 ### S3 — 前端設定與提示（規模：中）
 
@@ -415,7 +458,7 @@ S2 合併後後端完整可用：總部設得了、顧客擋得住。**前端還
 3. `MenuView` 的 `customerNotOrderable`、三態 `hours-status`、按鈕 disabled、notify 訊息
 4. 補 G23 風格的元件測試（§11.2）
 
-**S3 驗收子集**：15、16、17、18、19、20
+**S3 驗收子集**：15、16、17、18、19、20、23
 
 ### 階段切分的理由
 
@@ -436,7 +479,7 @@ S1 是「時間軸的算術對不對」，S2 是「閘門擋不擋得住、誰�
 - [ ] 5. （S1）既有的 `BranchHoursTest`、`BranchHourOverrideTest`、`BranchHoursAdminTest` **內容零修改**且全綠
 - [ ] 6. （S2）跨夜時段的 `ClosesIn` 分鐘數正確：`open=1320`、`close=120`、現在 `23:00` → `ClosesIn(180)`；`L=30` 時 `01:45` 不可下單、`01:15` 可下單
 - [ ] 7. （S2）`L=0` 時 `orderableNow` 與 `openNow` 在上述六種排程、逐分鐘掃描下**完全相等**
-- [ ] 8. （S2）顧客在截止點之後 `POST /api/orders` → 400，訊息**逐字**為 `分店已停止接單（最後點餐時間 HH:mm），請於明日營業時間再下單`
+- [ ] 8. （S2）顧客在截止點之後 `POST /api/orders` → 400；**今日已無後續可下單時段**時訊息**逐字**為 `分店已停止接單（最後點餐時間 HH:mm），請於下一個營業時段再下單`。訊息**不得**出現「明日」二字（驗收 21 是反向驗收）
 - [ ] 9. （S2）四個既有打烊訊息**逐字不變**（`BranchHourOverrideTest.java:356-375` 仍綠）
 - [ ] 10. （S2）時段長度 ≤ `L` 時（例如時段 `10:00–10:20`、`L=30`），該時段內任一分鐘皆不可下單，且 `openNow` 仍為 `true`
 - [ ] 11. （S2）`PUT /hours` 的 body **不帶** `lastOrderMinutes` 時，分店原有的值不變（先設 15，再送一次不帶該欄位的 PUT，讀回來仍是 15）
@@ -449,6 +492,14 @@ S1 是「時間軸的算術對不對」，S2 是「閘門擋不擋得住、誰�
 - [ ] 18. （全階段）`cd backend && ./mvnw -B -ntp verify` 綠
 - [ ] 19. （全階段）`git ls-files -s backend/mvnw scripts/build.sh start-demo.sh` 三個都是 `100755`
 - [ ] 20. （S3）`cd frontend && npm ci && npm run build && npm run test` 綠
+- [ ] 21. （S2）**同日雙時段、第一段截止後（反向驗收）**：週一 `09:00–12:00` 與 `13:00–18:00`、`L=15`
+      → `11:44` 可下單；`11:50` 為 400 且訊息**逐字**為 `分店已停止接單（最後點餐時間 11:45），請於今日 13:00 起的營業時段再下單`；
+      `13:30` 可下單（同一天就恢復）；`17:50` 為 400 且訊息**逐字**為 `分店已停止接單（最後點餐時間 17:45），請於下一個營業時段再下單`
+- [ ] 22. （S2）**後續時段長度 ≤ `L` 要跳過**：週一 `09:00–12:00` 與 `13:00–13:10`、`L=15` → `11:50` 的訊息**不得包含** `13:00`，
+      且逐字為 `分店已停止接單（最後點餐時間 11:45），請於下一個營業時段再下單`
+- [ ] 23. （S2／S3）跨夜時段與例外日時段都沿用同一套規則：**後端與前端所有截止後的訊息都不含「明日」二字**
+      （例外日 `09:00–12:00`＋`14:00–17:00`、`L=15`，`11:50` 的訊息要指向 `14:00`；跨夜 `22:00–02:00`、`L=30`，
+      `01:45` 的訊息因當日無後續時段而落在「請於下一個營業時段再下單」）
 
 ---
 
@@ -466,17 +517,18 @@ S1 是「時間軸的算術對不對」，S2 是「閘門擋不擋得住、誰�
 2. **跨夜算術**（驗收 6）—— `close + 1440 - m`
 3. **`L = 0` 的行為恆等**（驗收 7）
 4. **時段短於 `L`**（驗收 10）
-5. **例外日**：例外日的時段一樣套用 `L`；例外日公休時 `orderableNow = false` 且訊息是既有的公休訊息（不是停止接單訊息）
-6. **24 小時營業**（無每週時段列）：`NoClosingTime` → 永遠可下單，`L` 設多少都一樣
-7. **員工 POS 不受限**：同一時刻，`CASHIER` 建單成功、顧客建單 400（同一支測試裡對照，最有說服力）
-8. **越權五條**（§7）
-9. **交易性**：`saveHours` 中途丟 `Problem`（例如時段重疊）時，`last_order_minutes` 也要一起回滾
+5. **同日多時段的截止後訊息**（驗收 21、22）—— 這是最容易寫成錯誤資訊的一條。至少要有：第一段截止後訊息指向**當日**的下一段、下一段長度 ≤ `L` 時訊息退回不帶時刻的版本、當日最後一段截止後訊息不帶時刻。**斷言訊息全文**，並額外斷言訊息**不包含**「明日」
+6. **例外日**：例外日的時段一樣套用 `L`；例外日公休時 `orderableNow = false` 且訊息是既有的公休訊息（不是停止接單訊息）；例外日的多時段一樣要指向當日的下一段（驗收 23）
+7. **24 小時營業**（無每週時段列）：`NoClosingTime` → 永遠可下單，`L` 設多少都一樣
+8. **員工 POS 不受限**：同一時刻，`CASHIER` 建單成功、顧客建單 400（同一支測試裡對照，最有說服力）
+9. **越權五條**（§7）
+10. **交易性**：`saveHours` 中途丟 `Problem`（例如時段重疊）時，`last_order_minutes` 也要一起回滾
 
 ### 11.2 前端
 
 續寫 G23 建立的 `MenuView.dom.test.ts`（`.dom.test.ts` 由 dom project 撿走）：
 
-1. `orderableNow = false`、`openNow = true` → 結帳按鈕 disabled，且畫面出現「已停止接單」
+1. `orderableNow = false`、`openNow = true` → 結帳按鈕 disabled，且畫面出現「已停止接單」；同時斷言畫面**不包含**「明日」（驗收 23）
 2. `orderableNow = true`、`minutesUntilLastOrder = 20` → 畫面出現「即將停止接單」與數字 `20`，按鈕**未** disabled
 3. `orderableNow = true`、`minutesUntilLastOrder = 45` → **不**出現「即將停止接單」
 4. `openNow = false` → 維持 G23 既有案例的行為（按鈕 disabled）
@@ -597,6 +649,16 @@ S1 是「時間軸的算術對不對」，S2 是「閘門擋不擋得住、誰�
 
 **推翻它的代價**：**極低**，因為 CHECK 具名（§4.1 第 3 點）。`ALTER TABLE branches DROP CONSTRAINT ck_branches_last_order` 之後再加一條新的即可，H2 與 PostgreSQL 都支援。這正是 G07 在 `orders.total` 上付出代價才學到的教訓。
 
+### 13.10 截止後的訊息不假設「明日」，範圍限今日的後續時段 —— **不假設、只看今日**
+
+**決定**：後端訊息在今日仍有後續可下單時段時指出那一段的開始時刻（`請於今日 13:00 起的營業時段再下單`），否則用不帶日期的 `請於下一個營業時段再下單`。前端的兩則提示一律用不帶時刻的版本。**任何截止後的訊息都不得出現「明日」二字。**
+
+**理由**：`validateHours` 允許每天最多 4 個不重疊時段，`09:00–12:00`＋`13:00–18:00` 是咖啡廳的常態排班。`L=15` 時 `11:50` 只是第一段停止接單，`13:00` 當天就恢復 —— 寫「明日」會給出明確錯誤的資訊，並流失當日下午的訂單。而「只看今日」是因為 `requireOrderable` 手上已經有今日的 `DaySchedule`，零額外 DB 存取就能覆蓋這個唯一會講錯話的情境；跨日搜尋則要擴大 `loadOverrides` 的範圍並決定掃描幾天，代價與收益不成比例。前端不給時刻是因為 `Branch` record 沒帶時段列，硬要給就得為此新增欄位。
+
+**推翻它的代價**：**低**。要講出「明日 09:00」時，換掉 `nextOrderableStartToday` 的實作（改為有上限的前向掃描）與 `loadOverrides` 的日期範圍即可，訊息模板與測試斷言的形狀都不用動；前端要精確時刻則在 `OpenState` 加一個 `nextOrderableStartMinute`，全部是加法。
+
+**這一條是 Codex 在 PR #46 review 裡指出的缺陷**（v1.0 的 §5.4／§5.7／§6.1 與驗收 8 都寫了「明日」）。意見成立，v1.1 依此修正並補上驗收 21–23 作為反向驗收。
+
 ---
 
 ## 14. 修訂紀錄
@@ -604,3 +666,4 @@ S1 是「時間軸的算術對不對」，S2 是「閘門擋不擋得住、誰�
 | 版本 | 日期 | 變更 |
 | --- | --- | --- |
 | v1.0 | 2026-09-30 | 初版，Claude 定案。G19 §13.5 登記的 G25 正式立案 |
+| v1.1 | 2026-09-30 | 依 Codex 在 PR #46 的 `REQUEST_CHANGES` 修正：截止後訊息不再假設「明日」（§5.4、§5.7、§6.1、驗收 8），新增 §13.10 設計決策與驗收 21–23 的反向驗收，§5.1 補上「一天最多命中一個時段、但一天常有多個時段」的備註 |
