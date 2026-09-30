@@ -1,4 +1,4 @@
-import type { Actor, Branch, Product } from "../types";
+import type { Actor, Branch, Order, Product } from "../types";
 
 const ALL_PERMISSIONS = [
   "ORDER_CREATE",
@@ -84,6 +84,49 @@ export function productFixture(overrides: Partial<Product> = {}): Product {
     active: true,
     availability: "AVAILABLE",
     optionGroups: [],
+    ...overrides,
+  };
+}
+
+export function orderFixture(overrides: Partial<Order> = {}): Order {
+  return {
+    id: "O1",
+    branchId: "B1",
+    branchName: "台北門市",
+    accountId: "cashier",
+    status: "PENDING_PAYMENT",
+    fulfillment: "TAKEAWAY",
+    paymentMethod: "CASH",
+    total: 126,
+    subtotal: 140,
+    discountAmount: 14,
+    discount: {
+      code: "WELCOME",
+      name: "新客優惠",
+      kind: "PERCENT",
+      percent: 10,
+      amount: 0,
+      discountAmount: 14,
+    },
+    note: "",
+    createdAt: 1,
+    paidAt: null,
+    tendered: null,
+    changeAmount: null,
+    items: [
+      {
+        productId: "P1",
+        name: "經典拿鐵",
+        category: "經典咖啡",
+        unitPrice: 140,
+        quantity: 1,
+        temperature: null,
+        sugar: null,
+        optionsPrice: 0,
+        lineTotal: 140,
+        options: [],
+      },
+    ],
     ...overrides,
   };
 }

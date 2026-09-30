@@ -5,6 +5,7 @@ import {
   branchFixture,
   branchStaffActor,
   customerActor,
+  orderFixture,
   productFixture,
 } from "../../shared/testing/fixtures";
 import {
@@ -13,6 +14,7 @@ import {
   mountView,
   rowByLabel,
   stubApi,
+  type StubbedRequest,
 } from "../../shared/testing/harness";
 import type { Actor, Branch, Product } from "../../shared/types";
 
@@ -21,6 +23,7 @@ import type { Actor, Branch, Product } from "../../shared/types";
 
 interface MenuScenario {
   wrapper: VueWrapper;
+  requests: StubbedRequest[];
 }
 
 async function mountMenu(
@@ -28,7 +31,7 @@ async function mountMenu(
   branches: Branch[] = [branchFixture()],
 ): Promise<MenuScenario> {
   const product = productFixture();
-  const { fetch } = stubApi({
+  const { fetch, requests } = stubApi({
     "/api/branches": branches,
     "/api/payments/config": { enabled: true, environment: "stage" },
     "/api/menu": () => [product],
@@ -50,8 +53,15 @@ async function mountMenu(
       product.availability = "SOLD_OUT";
       return {};
     },
+    "/api/orders": orderFixture(),
+    "/api/orders/O1/cash": orderFixture({
+      status: "PAID",
+      paidAt: 2,
+      tendered: 150,
+      changeAmount: 24,
+    }),
   });
-  return { wrapper: await mountView(MenuView, { actor, fetch }) };
+  return { wrapper: await mountView(MenuView, { actor, fetch }), requests };
 }
 
 async function addProduct(wrapper: VueWrapper): Promise<void> {
@@ -126,5 +136,57 @@ describe("MenuView 可見性", () => {
 
     expect(checkoutButton(wrapper).attributes("disabled")).toBeDefined();
     expect(wrapper.find(".error-state").exists()).toBe(true);
+  });
+});
+
+describe("MenuView 兩段式現金收款", () => {
+  it("由後端計算折扣應收並只送出允許的訂單與收款欄位", async () => {
+    const { wrapper, requests } = await mountMenu(branchStaffActor());
+    await addProduct(wrapper);
+    await labelByText(wrapper, "優惠碼")!.get("input").setValue("WELCOME");
+
+    await checkoutButton(wrapper).trigger("click");
+    await flushPromises();
+
+    const orderRequest = requests.find(
+      (request) => request.path === "/api/orders" && request.method === "POST",
+    );
+    expect(orderRequest).toBeDefined();
+    expect(Object.keys(orderRequest!.body as object).sort()).toEqual(
+      [
+        "branchId",
+        "discountCode",
+        "fulfillment",
+        "items",
+        "note",
+        "paymentMethod",
+      ].sort(),
+    );
+    const items = (orderRequest!.body as { items: object[] }).items;
+    expect(items).toHaveLength(1);
+    expect(Object.keys(items[0]).sort()).toEqual(
+      ["optionIds", "productId", "quantity"].sort(),
+    );
+
+    expect(rowByLabel(wrapper, "小計")!.text()).toContain("140");
+    expect(rowByLabel(wrapper, "優惠折抵")!.text()).toContain("14");
+    expect(rowByLabel(wrapper, "應收")!.text()).toContain("126");
+    const tendered = labelByText(wrapper, "實收金額");
+    expect(tendered).not.toBeNull();
+    expect(labelByText(wrapper, "優惠碼")!.get("input").attributes("disabled")).toBeDefined();
+    expect(labelByText(wrapper, "付款方式")!.get("select").attributes("disabled")).toBeDefined();
+    expect(checkoutButton(wrapper).text()).toContain("確認收款");
+
+    await tendered!.get("input").setValue("150");
+    expect(rowByLabel(wrapper, "應找零")!.text()).toContain("24");
+    await checkoutButton(wrapper).trigger("click");
+    await flushPromises();
+
+    const cashRequest = requests.find(
+      (request) => request.path === "/api/orders/O1/cash" && request.method === "POST",
+    );
+    expect(cashRequest).toBeDefined();
+    expect(Object.keys(cashRequest!.body as object)).toEqual(["tendered"]);
+    expect(cashRequest!.body).toEqual({ tendered: 150 });
   });
 });

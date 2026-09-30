@@ -13,7 +13,9 @@
 - [x] S2 — `MenuView` 可見性矩陣
   - 夾具照抄 CUSTOMER、CASHIER、HQ 的真實 scope 與權限
   - 六個案例皆經由商品卡與 Modal 加入購物車，覆蓋現金、顧客、優惠碼、綠界、打烊與售完狀態
-- [ ] S3 — 兩段式收款流程與送出內容
+- [x] S3 — 兩段式收款流程與送出內容
+  - 由後端回傳小計 140、折抵 14、應收 126，再以實收 150 驗證找零 24
+  - `POST /api/orders` 與 `/cash` 皆以鍵集合白名單驗證，不接受前端金額欄位
 
 ## 設計與範圍
 
@@ -40,6 +42,12 @@
 - 不存在斷言使用 `toBeNull()`／`exists() === false`，未使用 `isVisible()`。
 - 案例 5 只斷言結帳按鈕 disabled，未釘住打烊訊息文字。
 
-## 下一步
+## S3 驗證
 
-S3 新增兩段式收款流程，白名單驗證訂單 body 與現金收款 body。
+- `npm run test`：成功，兩段式現金收款七步驟全綠。
+- 訂單 body 僅含 `branchId`、`fulfillment`、`paymentMethod`、`note`、`discountCode`、`items`；每筆 item 僅含 `productId`、`quantity`、`optionIds`。
+- 現金收款 body 僅含 `tendered`。
+
+## 完成狀態
+
+G23 三個施工階段已完成；待最新 head 的必要 GitHub Actions 全部成功後轉為 ready for review。
