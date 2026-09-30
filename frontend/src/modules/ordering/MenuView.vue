@@ -18,6 +18,8 @@ import { api, send } from "../../shared/api";
 import type {
   Product,
   Branch,
+  BranchDayOverride,
+  BranchDayOverridesResponse,
   BranchHours,
   BranchHoursResponse,
   CartLine,
@@ -59,6 +61,7 @@ const auth = useAuth(),
   pendingCashOrder = ref<Order | null>(null),
   receipt = ref<Order | null>(null),
   branchHours = ref<BranchHours[]>([]),
+  todayOverride = ref<BranchDayOverride | null>(null),
   config = ref({ enabled: false, environment: "stage" });
 let retryBody = "",
   retryKey = "";
@@ -91,6 +94,14 @@ const branch = computed(() =>
 const customerClosed = computed(
   () => auth.customer && !!branch.value && !branch.value.openNow,
 );
+const customerClosedMessage = computed(() => {
+  const override = todayOverride.value;
+  if (override?.closed)
+    return override.note
+      ? `分店今日公休（${override.note}）`
+      : "分店今日公休";
+  return "目前仍可瀏覽菜單；請選擇營業中的分店或於營業時間再下單。";
+});
 const dayNames = ["", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"];
 const schedule = computed(() =>
   dayNames.slice(1).map((name, index) => {
@@ -125,13 +136,27 @@ let menuReady = false;
 async function loadBranchHours(showError = true) {
   if (!branchId.value) {
     branchHours.value = [];
+    todayOverride.value = null;
     return;
   }
   try {
-    const result = await api<BranchHoursResponse>(`/branches/${branchId.value}/hours`);
-    branchHours.value = result.hours;
+    const taipei = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    const onDate =
+      taipei.getUTCFullYear() * 10000 +
+      (taipei.getUTCMonth() + 1) * 100 +
+      taipei.getUTCDate();
+    const [hoursResult, overridesResult] = await Promise.all([
+      api<BranchHoursResponse>(`/branches/${branchId.value}/hours`),
+      api<BranchDayOverridesResponse>(
+        `/branches/${branchId.value}/hour-overrides?from=${onDate}&to=${onDate}`,
+      ),
+    ]);
+    branchHours.value = hoursResult.hours;
+    todayOverride.value =
+      overridesResult.overrides.find((value) => value.onDate === onDate) || null;
   } catch (e) {
     branchHours.value = [];
+    todayOverride.value = null;
     if (showError) error.value = (e as Error).message;
     else notify((e as Error).message);
   }
@@ -415,7 +440,7 @@ async function toggleAvailability(p: Product) {
             <dt>{{ day.name }}</dt><dd>{{ day.text }}</dd>
           </template>
         </dl>
-        <p v-if="customerClosed">目前仍可瀏覽菜單；請選擇營業中的分店或於營業時間再下單。</p>
+        <p v-if="customerClosed">{{ customerClosedMessage }}</p>
       </section>
       <div v-if="auth.customer" class="coffee-banner">
         <div>

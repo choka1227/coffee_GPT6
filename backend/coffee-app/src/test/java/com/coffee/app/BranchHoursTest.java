@@ -77,14 +77,14 @@ class BranchHoursTest {
   }
 
   @Test
-  void currentStatusForManyBranchesUsesOneHoursQuery() {
+  void currentStatusForManyBranchesUsesTwoFixedQueries() {
     var database = new CountingJdbcTemplate();
     var service = new BranchService(database, mock(Audit.class));
 
     assertThat(service.openAt(List.of("one", "two", "three", "four"), taipei(21, 12, 0, 0, 0)))
         .containsOnlyKeys("one", "two", "three", "four")
         .allSatisfy((branch, open) -> assertThat(open).isTrue());
-    assertThat(database.queries).isEqualTo(1);
+    assertThat(database.queries).isEqualTo(2);
   }
 
   private static class CountingJdbcTemplate extends JdbcTemplate {
@@ -92,6 +92,11 @@ class BranchHoursTest {
 
     @Override
     public void query(String sql, RowCallbackHandler handler) {
+      queries++;
+    }
+
+    @Override
+    public void query(String sql, RowCallbackHandler handler, Object... args) {
       queries++;
     }
   }
