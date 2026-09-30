@@ -112,10 +112,7 @@ public class BranchService implements Branches {
         });
     Map<String, Map<LocalDate, DayOverride>> overrides = new HashMap<>();
     LocalDate today = localDate(atEpochMs);
-    // The production JdbcTemplate always has a DataSource. The guard keeps the existing pure
-    // counting test usable with its deliberately connection-less JdbcTemplate test double.
-    if (db.getDataSource() != null) {
-      db.query(
+    db.query(
           "select o.branch_id,o.on_date,o.closed,o.note,h.open_minute,h.close_minute"
               + " from branch_day_overrides o left join branch_day_override_hours h"
               + " on h.branch_id=o.branch_id and h.on_date=o.on_date"
@@ -139,7 +136,6 @@ public class BranchService implements Branches {
               },
           dateInt(today),
           dateInt(today.minusDays(1)));
-    }
     Map<String, Boolean> result = new LinkedHashMap<>();
     for (String branchId : branchIds) {
       result.put(
