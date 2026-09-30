@@ -10,7 +10,9 @@
   - Vitest 分成既有 `node` 與新增 `dom` project
   - 新增條件式 dialog／UUID shim、fetch／Pinia／router 掛載工具與文字選取工具
   - `Modal.dom.test.ts` 覆蓋標題、slot 與 close emit
-- [ ] S2 — `MenuView` 可見性矩陣
+- [x] S2 — `MenuView` 可見性矩陣
+  - 夾具照抄 CUSTOMER、CASHIER、HQ 的真實 scope 與權限
+  - 六個案例皆經由商品卡與 Modal 加入購物車，覆蓋現金、顧客、優惠碼、綠界、打烊與售完狀態
 - [ ] S3 — 兩段式收款流程與送出內容
 
 ## 設計與範圍
@@ -31,6 +33,13 @@
 - `backend/mvnw`、`scripts/build.sh`、`start-demo.sh`：皆為 `100755`。
 - `./mvnw -B -ntp verify`：本地 Maven Central DNS 解析失敗，等待最新 head 的 GitHub Actions 補足。
 
+## S2 驗證
+
+- `npm run test`：成功，六個 `MenuView` 可見性案例全綠。
+- `npm run build`：成功。
+- 不存在斷言使用 `toBeNull()`／`exists() === false`，未使用 `isVisible()`。
+- 案例 5 只斷言結帳按鈕 disabled，未釘住打烊訊息文字。
+
 ## 下一步
 
-S2 依規格 §7 的真實角色權限夾具，新增 `MenuView` 六個可見性案例；不斷言打烊訊息文字、不修改元件。
+S3 新增兩段式收款流程，白名單驗證訂單 body 與現金收款 body。
