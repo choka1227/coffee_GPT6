@@ -1,6 +1,6 @@
 # G23 — 前端元件層測試（模板可見性）
 
-規格版本 **v1.0**（2026-09-29，Claude 定案）
+規格版本 **v1.1**（2026-09-30，Claude 定案；依 PR #43 上 Codex 的 `REQUEST_CHANGES` 修正 §7 的夾具權限矩陣，見 §13.9）
 狀態：**待實作**
 前置閘門：**無**（與 G19 零檔案交集，見 §12）
 Flyway：**不新增任何 migration**（下一份需要 migration 的規格自 `V11` 起算）
@@ -245,13 +245,21 @@ export function checkoutButton(wrapper: VueWrapper): DOMWrapper<HTMLButtonElemen
 
 **不新增端點，因此沒有新的權限判定。**
 
-但本規格**測的正是「前端依身分顯示什麼」**，所以夾具要涵蓋三種 `Actor`：
+但本規格**測的正是「前端依身分顯示什麼」**，所以夾具要涵蓋三種 `Actor`。
 
-| 夾具 | `scope` | `permissions` | 對應 |
+**每個夾具一律照抄 `InitialData.java:38-58` 實際種進去的角色，不得自訂權限組合**（理由見 §13.9）：
+
+| 夾具 | 對應的真實角色 | `scope` | `permissions` |
 | --- | --- | --- | --- |
-| `customerActor()` | `SELF` | `[]` | 顧客自助點餐 |
-| `branchStaffActor()` | `BRANCH` | `["ORDER_CREATE", "ORDER_CASH"]` | 門市 POS |
-| `globalActor()` | `GLOBAL` | 含 `MENU_MANAGE` | 總部 |
+| `customerActor()` | `CUSTOMER`（`InitialData.java:38`） | `SELF` | `["ORDER_CREATE"]` |
+| `branchStaffActor()` | `CASHIER`（`InitialData.java:39-44`） | `BRANCH` | `["ORDER_CREATE", "POS_ORDER", "ORDER_MANAGE", "MENU_AVAILABILITY", "CASH_SESSION"]` |
+| `globalActor()` | `HQ`（`InitialData.java:58`） | `GLOBAL` | `Identity.PERMISSIONS` 全部（含 `MENU_MANAGE`、`MENU_AVAILABILITY`） |
+
+三件必須知道的事，寫錯任何一件整組 S2 案例都會空掛：
+
+1. **顧客有 `ORDER_CREATE`。** `MenuView.vue:375` 的入口是 `v-if="!auth.can('ORDER_CREATE')"` → 顯示無權限畫面。顧客夾具若給空權限，S2 案例 2 與 5 根本進不到菜單，更取不到結帳按鈕
+2. **顧客與門市的差別在 `scope` 不在權限。** `store.ts:8` 的 `customer` 是 `user.value?.scope === "SELF"`，`MenuView.vue` 的兩段式收現、實收欄位、應找零全部由它分流。**所以案例 2 與案例 1 的差別必須是 `scope`，不是拿掉某個權限位元**
+3. **`ORDER_CASH` 不是權限位元。** 它是 `OrderService.java:462` 寫的稽核 action，`Identity.PERMISSIONS`（`Identity.java:7-21`）裡沒有這個值。門市 POS 的權限是 `POS_ORDER` + `ORDER_MANAGE`，而且 `IdentityService.java:183-187` 強制「有 `ORDER_CREATE` 就必須同時有 `POS_ORDER` 與 `ORDER_MANAGE`」、「有 `POS_ORDER` 就必須有 `ORDER_MANAGE`」—— 少一個就是一組現實中建不出來的角色
 
 **必須同時記住並在 `MenuView.dom.test.ts` 的檔頭註解寫下這一句**：
 
@@ -496,6 +504,25 @@ G19（PR #42，實作中）動到的前端檔案是 `BranchesView.vue`、`MenuVi
 
 ---
 
+### 13.9 夾具照抄 `InitialData` 的真實角色，不自訂權限組合 —— **照抄**
+
+**決定**：見 §7。三個夾具分別對應 `CUSTOMER`、`CASHIER`、`HQ` 三個實際種進 DB 的角色，權限清單逐字照抄 `InitialData.java:38-58`。
+
+**這一條是 v1.1 修正的一個錯誤。** v1.0 的 §7 寫了兩個現實中不存在的 Actor：
+
+| v1.0 寫的 | 錯在哪 |
+| --- | --- |
+| `customerActor()` 的 `permissions: []` | 真實的 `CUSTOMER` 角色有 `ORDER_CREATE`（`InitialData.java:38`）。而 `MenuView.vue:375` 的入口是 `v-if="!auth.can('ORDER_CREATE')"`，空權限的顧客會停在無權限畫面 —— **S2 案例 2 與 5 完全無法實作**，那正是本規格最主要的兩個案例 |
+| `branchStaffActor()` 的 `["ORDER_CREATE", "ORDER_CASH"]` | `ORDER_CASH` 不是權限位元，是 `OrderService.java:462` 的稽核 action，`Identity.PERMISSIONS` 裡沒有它。而且 `IdentityService.java:183-187` 強制 `ORDER_CREATE` ⇒ `POS_ORDER` + `ORDER_MANAGE`，所以那組權限連 `saveRole()` 都過不了 |
+
+**理由**：前端元件測試的夾具是在複述後端的角色定義。**複述就會漂移**，而漂移的方向永遠是「測試裡的世界比真實世界寬鬆」—— 寫一組現實中建不出來的角色，測試照樣綠，但它證明的是一個不存在的使用者看到的畫面。照抄真實角色讓「這組權限是否可能存在」這個問題不必每次重新回答。
+
+**推翻它的代價**：中。真要測一組不在 `InitialData` 裡的權限組合（例如日後新增角色的前瞻測試），得先在規格裡寫出「這組權限能通過 `IdentityService.saveRole()` 的哪一條驗證」，否則就是在測一個建不出來的帳號。
+
+**這個錯誤暴露的通則**：規格書凡是複述後端既有常數（權限位元、角色、狀態碼、錯誤訊息）的地方，都要附上「在哪個檔案第幾行」，讓實作端能一眼核對而不是照抄。§7 現在照這個做法寫。
+
+---
+
 ## 14. 給 Codex 的施工提醒
 
 1. **dom project 要自己掛 `plugins: [vue()]`。** 漏了會在編譯 `.vue` 時噴看起來像語法錯誤的訊息（§5.1）
@@ -512,4 +539,5 @@ G19（PR #42，實作中）動到的前端檔案是 `BranchesView.vue`、`MenuVi
 12. **不要動 `backend/`，不新增任何 Flyway migration**（驗收 15）。下一份需要 migration 的規格自 `V11` 起算
 13. **推之前確認執行位元**：`git ls-files -s backend/mvnw scripts/build.sh start-demo.sh` 三個都要 `100755`
 14. **每階段做完就推。** S1 單獨合併就有價值（任何人都能開始寫 `.dom.test.ts`），不要整份做完才推（`AGENTS.md`「施工階段與中斷續作」）
-15. **規格有錯或做不到就講出來**（設計摘要、PR 描述、`docs/reports/`），寫明你採用了哪個做法與為什麼，**然後繼續做**。不要停下來等回覆
+15. **夾具不要自訂權限組合**，照 §7 抄 `InitialData.java:38-58` 的真實角色。顧客有 `ORDER_CREATE`；顧客與門市的差別在 `scope` 不在權限位元（§13.9）
+16. **規格有錯或做不到就講出來**（設計摘要、PR 描述、`docs/reports/`），寫明你採用了哪個做法與為什麼，**然後繼續做**。不要停下來等回覆
