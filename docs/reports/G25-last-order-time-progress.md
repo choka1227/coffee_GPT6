@@ -45,7 +45,8 @@
 - `backend/mvnw`、`scripts/build.sh`、`start-demo.sh`：均為 `100755`。
 - 本機 Maven（預設 cache）：Maven Central DNS 解析失敗，未進入編譯。
 - 本機 Maven（借用既有 cache）：cache 內多個 POM/JAR 不完整（`zip END header not found`），無法完成編譯與測試；不是程式失敗。
-- 遠端 CI：等待本次 head push 後驗證。
+- 遠端 CI：head `b4a53da83a3293d642fce8fab58fc6de1ae3d9d3` 的 GitHub Actions run
+  `36833114467` 全部成功（frontend test/build、backend verify）。
 
 ## 下一步
 
