@@ -64,8 +64,9 @@
 - `git diff --check`：通過。
 - `backend/mvnw`、`scripts/build.sh`、`start-demo.sh`：均維持 `100755`。
 - 本機 backend verify：Maven Central `repo.maven.apache.org` DNS 解析失敗，未進入編譯；以最新 head 遠端 Actions 為主要證據。
-- 遠端 CI：待最新 S3 head 推送後確認。
+- 遠端 CI：程式 head `907cce701268e0aacc15bb10ac4b079796736805` 的 Actions run
+  `36850316720` 全部成功（frontend test/build、backend verify）。
 
 ## 下一步
 
-S1–S3 已完成；推送後等待最新 head 的必要 Actions 全部成功，再轉 ready for review 並啟用 auto-merge。
+S1–S3 已完成且程式 head 的必要 Actions 全部成功；轉 ready for review 並啟用 auto-merge。
