@@ -129,7 +129,7 @@ class BranchMenuAvailabilityTest {
     String branchId = UUID.randomUUID().toString();
     String productId = UUID.randomUUID().toString();
     db.update(
-        "insert into branches values(?,?,?,?,?,?)",
+        "insert into branches(id,name,address,phone,active,monthly_target) values(?,?,?,?,?,?)",
         branchId,
         "長識別碼門市",
         "台北市",

@@ -23,11 +23,19 @@ class BranchController {
       String phone,
       boolean active,
       int monthlyTarget,
-      boolean openNow) {}
+      boolean openNow,
+      boolean orderableNow,
+      Integer minutesUntilLastOrder) {}
 
   record HoursRequest(List<Branches.Hours> hours) {}
 
-  record HoursResponse(String branchId, boolean openNow, List<Branches.Hours> hours) {}
+  record HoursResponse(
+      String branchId,
+      boolean openNow,
+      List<Branches.Hours> hours,
+      int lastOrderMinutes,
+      boolean orderableNow,
+      Integer minutesUntilLastOrder) {}
 
   record DayOverrideResponse(
       int onDate, int dayOfWeek, boolean closed, String note, List<Branches.Hours> hours) {}
@@ -47,8 +55,8 @@ class BranchController {
   List<BranchResponse> list(
       @RequestAttribute Actor actor, @RequestParam(defaultValue = "false") boolean manage) {
     var branches = service.list(actor, manage);
-    var open =
-        service.openAt(
+    var states =
+        service.stateAt(
             branches.stream().map(Branches.Branch::id).toList(), System.currentTimeMillis());
     return branches.stream()
         .map(
@@ -60,7 +68,9 @@ class BranchController {
                     branch.phone(),
                     branch.active(),
                     branch.monthlyTarget(),
-                    open.get(branch.id())))
+                    states.get(branch.id()).openNow(),
+                    states.get(branch.id()).orderableNow(),
+                    states.get(branch.id()).minutesUntilLastOrder()))
         .toList();
   }
 
@@ -72,14 +82,28 @@ class BranchController {
   @GetMapping("/{id}/hours")
   HoursResponse hours(@PathVariable String id) {
     var hours = service.hours(id);
-    return new HoursResponse(id, service.openAt(id, System.currentTimeMillis()), hours);
+    var state = service.stateAt(id, System.currentTimeMillis());
+    return new HoursResponse(
+        id,
+        state.openNow(),
+        hours,
+        service.lastOrderMinutes(id),
+        state.orderableNow(),
+        state.minutesUntilLastOrder());
   }
 
   @PutMapping("/{id}/hours")
   HoursResponse saveHours(
       @RequestAttribute Actor actor, @PathVariable String id, @RequestBody HoursRequest request) {
     var hours = service.saveHours(actor, id, request == null ? null : request.hours());
-    return new HoursResponse(id, service.openAt(id, System.currentTimeMillis()), hours);
+    var state = service.stateAt(id, System.currentTimeMillis());
+    return new HoursResponse(
+        id,
+        state.openNow(),
+        hours,
+        service.lastOrderMinutes(id),
+        state.orderableNow(),
+        state.minutesUntilLastOrder());
   }
 
   @GetMapping("/{id}/hour-overrides")

@@ -12,6 +12,8 @@ public interface Branches {
 
   record DayOverride(int onDate, boolean closed, String note, List<Hours> hours) {}
 
+  record OpenState(boolean openNow, boolean orderableNow, Integer minutesUntilLastOrder) {}
+
   List<Branch> list(Actor actor, boolean manage);
 
   Branch requireOpen(String id);
@@ -23,6 +25,12 @@ public interface Branches {
   boolean openAt(String branchId, long atEpochMs);
 
   Map<String, Boolean> openAt(List<String> branchIds, long atEpochMs);
+
+  int lastOrderMinutes(String branchId);
+
+  OpenState stateAt(String branchId, long atEpochMs);
+
+  Map<String, OpenState> stateAt(List<String> branchIds, long atEpochMs);
 
   Branch requireOrderable(String id, long atEpochMs);
 
