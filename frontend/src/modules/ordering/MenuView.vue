@@ -94,6 +94,9 @@ const branch = computed(() =>
 const customerClosed = computed(
   () => auth.customer && !!branch.value && !branch.value.openNow,
 );
+const customerNotOrderable = computed(
+  () => auth.customer && !!branch.value && !branch.value.orderableNow,
+);
 const customerClosedMessage = computed(() => {
   const override = todayOverride.value;
   if (override?.closed)
@@ -207,7 +210,7 @@ function choose(p: Product) {
   if (
     busy.value ||
     pendingCashOrder.value ||
-    customerClosed.value ||
+    customerNotOrderable.value ||
     p.availability === "SOLD_OUT"
   )
     return;
@@ -228,8 +231,12 @@ function toggleOption(groupId: string | null, itemId: string | null, single: boo
   else if (!single) selectedOptionIds.value = selectedOptionIds.value.filter((id) => id !== itemId);
 }
 function add() {
-  if (customerClosed.value) {
-    notify("分店目前未營業，請選擇其他分店或於營業時間再下單");
+  if (customerNotOrderable.value) {
+    notify(
+      customerClosed.value
+        ? "分店目前未營業，請選擇其他分店或於營業時間再下單"
+        : "分店已過最後點餐時間，請於下一個營業時段再下單",
+    );
     return;
   }
   const p = selected.value;
@@ -292,6 +299,14 @@ async function checkout() {
     } finally {
       busy.value = false;
     }
+    return;
+  }
+  if (customerNotOrderable.value) {
+    notify(
+      customerClosed.value
+        ? "分店目前未營業，請選擇其他分店或於營業時間再下單"
+        : "分店已過最後點餐時間，請於下一個營業時段再下單",
+    );
     return;
   }
   const block = checkoutBlock({
@@ -430,9 +445,22 @@ async function toggleAvailability(p: Product) {
           </select>
         </div>
       </div>
-      <section v-if="auth.customer && branch" class="hours-status" :class="{ closed: customerClosed }">
+      <section
+        v-if="auth.customer && branch"
+        class="hours-status"
+        :class="{ closed: customerNotOrderable }"
+      >
         <div>
-          <strong>{{ customerClosed ? "目前已打烊" : "目前營業中" }}</strong>
+          <strong>{{
+            customerClosed
+              ? "目前已打烊"
+              : customerNotOrderable
+                ? "已停止接單"
+                : branch.minutesUntilLastOrder !== null &&
+                    branch.minutesUntilLastOrder <= 30
+                  ? "即將停止接單"
+                  : "目前營業中"
+          }}</strong>
           <span>{{ branch.name }}營業時間</span>
         </div>
         <dl>
@@ -441,6 +469,16 @@ async function toggleAvailability(p: Product) {
           </template>
         </dl>
         <p v-if="customerClosed">{{ customerClosedMessage }}</p>
+        <p v-else-if="customerNotOrderable">
+          已過最後點餐時間，請於下一個營業時段再下單
+        </p>
+        <p
+          v-else-if="
+            branch.minutesUntilLastOrder !== null && branch.minutesUntilLastOrder <= 30
+          "
+        >
+          距離最後點餐還有 {{ branch.minutesUntilLastOrder }} 分鐘
+        </p>
       </section>
       <div v-if="auth.customer" class="coffee-banner">
         <div>
@@ -501,7 +539,7 @@ async function toggleAvailability(p: Product) {
           :class="{ unavailable: p.availability === 'SOLD_OUT' }"
           role="button"
           tabindex="0"
-          :aria-disabled="busy || customerClosed || p.availability === 'SOLD_OUT'"
+          :aria-disabled="busy || customerNotOrderable || p.availability === 'SOLD_OUT'"
           @click="choose(p)"
           @keydown.enter="choose(p)"
           @keydown.space.prevent="choose(p)"
@@ -683,7 +721,7 @@ async function toggleAvailability(p: Product) {
           (!cart.length && !pendingCashOrder) ||
           busy ||
           !branchId ||
-          customerClosed ||
+          customerNotOrderable ||
           !!unavailableCart.length
         "
         @click="checkout"
@@ -743,7 +781,7 @@ async function toggleAvailability(p: Product) {
         ><button
           class="btn primary"
           :disabled="
-            customerClosed || !Number.isInteger(quantity) || quantity < 1 || quantity > 50 || !optionsValid
+            customerNotOrderable || !Number.isInteger(quantity) || quantity < 1 || quantity > 50 || !optionsValid
           "
           @click="add"
         >

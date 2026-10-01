@@ -35,14 +35,28 @@ async function mountMenu(
     "/api/branches": branches,
     "/api/payments/config": { enabled: true, environment: "stage" },
     "/api/menu": () => [product],
-    "/api/branches/B1/hours": { branchId: "B1", openNow: true, hours: [] },
+    "/api/branches/B1/hours": {
+      branchId: "B1",
+      openNow: true,
+      hours: [],
+      lastOrderMinutes: 0,
+      orderableNow: true,
+      minutesUntilLastOrder: null,
+    },
     "/api/branches/B1/hour-overrides": {
       branchId: "B1",
       from: 20260930,
       to: 20260930,
       overrides: [],
     },
-    "/api/branches/B2/hours": { branchId: "B2", openNow: false, hours: [] },
+    "/api/branches/B2/hours": {
+      branchId: "B2",
+      openNow: false,
+      hours: [],
+      lastOrderMinutes: 0,
+      orderableNow: false,
+      minutesUntilLastOrder: null,
+    },
     "/api/branches/B2/hour-overrides": {
       branchId: "B2",
       from: 20260930,
@@ -116,7 +130,12 @@ describe("MenuView 可見性", () => {
   it("顧客切換到打烊分店後不能送出點餐", async () => {
     const branches = [
       branchFixture(),
-      branchFixture({ id: "B2", name: "高雄門市", openNow: false }),
+      branchFixture({
+        id: "B2",
+        name: "高雄門市",
+        openNow: false,
+        orderableNow: false,
+      }),
     ];
     const { wrapper } = await mountMenu(customerActor(), branches);
     await addProduct(wrapper);
@@ -125,6 +144,46 @@ describe("MenuView 可見性", () => {
     await flushPromises();
 
     expect(checkoutButton(wrapper).attributes("disabled")).toBeDefined();
+  });
+
+  it("顧客切換到仍營業但已停止接單的分店後不能結帳", async () => {
+    const branches = [
+      branchFixture(),
+      branchFixture({
+        id: "B2",
+        name: "高雄門市",
+        openNow: true,
+        orderableNow: false,
+      }),
+    ];
+    const { wrapper } = await mountMenu(customerActor(), branches);
+    await addProduct(wrapper);
+    await wrapper.get('select[aria-label="選擇取餐分店"]').setValue("B2");
+    await flushPromises();
+    await flushPromises();
+
+    expect(checkoutButton(wrapper).attributes("disabled")).toBeDefined();
+    expect(wrapper.text()).toContain("已停止接單");
+    expect(wrapper.text()).not.toContain("明日");
+  });
+
+  it("顧客在最後點餐前 20 分鐘看得到即將停止提示且仍可結帳", async () => {
+    const { wrapper } = await mountMenu(customerActor(), [
+      branchFixture({ minutesUntilLastOrder: 20 }),
+    ]);
+    await addProduct(wrapper);
+
+    expect(wrapper.text()).toContain("即將停止接單");
+    expect(wrapper.text()).toContain("距離最後點餐還有 20 分鐘");
+    expect(checkoutButton(wrapper).attributes("disabled")).toBeUndefined();
+  });
+
+  it("顧客距離最後點餐 45 分鐘時不顯示即將停止提示", async () => {
+    const { wrapper } = await mountMenu(customerActor(), [
+      branchFixture({ minutesUntilLastOrder: 45 }),
+    ]);
+
+    expect(wrapper.text()).not.toContain("即將停止接單");
   });
 
   it("購物車商品被標記售完後不能結帳並顯示錯誤", async () => {

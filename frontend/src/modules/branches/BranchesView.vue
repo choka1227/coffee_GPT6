@@ -29,6 +29,7 @@ const branches = ref<Branch[]>([]),
   saving = ref(false),
   hoursBranch = ref<Branch | null>(null),
   hours = ref<BranchHours[]>([]),
+  lastOrderMinutes = ref(0),
   overrides = ref<BranchDayOverride[]>([]),
   overrideDate = ref(""),
   overrideDraft = ref<BranchDayOverride | null>(null),
@@ -65,6 +66,8 @@ function add() {
     active: true,
     monthlyTarget: 300000,
     openNow: true,
+    orderableNow: true,
+    minutesUntilLastOrder: null,
   };
 }
 async function save() {
@@ -99,6 +102,7 @@ async function editHours(branch: Branch) {
       api<BranchDayOverridesResponse>(`/branches/${branch.id}/hour-overrides`),
     ]);
     hours.value = hoursResult.hours.map((period) => ({ ...period }));
+    lastOrderMinutes.value = hoursResult.lastOrderMinutes;
     overrides.value = sortOverrides(overridesResult.overrides);
     overrideDraft.value = null;
   } catch (e) {
@@ -214,10 +218,11 @@ async function saveHours() {
   try {
     const result = await send<BranchHoursResponse>(
       `/branches/${hoursBranch.value.id}/hours`,
-      { hours: hours.value },
+      { hours: hours.value, lastOrderMinutes: lastOrderMinutes.value },
       "PUT",
     );
     hours.value = result.hours;
+    lastOrderMinutes.value = result.lastOrderMinutes;
     notify("營業時間已儲存");
     hoursBranch.value = null;
   } catch (e) {
@@ -347,6 +352,16 @@ function updateTime(
   >
     <div v-if="hoursLoading" class="loading-state">讀取營業時間中…</div>
     <form v-else class="hours-form" @submit.prevent="saveHours">
+      <label
+        >最後點餐（打烊前幾分鐘停止接單）<input
+          v-model.number="lastOrderMinutes"
+          type="number"
+          min="0"
+          max="120"
+          step="5"
+          required
+      /></label>
+      <p class="form-hint">0 = 打烊當下才停止接單</p>
       <p v-if="hours.length === 0" class="hours-empty">
         目前未設定營業時間，視為 24 小時營業。
       </p>

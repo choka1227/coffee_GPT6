@@ -37,9 +37,23 @@ class BranchBusinessHoursMigrationTest {
                     + " where table_name='branch_hours'",
                 String.class))
         .contains("idx_branch_hours_branch");
+    assertThat(
+            db.queryForObject(
+                "select column_default from information_schema.columns"
+                    + " where table_name='branches' and column_name='last_order_minutes'",
+                String.class))
+        .isEqualTo("0");
 
     db.update(
-        "insert into branches values('branch','分店','地址','02-0000-0000',true,0)");
+        "insert into branches(id,name,address,phone,active,monthly_target)"
+            + " values('branch','分店','地址','02-0000-0000',true,0)");
+    assertThat(
+            db.queryForObject(
+                "select last_order_minutes from branches where id='branch'", Integer.class))
+        .isZero();
+    assertThatThrownBy(
+            () -> db.update("update branches set last_order_minutes=121 where id='branch'"))
+        .isInstanceOf(Exception.class);
     assertThatThrownBy(
             () ->
                 db.update(
