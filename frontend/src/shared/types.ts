@@ -15,6 +15,8 @@ export interface Branch {
   active: boolean;
   monthlyTarget: number;
   openNow: boolean;
+  orderableNow: boolean;
+  minutesUntilLastOrder: number | null;
 }
 export interface BranchHours {
   dayOfWeek: number;
@@ -25,6 +27,9 @@ export interface BranchHoursResponse {
   branchId: string;
   openNow: boolean;
   hours: BranchHours[];
+  lastOrderMinutes: number;
+  orderableNow: boolean;
+  minutesUntilLastOrder: number | null;
 }
 export interface BranchDayOverride {
   onDate: number;

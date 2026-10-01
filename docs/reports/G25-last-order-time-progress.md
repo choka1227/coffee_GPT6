@@ -10,7 +10,7 @@
 
 - [x] S1 — 資料層與 `windowAt`
 - [x] S2 — 截止點強制與總部設定
-- [ ] S3 — 前端設定與提示
+- [x] S3 — 前端設定與提示
 
 ## S1 驗收對照
 
@@ -48,6 +48,24 @@
 - 遠端 CI：head `b4a53da83a3293d642fce8fab58fc6de1ae3d9d3` 的 GitHub Actions run
   `36833114467` 全部成功（frontend test/build、backend verify）。
 
+## S3 驗收對照
+
+- [x] 前端分店與營業時間型別補齊 `orderableNow`、`minutesUntilLastOrder` 與 `lastOrderMinutes`。
+- [x] 總部營業時間視窗可設定 0–120 分鐘，讀取既有值並連同時段存回；0 的提示文字已補上。
+- [x] 顧客端區分營業中、即將停止接單、已停止接單與已打烊；停止接單後商品與結帳入口均停用。
+- [x] 截止提示不使用「明日」，前 30 分鐘內顯示剩餘分鐘，45 分鐘時不提前警示。
+- [x] `MenuView.dom.test.ts` 補齊四個規格案例；G23 的訂單 body 白名單測試維持不變且通過。
+- [x] `coffee-orders` 零變更，既有 Flyway migration 零修改。
+
+## S3 驗證
+
+- `cd frontend && npm test -- --run`：70/70 通過。
+- `cd frontend && npm run build`：通過（`vue-tsc --noEmit` 與 Vite build）。
+- `git diff --check`：通過。
+- `backend/mvnw`、`scripts/build.sh`、`start-demo.sh`：均維持 `100755`。
+- 本機 backend verify：Maven Central `repo.maven.apache.org` DNS 解析失敗，未進入編譯；以最新 head 遠端 Actions 為主要證據。
+- 遠端 CI：待最新 S3 head 推送後確認。
+
 ## 下一步
 
-S3：前端型別、總部設定 UI、顧客停止接單／即將停止接單提示與元件測試。
+S1–S3 已完成；推送後等待最新 head 的必要 Actions 全部成功，再轉 ready for review 並啟用 auto-merge。

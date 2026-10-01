@@ -67,6 +67,8 @@ export function branchFixture(overrides: Partial<Branch> = {}): Branch {
     active: true,
     monthlyTarget: 300000,
     openNow: true,
+    orderableNow: true,
+    minutesUntilLastOrder: null,
     ...overrides,
   };
 }
