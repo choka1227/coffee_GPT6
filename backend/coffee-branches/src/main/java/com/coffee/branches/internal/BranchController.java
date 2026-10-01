@@ -2,7 +2,6 @@ package com.coffee.branches.internal;
 
 import com.coffee.branches.api.Branches;
 import com.coffee.shared.Actor;
-import com.fasterxml.jackson.databind.JsonMappingException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -117,9 +116,7 @@ class BranchController {
   ResponseEntity<Map<String, String>> unreadableHours(HttpMessageNotReadableException error) {
     boolean lastOrderInput = false;
     for (Throwable cause = error; cause != null; cause = cause.getCause()) {
-      if (cause instanceof JsonMappingException mapping
-          && mapping.getPath().stream()
-              .anyMatch(reference -> "lastOrderMinutes".equals(reference.getFieldName()))) {
+      if (cause.getMessage() != null && cause.getMessage().contains("lastOrderMinutes")) {
         lastOrderInput = true;
         break;
       }
