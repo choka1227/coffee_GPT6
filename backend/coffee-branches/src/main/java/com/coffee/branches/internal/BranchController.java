@@ -2,6 +2,7 @@ package com.coffee.branches.internal;
 
 import com.coffee.branches.api.Branches;
 import com.coffee.shared.Actor;
+import com.fasterxml.jackson.databind.JsonMappingException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -114,10 +115,16 @@ class BranchController {
 
   @ExceptionHandler(HttpMessageNotReadableException.class)
   ResponseEntity<Map<String, String>> unreadableHours(HttpMessageNotReadableException error) {
-    String message =
-        error.getMessage() != null && error.getMessage().contains("lastOrderMinutes")
-            ? "最後點餐提前時間需為 0–120 分鐘"
-            : "輸入格式不正確";
+    boolean lastOrderInput = false;
+    for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+      if (cause instanceof JsonMappingException mapping
+          && mapping.getPath().stream()
+              .anyMatch(reference -> "lastOrderMinutes".equals(reference.getFieldName()))) {
+        lastOrderInput = true;
+        break;
+      }
+    }
+    String message = lastOrderInput ? "最後點餐提前時間需為 0–120 分鐘" : "輸入格式不正確";
     return ResponseEntity.badRequest().body(Map.of("message", message));
   }
 

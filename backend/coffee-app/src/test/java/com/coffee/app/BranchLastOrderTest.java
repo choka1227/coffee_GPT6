@@ -143,6 +143,7 @@ class BranchLastOrderTest {
         "分店已停止接單（最後點餐時間 01:30），請於下一個營業時段再下單",
         () -> branches.requireOrderable("taipei", at(MONDAY, 1545)));
 
+    branches.saveHours(hq, "taipei", List.of(new Hours(1, 540, 720)), 15);
     branches.saveOverride(
         hq,
         "taipei",
