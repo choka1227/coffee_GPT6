@@ -6,6 +6,7 @@ import com.coffee.orders.api.Orders;
 import com.coffee.reporting.api.Reports;
 import com.coffee.shared.Actor;
 import com.coffee.shared.Problem;
+import java.time.ZoneId;
 import java.time.YearMonth;
 import java.util.List;
 import java.util.Set;
@@ -79,7 +80,7 @@ class OrderDiscountTest {
 
   @Test
   void reportShowsDiscountAndRevenueAfterPayment() {
-    String month = YearMonth.now().toString();
+    String month = YearMonth.now(ZoneId.of("Asia/Taipei")).toString();
     var before = reports.report(headquarters, month, null);
     insert("LESS-20", "AMOUNT", 0, 20, 0, null);
     Orders.Order order = create("LESS-20", UUID.randomUUID().toString());
