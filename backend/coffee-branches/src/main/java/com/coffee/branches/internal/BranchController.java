@@ -7,7 +7,9 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -23,11 +25,19 @@ class BranchController {
       String phone,
       boolean active,
       int monthlyTarget,
-      boolean openNow) {}
+      boolean openNow,
+      boolean orderableNow,
+      Integer minutesUntilLastOrder) {}
 
-  record HoursRequest(List<Branches.Hours> hours) {}
+  record HoursRequest(List<Branches.Hours> hours, Integer lastOrderMinutes) {}
 
-  record HoursResponse(String branchId, boolean openNow, List<Branches.Hours> hours) {}
+  record HoursResponse(
+      String branchId,
+      boolean openNow,
+      List<Branches.Hours> hours,
+      int lastOrderMinutes,
+      boolean orderableNow,
+      Integer minutesUntilLastOrder) {}
 
   record DayOverrideResponse(
       int onDate, int dayOfWeek, boolean closed, String note, List<Branches.Hours> hours) {}
@@ -47,8 +57,8 @@ class BranchController {
   List<BranchResponse> list(
       @RequestAttribute Actor actor, @RequestParam(defaultValue = "false") boolean manage) {
     var branches = service.list(actor, manage);
-    var open =
-        service.openAt(
+    var states =
+        service.stateAt(
             branches.stream().map(Branches.Branch::id).toList(), System.currentTimeMillis());
     return branches.stream()
         .map(
@@ -60,7 +70,9 @@ class BranchController {
                     branch.phone(),
                     branch.active(),
                     branch.monthlyTarget(),
-                    open.get(branch.id())))
+                    states.get(branch.id()).openNow(),
+                    states.get(branch.id()).orderableNow(),
+                    states.get(branch.id()).minutesUntilLastOrder()))
         .toList();
   }
 
@@ -72,14 +84,45 @@ class BranchController {
   @GetMapping("/{id}/hours")
   HoursResponse hours(@PathVariable String id) {
     var hours = service.hours(id);
-    return new HoursResponse(id, service.openAt(id, System.currentTimeMillis()), hours);
+    var state = service.stateAt(id, System.currentTimeMillis());
+    return new HoursResponse(
+        id,
+        state.openNow(),
+        hours,
+        service.lastOrderMinutes(id),
+        state.orderableNow(),
+        state.minutesUntilLastOrder());
   }
 
   @PutMapping("/{id}/hours")
   HoursResponse saveHours(
       @RequestAttribute Actor actor, @PathVariable String id, @RequestBody HoursRequest request) {
-    var hours = service.saveHours(actor, id, request == null ? null : request.hours());
-    return new HoursResponse(id, service.openAt(id, System.currentTimeMillis()), hours);
+    Integer requestedLastOrder = request == null ? null : request.lastOrderMinutes();
+    var hours =
+        requestedLastOrder == null
+            ? service.saveHours(actor, id, request == null ? null : request.hours())
+            : service.saveHours(actor, id, request.hours(), requestedLastOrder);
+    var state = service.stateAt(id, System.currentTimeMillis());
+    return new HoursResponse(
+        id,
+        state.openNow(),
+        hours,
+        service.lastOrderMinutes(id),
+        state.orderableNow(),
+        state.minutesUntilLastOrder());
+  }
+
+  @ExceptionHandler(HttpMessageNotReadableException.class)
+  ResponseEntity<Map<String, String>> unreadableHours(HttpMessageNotReadableException error) {
+    boolean lastOrderInput = false;
+    for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+      if (cause.getMessage() != null && cause.getMessage().contains("lastOrderMinutes")) {
+        lastOrderInput = true;
+        break;
+      }
+    }
+    String message = lastOrderInput ? "最後點餐提前時間需為 0–120 分鐘" : "輸入格式不正確";
+    return ResponseEntity.badRequest().body(Map.of("message", message));
   }
 
   @GetMapping("/{id}/hour-overrides")

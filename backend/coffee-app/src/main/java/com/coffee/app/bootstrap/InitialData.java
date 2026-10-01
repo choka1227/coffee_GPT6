@@ -69,13 +69,16 @@ public class InitialData implements ApplicationRunner {
     }
     String hash = encoder.encode(demoPassword);
     db.update(
-        "insert into branches values('taipei','台北・中山店','台北市中山區中山北路二段 26"
+        "insert into branches(id,name,address,phone,active,monthly_target)"
+            + " values('taipei','台北・中山店','台北市中山區中山北路二段 26"
             + " 號','02-2521-0826',true,450000)");
     db.update(
-        "insert into branches values('banqiao','板橋・江子翠店','新北市板橋區文化路二段 128"
+        "insert into branches(id,name,address,phone,active,monthly_target)"
+            + " values('banqiao','板橋・江子翠店','新北市板橋區文化路二段 128"
             + " 號','02-2258-0826',true,360000)");
     db.update(
-        "insert into branches values('taichung','台中・勤美店','台中市西區公益路 68"
+        "insert into branches(id,name,address,phone,active,monthly_target)"
+            + " values('taichung','台中・勤美店','台中市西區公益路 68"
             + " 號','04-2301-0826',true,320000)");
     account("hq", "hq@coffee.local", "總部管理員", "HQ", null, hash);
     account("manager", "manager@coffee.local", "中山店・店長", "MANAGER", "taipei", hash);

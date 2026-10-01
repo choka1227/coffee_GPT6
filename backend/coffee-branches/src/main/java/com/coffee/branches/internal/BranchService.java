@@ -92,23 +92,50 @@ public class BranchService implements Branches {
   }
 
   public boolean openAt(String branchId, long atEpochMs) {
+    return stateAt(branchId, atEpochMs).openNow();
+  }
+
+  public int lastOrderMinutes(String branchId) {
+    return db.query(
+            "select last_order_minutes from branches where id=?",
+            (result, row) -> result.getInt(1),
+            branchId)
+        .stream()
+        .findFirst()
+        .orElseThrow(() -> new Problem(404, "找不到分店"));
+  }
+
+  public OpenState stateAt(String branchId, long atEpochMs) {
     List<Hours> weekly = hours(branchId);
     LocalDate today = localDate(atEpochMs);
     Map<LocalDate, DayOverride> overrides =
         indexOverrides(loadOverrides(branchId, dateInt(today.minusDays(1)), dateInt(today)));
-    return isOpenAt(resolver(weekly, overrides), atEpochMs);
+    return state(windowAt(resolver(weekly, overrides), atEpochMs), lastOrderMinutes(branchId));
   }
 
   public Map<String, Boolean> openAt(List<String> branchIds, long atEpochMs) {
+    Map<String, OpenState> states = stateAt(branchIds, atEpochMs);
+    Map<String, Boolean> result = new LinkedHashMap<>();
+    states.forEach((branchId, state) -> result.put(branchId, state.openNow()));
+    return result;
+  }
+
+  public Map<String, OpenState> stateAt(List<String> branchIds, long atEpochMs) {
     if (branchIds.isEmpty()) return Map.of();
     Map<String, List<Hours>> schedules = new HashMap<>();
+    Map<String, Integer> lastOrders = new HashMap<>();
     db.query(
-        "select branch_id,day_of_week,open_minute,close_minute from branch_hours"
-            + " order by branch_id,day_of_week,open_minute",
+        "select b.id,b.last_order_minutes,h.day_of_week,h.open_minute,h.close_minute"
+            + " from branches b left join branch_hours h on h.branch_id=b.id"
+            + " order by b.id,h.day_of_week,h.open_minute",
         result -> {
-          schedules
-              .computeIfAbsent(result.getString(1), ignored -> new ArrayList<>())
-              .add(new Hours(result.getInt(2), result.getInt(3), result.getInt(4)));
+          String branchId = result.getString(1);
+          lastOrders.put(branchId, result.getInt(2));
+          Integer day = (Integer) result.getObject(3);
+          if (day != null)
+            schedules
+                .computeIfAbsent(branchId, ignored -> new ArrayList<>())
+                .add(new Hours(day, result.getInt(4), result.getInt(5)));
         });
     Map<String, Map<LocalDate, DayOverride>> overrides = new HashMap<>();
     LocalDate today = localDate(atEpochMs);
@@ -136,15 +163,17 @@ public class BranchService implements Branches {
               },
           dateInt(today),
           dateInt(today.minusDays(1)));
-    Map<String, Boolean> result = new LinkedHashMap<>();
+    Map<String, OpenState> result = new LinkedHashMap<>();
     for (String branchId : branchIds) {
       result.put(
           branchId,
-          isOpenAt(
-              resolver(
-                  schedules.getOrDefault(branchId, List.of()),
-                  overrides.getOrDefault(branchId, Map.of())),
-              atEpochMs));
+          state(
+              windowAt(
+                  resolver(
+                      schedules.getOrDefault(branchId, List.of()),
+                      overrides.getOrDefault(branchId, Map.of())),
+                  atEpochMs),
+              lastOrders.getOrDefault(branchId, 0)));
     }
     return result;
   }
@@ -156,8 +185,13 @@ public class BranchService implements Branches {
     Map<LocalDate, DayOverride> overrides =
         indexOverrides(loadOverrides(id, dateInt(today.minusDays(1)), dateInt(today)));
     Resolver resolver = resolver(weekly, overrides);
-    if (isOpenAt(resolver, atEpochMs)) return branch;
-    throw new Problem(400, closedMessage(resolver.resolve(today)));
+    DaySchedule todaySchedule = resolver.resolve(today);
+    OpenWindow window = windowAt(resolver, atEpochMs);
+    int last = lastOrderMinutes(id);
+    if (window instanceof OpenWindow.NotOpen) throw new Problem(400, closedMessage(todaySchedule));
+    if (window instanceof OpenWindow.ClosesIn closes && closes.minutes() <= last)
+      throw new Problem(400, lastOrderMessage(atEpochMs, closes.minutes(), last, todaySchedule));
+    return branch;
   }
 
   public static boolean isOpenAt(List<Hours> schedule, long atEpochMs) {
@@ -187,29 +221,52 @@ public class BranchService implements Branches {
   }
 
   public static boolean isOpenAt(Resolver resolver, long atEpochMs) {
+    return !(windowAt(resolver, atEpochMs) instanceof OpenWindow.NotOpen);
+  }
+
+  public sealed interface OpenWindow {
+    record NotOpen() implements OpenWindow {}
+
+    record NoClosingTime() implements OpenWindow {}
+
+    record ClosesIn(int minutes) implements OpenWindow {}
+  }
+
+  public static OpenWindow windowAt(Resolver resolver, long atEpochMs) {
     var local = Instant.ofEpochMilli(atEpochMs).atZone(TAIPEI);
     LocalDate today = local.toLocalDate();
     LocalDate previous = today.minusDays(1);
     int minute = local.getHour() * 60 + local.getMinute();
     DaySchedule current = resolver.resolve(today);
-    if (current instanceof DaySchedule.Closed) return false;
-    if (current instanceof DaySchedule.AlwaysOpen) return true;
+    if (current instanceof DaySchedule.Closed) return new OpenWindow.NotOpen();
+    if (current instanceof DaySchedule.AlwaysOpen) return new OpenWindow.NoClosingTime();
     DaySchedule.Periods periods = (DaySchedule.Periods) current;
-    if (periods.periods().stream()
-        .anyMatch(
-            period ->
-                (period.closeMinute() > period.openMinute()
-                        && period.openMinute() <= minute
-                        && minute < period.closeMinute())
-                    || (period.closeMinute() <= period.openMinute()
-                        && minute >= period.openMinute()))) return true;
-    if (periods.fromOverride()) return false;
+    for (Hours period : periods.periods()) {
+      if (period.closeMinute() > period.openMinute()
+          && period.openMinute() <= minute
+          && minute < period.closeMinute())
+        return new OpenWindow.ClosesIn(period.closeMinute() - minute);
+      if (period.closeMinute() <= period.openMinute() && minute >= period.openMinute())
+        return new OpenWindow.ClosesIn(period.closeMinute() + 1440 - minute);
+    }
+    if (periods.fromOverride()) return new OpenWindow.NotOpen();
     DaySchedule prior = resolver.resolve(previous);
-    if (!(prior instanceof DaySchedule.Periods priorPeriods)) return false;
+    if (!(prior instanceof DaySchedule.Periods priorPeriods)) return new OpenWindow.NotOpen();
     // G19 §13.4 forbids override periods from crossing midnight; only weekly tails can match.
-    return priorPeriods.periods().stream()
-        .anyMatch(
-            period -> period.closeMinute() <= period.openMinute() && minute < period.closeMinute());
+    for (Hours period : priorPeriods.periods()) {
+      if (period.closeMinute() <= period.openMinute() && minute < period.closeMinute())
+        return new OpenWindow.ClosesIn(period.closeMinute() - minute);
+    }
+    return new OpenWindow.NotOpen();
+  }
+
+  public static OpenState state(OpenWindow window, int lastOrderMinutes) {
+    if (window instanceof OpenWindow.NotOpen) return new OpenState(false, false, null);
+    if (window instanceof OpenWindow.NoClosingTime) return new OpenState(true, true, null);
+    int remaining = ((OpenWindow.ClosesIn) window).minutes();
+    return remaining > lastOrderMinutes
+        ? new OpenState(true, true, remaining - lastOrderMinutes)
+        : new OpenState(true, false, null);
   }
 
   private static String closedMessage(DaySchedule day) {
@@ -232,6 +289,32 @@ public class BranchService implements Branches {
     return periods == null ? "分店今日未營業" : "分店目前未營業（今日營業時間 " + periods + "）";
   }
 
+  private static String lastOrderMessage(
+      long atEpochMs, int minutesUntilClose, int lastOrderMinutes, DaySchedule today) {
+    var local = Instant.ofEpochMilli(atEpochMs).atZone(TAIPEI);
+    int nowMinute = local.getHour() * 60 + local.getMinute();
+    int cutoff = Math.floorMod(nowMinute + minutesUntilClose - lastOrderMinutes, 1440);
+    Integer next = nextOrderableStartToday(today, nowMinute, lastOrderMinutes);
+    String tail = next == null ? "請於下一個營業時段再下單" : "請於今日 " + formatMinute(next) + " 起的營業時段再下單";
+    return "分店已停止接單（最後點餐時間 " + formatMinute(cutoff) + "），" + tail;
+  }
+
+  static Integer nextOrderableStartToday(DaySchedule today, int nowMinute, int lastOrderMinutes) {
+    if (!(today instanceof DaySchedule.Periods periods)) return null;
+    return periods.periods().stream()
+        .filter(period -> period.openMinute() > nowMinute)
+        .filter(period -> periodLength(period) > lastOrderMinutes)
+        .map(Hours::openMinute)
+        .min(Integer::compare)
+        .orElse(null);
+  }
+
+  static int periodLength(Hours period) {
+    return period.closeMinute() > period.openMinute()
+        ? period.closeMinute() - period.openMinute()
+        : period.closeMinute() + 1440 - period.openMinute();
+  }
+
   private static String formatMinute(int minute) {
     if (minute == 1440) return "24:00";
     return String.format(Locale.ROOT, "%02d:%02d", minute / 60, minute % 60);
@@ -241,10 +324,20 @@ public class BranchService implements Branches {
   public List<Hours> saveHours(Actor actor, String branchId, List<Hours> schedule) {
     actor.require("BRANCH_MANAGE");
     if (!actor.global()) throw new Problem(403, "此功能限總部範圍");
+    return saveHours(actor, branchId, schedule, lastOrderMinutes(branchId));
+  }
+
+  @Transactional
+  public List<Hours> saveHours(
+      Actor actor, String branchId, List<Hours> schedule, int lastOrderMinutes) {
+    actor.require("BRANCH_MANAGE");
+    if (!actor.global()) throw new Problem(403, "此功能限總部範圍");
     Problem.check(schedule != null, "請提供營業時段");
+    Problem.check(lastOrderMinutes >= 0 && lastOrderMinutes <= 120, "最後點餐提前時間需為 0–120 分鐘");
     if (db.queryForList("select id from branches where id=? for update", String.class, branchId)
         .isEmpty()) throw new Problem(404, "找不到分店");
     validateHours(schedule);
+    db.update("update branches set last_order_minutes=? where id=?", lastOrderMinutes, branchId);
     db.update("delete from branch_hours where branch_id=?", branchId);
     for (Hours period : schedule) {
       db.update(
@@ -257,7 +350,11 @@ public class BranchService implements Branches {
           period.closeMinute());
     }
     audit.record(
-        actor, "BRANCH_HOURS_SAVE", branchId, branchId, "更新營業時間（" + schedule.size() + " 段）");
+        actor,
+        "BRANCH_HOURS_SAVE",
+        branchId,
+        branchId,
+        "更新營業時間（" + schedule.size() + " 段，最後點餐提前 " + lastOrderMinutes + " 分）");
     return loadHours(branchId);
   }
 
