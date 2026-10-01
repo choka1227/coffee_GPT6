@@ -36,6 +36,8 @@ public interface Branches {
 
   List<Hours> saveHours(Actor actor, String branchId, List<Hours> hours);
 
+  List<Hours> saveHours(Actor actor, String branchId, List<Hours> hours, int lastOrderMinutes);
+
   DayOverride saveOverride(Actor actor, String branchId, DayOverride override);
 
   void deleteOverride(Actor actor, String branchId, int onDate);

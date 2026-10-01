@@ -9,7 +9,7 @@
 ## 階段
 
 - [x] S1 — 資料層與 `windowAt`
-- [ ] S2 — 截止點強制與總部設定
+- [x] S2 — 截止點強制與總部設定
 - [ ] S3 — 前端設定與提示
 
 ## S1 驗收對照
@@ -30,6 +30,23 @@
 - 本機 backend 測試：未進入編譯；Maven Central `repo.maven.apache.org` DNS 解析失敗，屬外部環境問題。
 - 遠端 CI：head `08fa1742` 的 GitHub Actions run `36826615490` 全部成功（frontend test/build、backend verify）。
 
+## S2 驗收對照
+
+- [x] 新增四參數 `saveHours`；三參數版保留並沿用分店既有提前分鐘數。
+- [x] `PUT /hours` 接受選填 `lastOrderMinutes`，省略時保留原值，0–120 以外與非整數均回指定繁中錯誤。
+- [x] 顧客下單在截止點後回 400；員工 POS 維持可建單。
+- [x] 同日後續時段、過短後續時段、跨夜與例外日時段均使用規格指定訊息，且不出現「明日」。
+- [x] 補齊 `L=0` 逐分鐘等價、短時段、交易保留、基本資料不覆寫與五條越權防線。
+- [x] `coffee-orders` 零變更，既有四個未營業訊息的實作零修改。
+
+## 驗證
+
+- `git diff --check`：通過。
+- `backend/mvnw`、`scripts/build.sh`、`start-demo.sh`：均為 `100755`。
+- 本機 Maven（預設 cache）：Maven Central DNS 解析失敗，未進入編譯。
+- 本機 Maven（借用既有 cache）：cache 內多個 POM/JAR 不完整（`zip END header not found`），無法完成編譯與測試；不是程式失敗。
+- 遠端 CI：等待本次 head push 後驗證。
+
 ## 下一步
 
-S2：新增四參數 `saveHours`、選填的 `lastOrderMinutes` API、截止點強制、同日下一時段訊息、交易性與五條越權測試。
+S3：前端型別、總部設定 UI、顧客停止接單／即將停止接單提示與元件測試。

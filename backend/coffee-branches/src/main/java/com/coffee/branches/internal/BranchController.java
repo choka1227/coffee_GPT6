@@ -7,7 +7,9 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -27,7 +29,7 @@ class BranchController {
       boolean orderableNow,
       Integer minutesUntilLastOrder) {}
 
-  record HoursRequest(List<Branches.Hours> hours) {}
+  record HoursRequest(List<Branches.Hours> hours, Integer lastOrderMinutes) {}
 
   record HoursResponse(
       String branchId,
@@ -95,7 +97,11 @@ class BranchController {
   @PutMapping("/{id}/hours")
   HoursResponse saveHours(
       @RequestAttribute Actor actor, @PathVariable String id, @RequestBody HoursRequest request) {
-    var hours = service.saveHours(actor, id, request == null ? null : request.hours());
+    Integer requestedLastOrder = request == null ? null : request.lastOrderMinutes();
+    var hours =
+        requestedLastOrder == null
+            ? service.saveHours(actor, id, request == null ? null : request.hours())
+            : service.saveHours(actor, id, request.hours(), requestedLastOrder);
     var state = service.stateAt(id, System.currentTimeMillis());
     return new HoursResponse(
         id,
@@ -104,6 +110,15 @@ class BranchController {
         service.lastOrderMinutes(id),
         state.orderableNow(),
         state.minutesUntilLastOrder());
+  }
+
+  @ExceptionHandler(HttpMessageNotReadableException.class)
+  ResponseEntity<Map<String, String>> unreadableHours(HttpMessageNotReadableException error) {
+    String message =
+        error.getMessage() != null && error.getMessage().contains("lastOrderMinutes")
+            ? "最後點餐提前時間需為 0–120 分鐘"
+            : "輸入格式不正確";
+    return ResponseEntity.badRequest().body(Map.of("message", message));
   }
 
   @GetMapping("/{id}/hour-overrides")
