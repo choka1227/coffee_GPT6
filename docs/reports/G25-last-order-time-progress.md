@@ -28,7 +28,7 @@
 - `git diff --check`：通過。
 - 保護測試檔內容差異：零。
 - 本機 backend 測試：未進入編譯；Maven Central `repo.maven.apache.org` DNS 解析失敗，屬外部環境問題。
-- 遠端 CI：等待最新 head GitHub Actions。
+- 遠端 CI：head `08fa1742` 的 GitHub Actions run `36826615490` 全部成功（frontend test/build、backend verify）。
 
 ## 下一步
 
