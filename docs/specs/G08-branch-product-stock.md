@@ -237,7 +237,7 @@ record Product(
 ### 5.2 `reserveStock` 的演算法（這一節是本規格的核心，請逐步照做）
 
 ```
-reserveStock(branchId, lines):
+reserveStock(branchId, orderId, lines):
   1. 把 lines 依 productId 合併加總          ← 同一商品不同選項會出現多行
   2. 把合併結果依 productId 字典序排序        ← 固定鎖順序，避免死鎖
   3. today = today()
@@ -739,11 +739,11 @@ record StockInput(String branchId, String productId, Integer quantity) {}
 
 **接受的代價與現場解法：** 備量是一個**數字**而不是一本帳，所以店員發現數字不對時可以**直接調高**（§5.3 的差額同步保證調高不會弄壞已售數）。這是永續帳做不到的事 —— 在永續帳裡「隨手改個數字」會汙染成本與盤差。每日數量的這個「不精確」在這裡剛好變成優點。
 
-**推翻它的代價：** G04 進場時要加一個逾時掃描，把超過 N 分鐘的 `PENDING_PAYMENT` ECPAY 訂單轉 `CANCELLED` 並呼叫 `releaseStock`。本規格的 `releaseStock` 已經是公開方法，接上去是純加法。**本規格刻意先把這個鉤子準備好。**
+**推翻它的代價：** G04 進場時要加一個逾時掃描，把超過 N 分鐘的 `PENDING_PAYMENT` ECPAY 訂單轉 `CANCELLED` 並呼叫 `releaseStock(branchId, orderId)`。本規格的 `releaseStock` 已經是公開方法，而逾時掃描手上一定有訂單編號，接上去是純加法。**本規格刻意先把這個鉤子準備好。** v1.1 的憑據機制讓這個鉤子更安全：逾時掃描不必自己判斷該訂單當初扣沒扣，沒扣過的就是沒有憑據、回補為 no-op。
 
 ### 13.6 `reserveStock` / `releaseStock` 不帶 `Actor` —— **不帶**
 
-**決定：** 簽名是 `reserveStock(String branchId, List<StockLine> lines)`，沒有 `Actor` 參數，內部不做授權檢查，也不寫稽核。
+**決定：** 簽名是 `reserveStock(String branchId, String orderId, List<StockLine> lines)` 與 `releaseStock(String branchId, String orderId)`（v1.1 的簽名），兩者都**沒有 `Actor` 參數**，內部不做授權檢查，也不寫稽核。
 
 **理由：**
 
