@@ -6,7 +6,7 @@
 ## 施工進度
 
 - [x] S1 權限常數與資料層
-- [ ] S2 店長本店例外日授權與 14 天範圍
+- [x] S2 店長本店例外日授權與 14 天範圍
 - [ ] S3 每日最後點餐欄位與解析
 - [ ] S4 前端本店營業設定
 
@@ -21,9 +21,18 @@
 
 本階段不新增端點、不改授權行為、不修改模組依賴或既有 migration。
 
+## S2 設計與驗收
+
+- `saveOverride`／`deleteOverride` 改用 `BRANCH_HOURS_OVERRIDE` 與
+  `Actor.branch(branchId)`；總部照常跨店，店長只可操作所屬分店。
+- 非 GLOBAL 使用者僅能設定台北今日至今日加 14 天的閉區間；總部不受限制。
+- 每週固定時段仍維持 `BRANCH_MANAGE` + GLOBAL，並新增「店長即使被臨時授予
+  `BRANCH_MANAGE` 仍為 403」的保護測試。
+- HTTP 測試涵蓋兩店店長、本店／跨店、無權限角色、日期兩端邊界與 DELETE 對應矩陣。
+
 ## 驗證
 
 - Frontend：70/70 tests 通過，production build 通過。
 - Backend：`./mvnw -B -ntp verify` 因 Maven Central DNS 無法解析而未進入編譯；
-  已推送最新 head 交由 GitHub Actions 驗證。
+  S1 已由 GitHub Actions run `37036263578` 完整驗證成功；S2 將由新 head 重新驗證。
 - 靜態檢查：`git diff --check`、腳本 `100755` 與無參數 `now()` 掃描通過。

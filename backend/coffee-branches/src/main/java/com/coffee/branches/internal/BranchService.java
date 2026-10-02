@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class BranchService implements Branches {
   private static final ZoneId TAIPEI = ZoneId.of("Asia/Taipei");
   private static final DateTimeFormatter BASIC_DATE = DateTimeFormatter.BASIC_ISO_DATE;
+  private static final int MANAGER_DAYS_AHEAD = 14;
   private final JdbcTemplate db;
   private final Audit audit;
 
@@ -406,10 +407,10 @@ public class BranchService implements Branches {
 
   @Transactional
   public DayOverride saveOverride(Actor actor, String branchId, DayOverride override) {
-    actor.require("BRANCH_MANAGE");
-    if (!actor.global()) throw new Problem(403, "此功能限總部範圍");
+    actor.require("BRANCH_HOURS_OVERRIDE");
+    actor.branch(branchId);
     Problem.check(override != null, "請提供例外日設定");
-    parseDate(override.onDate(), "日期格式不正確");
+    requireNearDate(actor, override.onDate());
     String note = override.note() == null ? "" : override.note();
     Problem.check(note.length() <= 40, "備註請在 40 字內");
     lockBranch(branchId);
@@ -468,9 +469,9 @@ public class BranchService implements Branches {
 
   @Transactional
   public void deleteOverride(Actor actor, String branchId, int onDate) {
-    actor.require("BRANCH_MANAGE");
-    if (!actor.global()) throw new Problem(403, "此功能限總部範圍");
-    parseDate(onDate, "日期格式不正確");
+    actor.require("BRANCH_HOURS_OVERRIDE");
+    actor.branch(branchId);
+    requireNearDate(actor, onDate);
     lockBranch(branchId);
     db.update(
         "delete from branch_day_override_hours where branch_id=? and on_date=?", branchId, onDate);
@@ -483,6 +484,15 @@ public class BranchService implements Branches {
           branchId + ":" + onDate,
           branchId,
           "刪除 " + onDate + " 例外日");
+  }
+
+  private static void requireNearDate(Actor actor, int onDate) {
+    LocalDate date = parseDate(onDate, "日期格式不正確");
+    if (actor.global()) return;
+    LocalDate today = Instant.now().atZone(TAIPEI).toLocalDate();
+    Problem.check(
+        !date.isBefore(today) && !date.isAfter(today.plusDays(MANAGER_DAYS_AHEAD)),
+        "只能設定今天起 14 天內的日期");
   }
 
   private void lockBranch(String branchId) {

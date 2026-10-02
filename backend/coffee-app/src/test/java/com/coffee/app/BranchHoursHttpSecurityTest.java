@@ -7,11 +7,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.coffee.identity.api.Identity;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -25,6 +27,13 @@ import org.springframework.test.web.servlet.MockMvc;
 class BranchHoursHttpSecurityTest {
   @Autowired MockMvc mvc;
   @Autowired Identity identity;
+  @Autowired JdbcTemplate db;
+
+  @AfterEach
+  void resetManagerPermission() {
+    db.update(
+        "delete from role_permissions where role_code='MANAGER' and permission='BRANCH_MANAGE'");
+  }
 
   @Test
   void readingRequiresLoginButAnyAuthenticatedCustomerMayRead() throws Exception {
@@ -60,6 +69,16 @@ class BranchHoursHttpSecurityTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body))
         .andExpect(status().isForbidden());
+    db.update(
+        "insert into role_permissions(role_code,permission) values('MANAGER','BRANCH_MANAGE')");
+    mvc.perform(
+            put("/api/branches/taipei/hours")
+                .session(session("manager"))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.message").value("此功能限總部範圍"));
   }
 
   private MockHttpSession session(String accountId) {
