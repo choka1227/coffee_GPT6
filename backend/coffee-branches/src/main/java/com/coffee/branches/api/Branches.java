@@ -10,7 +10,12 @@ public interface Branches {
 
   record Hours(int dayOfWeek, int openMinute, int closeMinute) {}
 
-  record DayOverride(int onDate, boolean closed, String note, List<Hours> hours) {}
+  record DayOverride(
+      int onDate, boolean closed, String note, List<Hours> hours, Integer lastOrderMinutes) {
+    public DayOverride(int onDate, boolean closed, String note, List<Hours> hours) {
+      this(onDate, closed, note, hours, null);
+    }
+  }
 
   record OpenState(boolean openNow, boolean orderableNow, Integer minutesUntilLastOrder) {}
 

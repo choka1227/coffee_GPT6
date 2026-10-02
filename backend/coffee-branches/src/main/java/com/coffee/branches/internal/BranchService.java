@@ -80,7 +80,7 @@ public class BranchService implements Branches {
   private List<DayOverride> loadOverrides(String branchId, int fromDate, int toDate) {
     Map<Integer, MutableOverride> rows = new LinkedHashMap<>();
     db.query(
-        "select o.on_date,o.closed,o.note,h.open_minute,h.close_minute"
+        "select o.on_date,o.closed,o.note,o.last_order_minutes,h.open_minute,h.close_minute"
             + " from branch_day_overrides o left join branch_day_override_hours h"
             + " on h.branch_id=o.branch_id and h.on_date=o.on_date"
             + " where o.branch_id=? and o.on_date between ? and ?"
@@ -111,7 +111,13 @@ public class BranchService implements Branches {
     LocalDate today = localDate(atEpochMs);
     Map<LocalDate, DayOverride> overrides =
         indexOverrides(loadOverrides(branchId, dateInt(today.minusDays(1)), dateInt(today)));
-    return state(windowAt(resolver(weekly, overrides), atEpochMs), lastOrderMinutes(branchId));
+    int branchDefault = lastOrderMinutes(branchId);
+    TimedWindow timed =
+        windowAt(
+            resolver(weekly, overrides),
+            atEpochMs,
+            date -> effectiveLastOrder(overrides, branchDefault, date));
+    return state(timed.window(), timed.lastOrderMinutes());
   }
 
   public Map<String, Boolean> openAt(List<String> branchIds, long atEpochMs) {
@@ -141,7 +147,7 @@ public class BranchService implements Branches {
     Map<String, Map<LocalDate, DayOverride>> overrides = new HashMap<>();
     LocalDate today = localDate(atEpochMs);
     db.query(
-          "select o.branch_id,o.on_date,o.closed,o.note,h.open_minute,h.close_minute"
+          "select o.branch_id,o.on_date,o.closed,o.note,o.last_order_minutes,h.open_minute,h.close_minute"
               + " from branch_day_overrides o left join branch_day_override_hours h"
               + " on h.branch_id=o.branch_id and h.on_date=o.on_date"
               + " where o.on_date in (?,?) order by o.branch_id,o.on_date,h.open_minute",
@@ -154,27 +160,31 @@ public class BranchService implements Branches {
                 DayOverride current = branch.get(date);
                 List<Hours> periods =
                     current == null ? new ArrayList<>() : new ArrayList<>(current.hours());
-                Integer open = (Integer) result.getObject(5);
+                Integer open = (Integer) result.getObject(6);
                 if (open != null)
-                  periods.add(new Hours(date.getDayOfWeek().getValue(), open, result.getInt(6)));
+                  periods.add(new Hours(date.getDayOfWeek().getValue(), open, result.getInt(7)));
                 branch.put(
                     date,
                     new DayOverride(
-                        result.getInt(2), result.getBoolean(3), result.getString(4), periods));
+                        result.getInt(2),
+                        result.getBoolean(3),
+                        result.getString(4),
+                        periods,
+                        (Integer) result.getObject(5)));
               },
           dateInt(today),
           dateInt(today.minusDays(1)));
     Map<String, OpenState> result = new LinkedHashMap<>();
     for (String branchId : branchIds) {
-      result.put(
-          branchId,
-          state(
-              windowAt(
-                  resolver(
-                      schedules.getOrDefault(branchId, List.of()),
-                      overrides.getOrDefault(branchId, Map.of())),
-                  atEpochMs),
-              lastOrders.getOrDefault(branchId, 0)));
+      Map<LocalDate, DayOverride> branchOverrides =
+          overrides.getOrDefault(branchId, Map.of());
+      int branchDefault = lastOrders.getOrDefault(branchId, 0);
+      TimedWindow timed =
+          windowAt(
+              resolver(schedules.getOrDefault(branchId, List.of()), branchOverrides),
+              atEpochMs,
+              date -> effectiveLastOrder(branchOverrides, branchDefault, date));
+      result.put(branchId, state(timed.window(), timed.lastOrderMinutes()));
     }
     return result;
   }
@@ -187,8 +197,14 @@ public class BranchService implements Branches {
         indexOverrides(loadOverrides(id, dateInt(today.minusDays(1)), dateInt(today)));
     Resolver resolver = resolver(weekly, overrides);
     DaySchedule todaySchedule = resolver.resolve(today);
-    OpenWindow window = windowAt(resolver, atEpochMs);
-    int last = lastOrderMinutes(id);
+    int branchDefault = lastOrderMinutes(id);
+    TimedWindow timed =
+        windowAt(
+            resolver,
+            atEpochMs,
+            date -> effectiveLastOrder(overrides, branchDefault, date));
+    OpenWindow window = timed.window();
+    int last = timed.lastOrderMinutes();
     if (window instanceof OpenWindow.NotOpen) throw new Problem(400, closedMessage(todaySchedule));
     if (window instanceof OpenWindow.ClosesIn closes && closes.minutes() <= last)
       throw new Problem(400, lastOrderMessage(atEpochMs, closes.minutes(), last, todaySchedule));
@@ -216,7 +232,8 @@ public class BranchService implements Branches {
       LocalDate date, boolean weeklyEmpty, List<Hours> weeklyForThatWeekday, DayOverride override) {
     if (override != null && override.closed()) return new DaySchedule.Closed(override.note());
     // An override is a complete replacement, not an addition to the weekly schedule.
-    if (override != null) return new DaySchedule.Periods(override.hours(), true);
+    if (override != null && !override.hours().isEmpty())
+      return new DaySchedule.Periods(override.hours(), true);
     if (weeklyEmpty) return new DaySchedule.AlwaysOpen();
     return new DaySchedule.Periods(weeklyForThatWeekday, false);
   }
@@ -233,32 +250,50 @@ public class BranchService implements Branches {
     record ClosesIn(int minutes) implements OpenWindow {}
   }
 
+  public record TimedWindow(OpenWindow window, int lastOrderMinutes) {}
+
   public static OpenWindow windowAt(Resolver resolver, long atEpochMs) {
+    return windowAt(resolver, atEpochMs, ignored -> 0).window();
+  }
+
+  public static TimedWindow windowAt(
+      Resolver resolver,
+      long atEpochMs,
+      java.util.function.ToIntFunction<LocalDate> lastOrderOf) {
     var local = Instant.ofEpochMilli(atEpochMs).atZone(TAIPEI);
     LocalDate today = local.toLocalDate();
     LocalDate previous = today.minusDays(1);
     int minute = local.getHour() * 60 + local.getMinute();
     DaySchedule current = resolver.resolve(today);
-    if (current instanceof DaySchedule.Closed) return new OpenWindow.NotOpen();
-    if (current instanceof DaySchedule.AlwaysOpen) return new OpenWindow.NoClosingTime();
+    if (current instanceof DaySchedule.Closed)
+      return new TimedWindow(new OpenWindow.NotOpen(), 0);
+    if (current instanceof DaySchedule.AlwaysOpen)
+      return new TimedWindow(new OpenWindow.NoClosingTime(), 0);
     DaySchedule.Periods periods = (DaySchedule.Periods) current;
     for (Hours period : periods.periods()) {
       if (period.closeMinute() > period.openMinute()
           && period.openMinute() <= minute
           && minute < period.closeMinute())
-        return new OpenWindow.ClosesIn(period.closeMinute() - minute);
+        return new TimedWindow(
+            new OpenWindow.ClosesIn(period.closeMinute() - minute),
+            lastOrderOf.applyAsInt(today));
       if (period.closeMinute() <= period.openMinute() && minute >= period.openMinute())
-        return new OpenWindow.ClosesIn(period.closeMinute() + 1440 - minute);
+        return new TimedWindow(
+            new OpenWindow.ClosesIn(period.closeMinute() + 1440 - minute),
+            lastOrderOf.applyAsInt(today));
     }
-    if (periods.fromOverride()) return new OpenWindow.NotOpen();
+    if (periods.fromOverride()) return new TimedWindow(new OpenWindow.NotOpen(), 0);
     DaySchedule prior = resolver.resolve(previous);
-    if (!(prior instanceof DaySchedule.Periods priorPeriods)) return new OpenWindow.NotOpen();
+    if (!(prior instanceof DaySchedule.Periods priorPeriods))
+      return new TimedWindow(new OpenWindow.NotOpen(), 0);
     // G19 §13.4 forbids override periods from crossing midnight; only weekly tails can match.
     for (Hours period : priorPeriods.periods()) {
       if (period.closeMinute() <= period.openMinute() && minute < period.closeMinute())
-        return new OpenWindow.ClosesIn(period.closeMinute() - minute);
+        return new TimedWindow(
+            new OpenWindow.ClosesIn(period.closeMinute() - minute),
+            lastOrderOf.applyAsInt(previous));
     }
-    return new OpenWindow.NotOpen();
+    return new TimedWindow(new OpenWindow.NotOpen(), 0);
   }
 
   public static OpenState state(OpenWindow window, int lastOrderMinutes) {
@@ -417,33 +452,43 @@ public class BranchService implements Branches {
     List<Hours> periods = override.hours();
     if (override.closed()) {
       Problem.check(periods == null || periods.isEmpty(), "公休日不能同時設定營業時段");
+      Problem.check(override.lastOrderMinutes() == null, "公休日不需要設定最後點餐時間");
       periods = List.of();
     } else {
-      Problem.check(periods != null && !periods.isEmpty(), "請至少設定一個營業時段，或改為整天公休");
+      Problem.check(
+          (periods != null && !periods.isEmpty()) || override.lastOrderMinutes() != null,
+          "請至少設定一個營業時段、改為整天公休，或設定本日最後點餐時間");
+      if (periods == null) periods = List.of();
       validateDayPeriods(periods);
     }
+    Problem.check(
+        override.lastOrderMinutes() == null
+            || (override.lastOrderMinutes() >= 0 && override.lastOrderMinutes() <= 120),
+        "最後點餐提前時間需為 0–120 分鐘");
     db.update(
         "delete from branch_day_override_hours where branch_id=? and on_date=?",
         branchId,
         override.onDate());
     long updatedAt = System.currentTimeMillis();
     if (db.update(
-            "update branch_day_overrides set closed=?,note=?,updated_at=?,updated_by=?"
+            "update branch_day_overrides set closed=?,note=?,last_order_minutes=?,updated_at=?,updated_by=?"
                 + " where branch_id=? and on_date=?",
             override.closed(),
             note,
+            override.lastOrderMinutes(),
             updatedAt,
             actor.id(),
             branchId,
             override.onDate())
         == 0) {
       db.update(
-          "insert into branch_day_overrides(branch_id,on_date,closed,note,updated_at,updated_by)"
-              + " values(?,?,?,?,?,?)",
+          "insert into branch_day_overrides(branch_id,on_date,closed,note,last_order_minutes,updated_at,updated_by)"
+              + " values(?,?,?,?,?,?,?)",
           branchId,
           override.onDate(),
           override.closed(),
           note,
+          override.lastOrderMinutes(),
           updatedAt,
           actor.id());
     }
@@ -516,6 +561,14 @@ public class BranchService implements Branches {
     return result;
   }
 
+  private static int effectiveLastOrder(
+      Map<LocalDate, DayOverride> overrides, int branchDefault, LocalDate date) {
+    DayOverride override = overrides.get(date);
+    return override == null || override.lastOrderMinutes() == null
+        ? branchDefault
+        : override.lastOrderMinutes();
+  }
+
   private static LocalDate localDate(long atEpochMs) {
     return Instant.ofEpochMilli(atEpochMs).atZone(TAIPEI).toLocalDate();
   }
@@ -539,12 +592,16 @@ public class BranchService implements Branches {
         rows.computeIfAbsent(
             onDate,
             ignored ->
-                new MutableOverride(onDate, resultBoolean(result, 2), resultString(result, 3)));
-    Integer open = (Integer) result.getObject(4);
+                new MutableOverride(
+                    onDate,
+                    resultBoolean(result, 2),
+                    resultString(result, 3),
+                    (Integer) result.getObject(4)));
+    Integer open = (Integer) result.getObject(5);
     if (open != null)
       row.hours.add(
           new Hours(
-              parseDate(onDate, "日期格式不正確").getDayOfWeek().getValue(), open, result.getInt(5)));
+              parseDate(onDate, "日期格式不正確").getDayOfWeek().getValue(), open, result.getInt(6)));
   }
 
   private static boolean resultBoolean(java.sql.ResultSet result, int column) {
@@ -567,16 +624,19 @@ public class BranchService implements Branches {
     private final int onDate;
     private final boolean closed;
     private final String note;
+    private final Integer lastOrderMinutes;
     private final List<Hours> hours = new ArrayList<>();
 
-    private MutableOverride(int onDate, boolean closed, String note) {
+    private MutableOverride(
+        int onDate, boolean closed, String note, Integer lastOrderMinutes) {
       this.onDate = onDate;
       this.closed = closed;
       this.note = note;
+      this.lastOrderMinutes = lastOrderMinutes;
     }
 
     private DayOverride value() {
-      return new DayOverride(onDate, closed, note, List.copyOf(hours));
+      return new DayOverride(onDate, closed, note, List.copyOf(hours), lastOrderMinutes);
     }
   }
 

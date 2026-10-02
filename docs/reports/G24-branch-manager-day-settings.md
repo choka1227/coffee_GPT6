@@ -7,7 +7,7 @@
 
 - [x] S1 權限常數與資料層
 - [x] S2 店長本店例外日授權與 14 天範圍
-- [ ] S3 每日最後點餐欄位與解析
+- [x] S3 每日最後點餐欄位與解析
 - [ ] S4 前端本店營業設定
 
 ## S1 設計與驗收
@@ -30,9 +30,18 @@
   `BRANCH_MANAGE` 仍為 403」的保護測試。
 - HTTP 測試涵蓋兩店店長、本店／跨店、無權限角色、日期兩端邊界與 DELETE 對應矩陣。
 
+## S3 設計與驗收
+
+- `DayOverride`、API request/response 與三支查詢完整帶入 nullable `lastOrderMinutes`，保留 `NULL` 與 `0` 的差異。
+- 新增「只覆寫最後點餐」形狀：空例外時段沿用每週時段，不再把當日誤判為沒有營業。
+- `TimedWindow` 攜帶營業視窗所屬日期的有效最後點餐值；跨夜尾段使用前一天的設定。
+- `stateAt` 單店、列表與 `requireOrderable` 共用相同解析，且列表路徑沒有新增查詢。
+- 測試涵蓋形狀 B/C、欄位 round-trip、互斥與範圍驗證、跨夜所屬日、列表一致性及既有訊息格式。
+
 ## 驗證
 
 - Frontend：70/70 tests 通過，production build 通過。
 - Backend：`./mvnw -B -ntp verify` 因 Maven Central DNS 無法解析而未進入編譯；
-  S1 已由 GitHub Actions run `37036263578` 完整驗證成功；S2 將由新 head 重新驗證。
+  S1 已由 GitHub Actions run `37036263578` 完整驗證成功；S2 已由 run
+  `37036824918` 完整驗證成功；S3 等待最新 head 遠端驗證。
 - 靜態檢查：`git diff --check`、腳本 `100755` 與無參數 `now()` 掃描通過。

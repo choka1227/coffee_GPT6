@@ -78,8 +78,15 @@ class BranchHourOverrideTest {
                 saturday,
                 false,
                 weekly,
-                new DayOverride(20261010, false, "", List.of(new Hours(1, 840, 960)))))
+                new DayOverride(20261010, false, "", List.of(new Hours(1, 840, 960)), null)))
         .isEqualTo(new DaySchedule.Periods(List.of(new Hours(1, 840, 960)), true));
+    assertThat(
+            BranchService.resolveDay(
+                saturday,
+                false,
+                weekly,
+                new DayOverride(20261010, false, "", List.of(), 40)))
+        .isEqualTo(new DaySchedule.Periods(weekly, false));
     assertThat(BranchService.resolveDay(saturday, true, weekly, null))
         .isEqualTo(new DaySchedule.AlwaysOpen());
     assertThat(BranchService.resolveDay(saturday, false, weekly, null))
@@ -137,7 +144,7 @@ class BranchHourOverrideTest {
             branches.saveOverride(
                 hq, "taipei", new DayOverride(20261010, true, "", List.of(new Hours(6, 60, 120)))));
     assertProblem(
-        "請至少設定一個營業時段，或改為整天公休",
+        "請至少設定一個營業時段、改為整天公休，或設定本日最後點餐時間",
         () -> branches.saveOverride(hq, "taipei", new DayOverride(20261010, false, "", List.of())));
     assertProblem(
         "例外日的時段不能跨夜",
@@ -199,6 +206,66 @@ class BranchHourOverrideTest {
                 "short day",
                 List.of(new Hours(6, 540, 720), new Hours(6, 900, 960))),
             new DayOverride(20261011, true, "", List.of()));
+  }
+
+  @Test
+  void dailyLastOrderRoundTripsAndSupportsHoursOrLastOrderOnly() throws Exception {
+    branches.saveHours(hq, "taipei", List.of(new Hours(6, 540, 720)), 0);
+    String periods =
+        "{\"closed\":false,\"note\":\"短日\",\"hours\":[{\"dayOfWeek\":3,"
+            + "\"openMinute\":540,\"closeMinute\":720}],\"lastOrderMinutes\":30}";
+    mvc.perform(
+            put("/api/branches/taipei/hour-overrides/20261010")
+                .session(session("hq"))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(periods))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.lastOrderMinutes").value(30));
+    mvc.perform(
+            get("/api/branches/taipei/hour-overrides")
+                .session(session("hq"))
+                .param("from", "20261010")
+                .param("to", "20261010"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.overrides[0].lastOrderMinutes").value(30));
+
+    String lastOrderOnly =
+        "{\"closed\":false,\"note\":\"\",\"hours\":[],\"lastOrderMinutes\":40}";
+    mvc.perform(
+            put("/api/branches/taipei/hour-overrides/20261010")
+                .session(session("hq"))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(lastOrderOnly))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.hours").isEmpty())
+        .andExpect(jsonPath("$.lastOrderMinutes").value(40));
+
+    assertThat(branches.hours("taipei")).containsExactly(new Hours(6, 540, 720));
+    assertThat(branches.stateAt("taipei", taipei(2026, 10, 10, 11, 30)))
+        .isEqualTo(new Branches.OpenState(true, false, null));
+  }
+
+  @Test
+  void validatesDailyLastOrderShapeAndRange() {
+    assertProblem(
+        "公休日不需要設定最後點餐時間",
+        () ->
+            branches.saveOverride(
+                hq, "taipei", new DayOverride(20261010, true, "", List.of(), 30)));
+    assertProblem(
+        "請至少設定一個營業時段、改為整天公休，或設定本日最後點餐時間",
+        () ->
+            branches.saveOverride(
+                hq, "taipei", new DayOverride(20261010, false, "", List.of(), null)));
+    for (int invalid : List.of(-1, 121)) {
+      assertProblem(
+          "最後點餐提前時間需為 0–120 分鐘",
+          () ->
+              branches.saveOverride(
+                  hq, "taipei", new DayOverride(20261010, false, "", List.of(), invalid)));
+    }
   }
 
   @Test
