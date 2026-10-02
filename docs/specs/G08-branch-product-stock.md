@@ -3,10 +3,11 @@
 | 項目 | 內容 |
 | --- | --- |
 | 缺口編號 | G08（P2 升為 P1） |
-| 版本 | v1.0（2026-10-02） |
+| 版本 | **v1.1（2026-10-02）** —— v1.1 修補 v1.0 回補路徑的超賣缺口，新增保留憑據表，見 §4.6、§5.5、§13.12 與 §15 |
 | 登記來源 | `docs/GAP-ANALYSIS.md` P2 表第 G08 列：「`products` 沒有任何庫存欄位。注意 G13（售罄）是 G08 的輕量版」 |
 | Flyway 版號 | **V13**（V12 由 G24 占用，見 §4.1） |
 | 涉及後端模組 | `coffee-catalog`（主）、`coffee-orders`（呼叫端） |
+| 新增資料表 | `branch_product_stock`、`branch_product_stock_reservation`（兩張都在 V13） |
 | 涉及前端模組 | `modules/ordering`（POS 菜單）、`shared/types.ts` |
 | 施工階段 | 四階段 S1–S4，見 §9 |
 
@@ -60,12 +61,13 @@
 ### 2.1 在範圍內
 
 1. 新表 `branch_product_stock`：分店 × 商品 × 台北日 的「今日可售數量」與「剩餘數量」
-2. 讀寫端點：`GET /api/menu/stock`、`POST /api/menu/stock`
-3. 訂單成立時扣減、不足時擋下（含同商品多行的合併與行鎖順序）
-4. 訂單轉為 `CANCELLED` 時回補
-5. 菜單把「剩餘 0」顯示為今日售完；商品帶上 `remaining`
-6. POS 前端的「今日可售數量」設定與剩餘數量顯示
-7. 稽核紀錄：設定數量、因扣減而售完
+2. 新表 `branch_product_stock_reservation`：**保留憑據**，記下「哪一筆訂單實際從哪一天的哪一列扣了多少」（§4.6，v1.1 新增）
+3. 讀寫端點：`GET /api/menu/stock`、`POST /api/menu/stock`
+4. 訂單成立時扣減、不足時擋下（含同商品多行的合併與行鎖順序）
+5. 訂單轉為 `CANCELLED` 時**依保留憑據**回補（只逆轉這筆訂單真的扣過的量）
+6. 菜單把「剩餘 0」顯示為今日售完；商品帶上 `remaining`
+7. POS 前端的「今日可售數量」設定與剩餘數量顯示
+8. 稽核紀錄：設定數量、因扣減而售完
 
 ### 2.2 不在範圍內（逐項有理由，見 §13 與 §14）
 
@@ -83,14 +85,15 @@
 ## 3. 涉及模組與邊界
 
 ```
-coffee-catalog   新增 branch_product_stock 的讀寫與扣減/回補   依賴不變（shared）
+coffee-catalog   新增 branch_product_stock 與 reservation 的讀寫與扣減/回補   依賴不變（shared）
 coffee-orders    create 扣減、transition 回補                 依賴不變（catalog.api, branches.api, shared）
 coffee-app       V13 migration、測試                          組裝層
 ```
 
 **邊界要求（`ModuleBoundariesTest` 會驗）：**
 
-- `branch_product_stock` 是 `products` / `branch_products` 的同族資料，**歸 `coffee-catalog` 所有**。`coffee-orders` **不得**直接查這張表，一律經過 `Catalog` 介面
+- `branch_product_stock` 與 `branch_product_stock_reservation` 是 `products` / `branch_products` 的同族資料，**兩張都歸 `coffee-catalog` 所有**。`coffee-orders` **不得**直接查這兩張表，一律經過 `Catalog` 介面
+- `branch_product_stock_reservation` 存了 `order_id`，但那是一個**不透明字串**，`coffee-catalog` 不因此認識 `coffee-orders`：它不 import 任何 orders 的型別、不查 `orders` 表、**schema 上也刻意不建 FK**（理由見 §4.6）。依賴方向維持 `orders → catalog.api` 單向，`ModuleBoundariesTest` 不受影響
 - 扣減與回補的方法加在 **`coffee-catalog` 的 `api` 介面 `Catalog`** 上（`Catalog.java`），`coffee-orders` 透過已有的 `catalog` 欄位呼叫。**不新增模組間依賴**
 - `coffee-reporting` **不碰**這張表（§13.8）
 
@@ -120,7 +123,22 @@ CREATE TABLE branch_product_stock(
 );
 
 CREATE INDEX idx_branch_product_stock_date ON branch_product_stock(branch_id,on_date);
+
+CREATE TABLE branch_product_stock_reservation(
+  order_id   VARCHAR(36) NOT NULL,
+  product_id VARCHAR(36) NOT NULL REFERENCES products(id),
+  branch_id  VARCHAR(36) NOT NULL REFERENCES branches(id),
+  on_date    INTEGER NOT NULL,
+  quantity   INTEGER NOT NULL CHECK(quantity > 0),
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY(order_id,product_id)
+);
+
+CREATE INDEX idx_bps_reservation_row
+  ON branch_product_stock_reservation(branch_id,product_id,on_date);
 ```
+
+**兩張表都在同一支 `V13`。** 它們是同一個機制的兩半，分成兩支 migration 只會讓 S1 合併之後出現「有庫存表但沒有憑據表」的中間狀態。
 
 **不新增任何權限列。** 本規格複用既有的 `MENU_AVAILABILITY`（§7.1），所以這支 migration 裡**沒有** `INSERT INTO role_permissions`。這與 `V4__branch_menu_availability.sql` 不同，是刻意的。
 
@@ -139,6 +157,31 @@ CREATE INDEX idx_branch_product_stock_date ON branch_product_stock(branch_id,on_
 ### 4.5 為什麼上限是 9999
 
 單行數量上限 50、單筆訂單上限 50 行（`OrderService.java:38,70`），所以一筆訂單最多扣 2500。9999 足以涵蓋任何一天的實際備量，同時讓 `INTEGER` 連溢位的邊都碰不到。即使如此，§5.4 仍要求用 `Math.subtractExact` / `Math.addExact`，理由是 `AGENTS.md`「溢位用 `Math.addExact`，不要裸算」是通則，不因為「這裡不會溢位」而例外。
+
+### 4.6 為什麼需要 `branch_product_stock_reservation`（v1.1 新增，這一節是 v1.0 的缺陷修補）
+
+v1.0 的回補只用「取消當下的台北日 + branchId + productId」去找當日列並加回數量，**沒有任何證據證明這筆訂單真的從那一列扣過**。Codex 在 PR #55 的 review 指出了這個缺口，它是對的。具體的超賣路徑：
+
+| 時刻 | 動作 | `quantity` / `remaining` | 實際狀況 |
+| --- | --- | --- | --- |
+| 10:00 | 下單 2 份（當時**沒有**設定備量，不限量，**沒有扣減**） | 無列 | 已出 2 份 |
+| 12:00 | 店員設定今日備量 5 | 5 / 5 | 可再出 5 份 |
+| 12:30 | 另一筆訂單買 2 份（正常扣減） | 5 / **3** | 可再出 3 份 |
+| 13:00 | 取消 10:00 那筆舊訂單 | 5 / **5** ← 錯 | **實際只剩 3 份** |
+
+最後一列憑空生出 2 份可售額度，`已售 = quantity - remaining` 的不變式（§4.4）被破壞，而且**會真的超賣**。同一類錯誤還有第二條路徑：設定 5 → 賣 2（剩 3）→ 解除限量（刪列）→ 重新設定 5 → 取消第一輪的舊訂單，回補會落到**新一輪**的備量上。
+
+兩條路徑的共同根因是「回補的對象靠推論，不靠紀錄」。修法是讓扣減留下可持久化、可冪等對應的憑據：
+
+- `reserveStock` **真的扣到**某一列時，為 `(order_id, product_id)` 寫一列憑據，記下 `branch_id`、`on_date` 與**實際扣減的數量**
+- 不限量（找不到當日列）時**什麼都不扣，也就不寫憑據** —— 所以上表 10:00 那筆訂單沒有憑據，13:00 取消時找不到東西可以回補，`remaining` 維持 3。第一條路徑消失
+- `releaseStock` **只依憑據回補**，回補完立刻刪掉憑據。沒有憑據就是沒扣過，不回補
+- `PRIMARY KEY(order_id, product_id)` 讓「同一筆訂單扣兩次」由 DB 擋下，而不是靠呼叫端自律（§5.4 的冪等重放因此有了第二道防線）
+- `setStock` 在**從無到有建立限量**時，刪掉該 `(branch_id, product_id, on_date)` 的所有未結憑據（§5.3 第 6 步），第二條路徑消失
+
+**為什麼 `order_id` 不建 FK 到 `orders(id)`：** 兩個理由，缺一不可。其一，§5.4 要求 `reserveStock` 在 `insert into orders` **之前**呼叫（擋下來的訂單不該留下任何痕跡），那一刻 `orders` 列還不存在，有 FK 會直接違反約束。其二，`coffee-catalog` 的表指向 `coffee-orders` 的表會讓依賴方向在 schema 層反過來。代價是 DB 不幫你擋「憑據指向不存在的訂單」—— 可接受，因為憑據永遠由 `reserveStock` 在同一個交易內寫出（訂單沒建成就一起回滾），而且本系統不刪 `orders` 列。
+
+**為什麼不改用「在庫存列上放版號」：** 那需要讓庫存列在解除限量後**不被刪除**（版號才留得住），於是 `quantity` / `remaining` 要改成 nullable，`CHECK(remaining <= quantity)` 與 §6.1 的 `null` 語意都要跟著重寫，而且訂單那一端仍然要有地方存「我扣的是第幾版」—— 一樣要一張表或一組新欄位。憑據表的成本更低，而且順便解決了冪等與雙重回補。
 
 ---
 
@@ -167,12 +210,14 @@ List<ProductStock> stock(Actor a, String branchId);
 /** quantity 為 null 時解除限量（刪除當日列）。 */
 ProductStock setStock(Actor a, String branchId, String productId, Integer quantity);
 
-/** 訂單成立時扣減。數量不足直接 throw Problem。呼叫端必須已在交易內。 */
-void reserveStock(String branchId, List<StockLine> lines);
+/** 訂單成立時扣減，並為實際扣到的每個商品寫下保留憑據。數量不足直接 throw Problem。呼叫端必須已在交易內。 */
+void reserveStock(String branchId, String orderId, List<StockLine> lines);
 
-/** 訂單取消時回補。呼叫端必須已在交易內。 */
-void releaseStock(String branchId, List<StockLine> lines);
+/** 訂單取消時依保留憑據回補，並刪除憑據。沒有憑據就什麼都不做。呼叫端必須已在交易內。 */
+void releaseStock(String branchId, String orderId);
 ```
+
+> **`releaseStock` 不再收 `lines`（v1.1 的簽名變更）。** 要回補多少、回補到哪一天，完全由憑據決定，不由呼叫端重算 —— 呼叫端重算就是 §4.6 那個缺陷的來源。`branchId` 保留下來只當**防禦性條件**（憑據的 `branch_id` 必須相符才回補），讓「訂單編號張冠李戴」不會跨分店改到別人的備量。
 
 `Product` record **加一個欄位**：
 
@@ -206,14 +251,22 @@ reserveStock(branchId, lines):
        e. update branch_product_stock set remaining=?,updated_at=?
             where branch_id=? and product_id=? and on_date=?
           新值為 Math.subtractExact(row.remaining, qty)
-       f. 若新值為 0 → audit.record(null 以外的 actor 不可得，見下) 
+       f. insert into branch_product_stock_reservation
+            (order_id,product_id,branch_id,on_date,quantity,created_at)
+            values(?,?,?,?,?,?)          ← 保留憑據，qty 是「實際扣掉的量」
 ```
+
+**第 4f 步（保留憑據）是 v1.1 新增的，不能省。** 省掉它就回到 §4.6 那個會超賣的設計。三個要點：
+
+1. **只有真的扣到才寫。** 第 4b 步 `continue`（不限量）的商品**不寫憑據** —— 這正是 §4.6 第一條路徑的解法
+2. **寫的是合併後的量**（第 1 步的結果），所以一筆訂單對一個商品只會有一列憑據，與 `PRIMARY KEY(order_id, product_id)` 一致
+3. **`on_date` 寫 `today`**，也就是實際扣減的那一天。回補時以憑據的 `on_date` 為準，不重算「今天」（§5.5）
 
 **第 1 步為什麼必要：** `OrderService.create` 的 `q.items()` 是「商品 + 選項」的行，同一個商品點了兩種甜度會是兩行。若不合併就逐行扣，剩 1 份時「冰的 1 杯 + 熱的 1 杯」會在第一行通過、第二行才失敗，錯誤訊息變成「僅剩 0 份」而不是「僅剩 1 份」，店員看不懂。合併後一次判斷，訊息才對得上事實。
 
 **第 2 步為什麼必要：** 兩筆訂單各含商品 A 與 B、取鎖順序相反時會死鎖。字典序排序把它降為零成本。這與 `OrderService` 既有的 `lock(id)`（`OrderService.java:582`）是同一類手法。
 
-**第 4f 步的稽核：** `reserveStock` 的簽名**不帶 `Actor`**（理由見 §13.6），所以它記不出「誰」造成售完。因此**自動售完不寫稽核**，改由 `OrderService.create` 既有的訂單紀錄承擔 —— 訂單本身就是「誰在什麼時候買掉最後一份」的完整紀錄，再寫一筆 `STOCK_EXHAUSTED` 只是重複。**把第 4f 步刪掉，不要實作它。**（寫在這裡是因為第一直覺會想加，說明為什麼不加比較省一輪 review。）
+**自動售完不寫稽核。** `reserveStock` 的簽名**不帶 `Actor`**（理由見 §13.6），所以它記不出「誰」造成售完。因此扣到 0 的時候**不寫稽核**，改由 `OrderService.create` 既有的訂單紀錄承擔 —— 訂單本身就是「誰在什麼時候買掉最後一份」的完整紀錄，再寫一筆 `STOCK_EXHAUSTED` 只是重複。**不要為「扣到 0」加任何 `audit.record`。**（寫在這裡是因為第一直覺會想加，說明為什麼不加比較省一輪 review。v1.0 把這一條編為第 4f 步再叫你刪掉，v1.1 把編號讓給真正要實作的憑據寫入，避免誤讀。）
 
 ### 5.3 `setStock` 的差額同步
 
@@ -227,12 +280,21 @@ setStock(actor, branchId, productId, quantity):
        回傳 quantity=null, remaining=null
   4. Problem.check(quantity >= 0 && quantity <= 9999, "可售數量需為 0–9999")
   5. row = select ... for update（同 §5.2 的 a）
-  6. row 不存在 → insert，quantity=q, remaining=q
+  6. row 不存在 → delete from branch_product_stock_reservation
+                    where branch_id=? and product_id=? and on_date=?     ← v1.1 新增
+                  insert，quantity=q, remaining=q
   7. row 存在   → sold = row.quantity - row.remaining
                   newRemaining = Math.max(0, Math.subtractExact(q, sold))
                   update quantity=q, remaining=newRemaining
+                  （**不動憑據** —— 這些憑據綁的就是這一列，差額同步已經保住「已售」）
   8. audit "STOCK_SET"，summary「<商品名> 今日可售 <q> 份，剩餘 <newRemaining> 份」
 ```
+
+**第 6 步為什麼要刪未結憑據（v1.1 新增）：** 「從無到有建立限量」的意思是店員在宣告「從現在起這個商品今天只出 N 份」。在那之前成立的訂單對這一輪備量沒有任何請求權，它們的憑據如果留著，取消時就會回補到新一輪的數字上 —— 這正是 §4.6 的第二條路徑（設定 5 → 賣 2 → 解除限量 → 重新設定 5 → 取消第一輪的訂單）。
+
+**刪除範圍嚴格限定在 `(branch_id, product_id, on_date)` 三者都相同的憑據。** 不要少掉任何一個條件 —— 少了 `on_date` 會清掉其他日期的憑據，少了 `product_id` 會清掉同分店其他商品的。
+
+**第 7 步刻意不刪憑據**，兩者的差別要講清楚：row 還在，代表這一輪限量從頭到尾沒有中斷，既有憑據扣的就是這一列，第 7 步的差額同步已經保證「已售」不被改寫（見下一段），所以憑據必須留著，取消時才回補得了。**把第 6、7 步寫成同一段邏輯是本節最容易犯的錯。**
 
 **第 7 步的 `Math.max(0, ...)` 是刻意的：** 已賣 17 份時把備量調成 10，`newRemaining` 算出 -7，夾成 0。意思是「不再出餐」，**不會**回頭取消那 17 筆已成立的訂單。此時 `已售(17) > quantity(10)`，但 DB 的 `CHECK(remaining <= quantity)` 看的是 `0 <= 10`，仍然成立。這一條要寫進驗收（§10 第 6 條）。
 
@@ -243,8 +305,11 @@ setStock(actor, branchId, productId, quantity):
 ```java
 catalog.reserveStock(
     q.branchId(),
+    id, // ← OrderService.java:67 的 String id = Ids.order()，在 insert 之前就已產生
     q.items().stream().map(l -> new Catalog.StockLine(l.productId(), l.quantity())).toList());
 ```
+
+**`id` 從哪裡來：** `OrderService.java:67` 的 `String id = Ids.order();` 就在金額迴圈之前，所以接入點拿得到它，**不需要把 `Ids.order()` 往前搬，也不需要改 `insert into orders` 的參數**。這也是 `branch_product_stock_reservation.order_id` 不能有 FK 的直接原因（§4.6）：這一刻 `orders` 列還不存在。
 
 **為什麼放在迴圈之後而不是迴圈內：** 迴圈內已經在逐行呼叫 `catalog.sellable`（`OrderService.java:73`），看起來順手就能扣。但扣減必須在**合併與排序之後**（§5.2 第 1、2 步），迴圈內做不到。而且迴圈內 throw 會讓部分商品已扣、部分未扣 —— 雖然 `@Transactional` 會回滾，但依賴回滾來維持正確性，比一開始就不製造中間狀態脆弱。
 
@@ -252,25 +317,49 @@ catalog.reserveStock(
 
 **冪等重放不扣第二次：** `create` 開頭的既有冪等檢查（`OrderService.java:51-58`）在發現 `idempotency_key` 已存在時直接 `return get(...)`，**根本走不到** `reserveStock`。這是既有行為，不需要新程式碼，但**要寫測試證明它**（§11.1 第 7 條）—— 這一條錯掉的代價是「顧客重試一次就扣兩份庫存」，是本規格最貴的潛在 bug。
 
+v1.1 多了一道**資料庫層**的防線：憑據表的 `PRIMARY KEY(order_id, product_id)` 會讓同一個 `orderId` 的第二次 `reserveStock` 直接違反主鍵而拋出，整筆交易回滾。這不是用來取代上面那個檢查的（走到主鍵衝突已經代表邏輯有問題），而是讓「扣兩次」從**靜默的資料錯誤**變成**吵鬧的失敗**。
+
 ### 5.5 `OrderService.transition` 的回補
 
 `OrderService.java:471` 的 `transition`，在既有的 `db.update("update orders set status=? where id=?", next, id)` **之後**插入：
 
 ```java
 if ("CANCELLED".equals(next)) {
-  catalog.releaseStock(
-      o.branchId(),
-      o.items().stream().map(i -> new Catalog.StockLine(i.productId(), i.quantity())).toList());
+  catalog.releaseStock(o.branchId(), id);
 }
 ```
 
 `o` 是 `transition` 已經取好的 `snapshot(id)`，而且 `lock(id)` 已經先取了訂單的行鎖，所以不會有同一筆訂單被回補兩次的情形（第二次會在 `Problem.check(allowed, ...)` 被擋下，因為 `CANCELLED` 不在允許的轉換表裡）。
 
-`releaseStock` 的演算法與 `reserveStock` 對稱，差別三點：
+> **呼叫端不再傳 `o.items()`（v1.1 的變更）。** 回補多少、回補到哪一天由憑據決定。傳 `o.items()` 的版本有兩個獨立的錯誤來源：訂單品項是**商品 + 選項**的行（同商品多行要合併，與 §5.2 第 1 步同一個坑），而且它完全看不出這筆訂單當初到底扣沒扣、扣的是哪一天。
 
-1. 加而不是減：`Math.addExact(row.remaining, qty)`
-2. **夾在 `quantity` 以內**：`Math.min(row.quantity, 加總結果)`。理由見 §5.3 第 7 步 —— 備量被調低之後取消訂單，回補不能讓 `remaining` 超過現在的 `quantity`，否則違反 `CHECK`
-3. **不足不是錯誤**：找不到當日列就 `continue`（跨日取消的訂單沒有今天的列可補，§13.9）
+`releaseStock(branchId, orderId)` 的演算法：
+
+```
+releaseStock(branchId, orderId):
+  1. rs = select product_id,on_date,quantity
+            from branch_product_stock_reservation
+            where order_id=? and branch_id=?
+            order by product_id                  ← 固定鎖順序，同 §5.2 第 2 步
+  2. rs 為空 → 直接 return（這筆訂單沒扣過任何備量，不限量或憑據已被 §5.3 第 6 步清掉）
+  3. for each r in rs:
+       a. row = select quantity,remaining from branch_product_stock
+                where branch_id=? and product_id=r.product_id and on_date=r.on_date
+                for update                        ← 用憑據的 on_date，不是 today()
+       b. 若 row 存在:
+            newRemaining = Math.min(row.quantity, Math.addExact(row.remaining, r.quantity))
+            update remaining=newRemaining, updated_at=?
+          若 row 不存在 → 不回補（限量已被解除，沒有帳可以記）
+       c. delete from branch_product_stock_reservation
+            where order_id=? and product_id=r.product_id
+```
+
+四個要點：
+
+1. **第 3a 步用 `r.on_date`，不得呼叫 `today()`。** 這是跨日取消的正解（§13.9 已依此改寫）：昨天的訂單取消時回補的是**昨天那一列**，不會給今天多出額度
+2. **第 3b 步的 `Math.min` 夾在 `quantity` 以內。** 備量被調低之後取消訂單，回補不能讓 `remaining` 超過現在的 `quantity`，否則違反 `CHECK(remaining <= quantity)`（驗收 14）
+3. **第 3c 步的刪除讓回補天然冪等。** 第二次呼叫 `releaseStock` 時 `rs` 是空的，直接 return。訂單狀態機已經擋住重複取消，這一條是它的後備
+4. **`row` 不存在不是錯誤**，直接跳過並刪憑據。限量被解除（`quantity=null`）之後那一天就沒有在記帳了，硬是把列建回來等於替店員決定「今天其實有限量」
 
 ### 5.6 `sellable` 與 `list` 的剩餘數量（S3）
 
@@ -417,14 +506,16 @@ record StockInput(String branchId, String productId, Integer quantity) {}
 
 | 動到的檔案 | 內容 |
 | --- | --- |
-| `V13__branch_product_stock.sql` | 新增 |
+| `V13__branch_product_stock.sql` | 新增，**兩張表**：`branch_product_stock` 與 `branch_product_stock_reservation`（§4.2） |
 | `Catalog.java` | `ProductStock`、`StockLine` record；`stock`、`setStock` 方法 |
-| `CatalogService.java` | `stock`、`setStock` 實作 |
+| `CatalogService.java` | `stock`、`setStock` 實作，含 §5.3 第 6 步的「刪未結憑據」 |
 | `CatalogController.java` | `StockInput` record；`GET`/`POST /api/menu/stock` |
 | `BranchProductStockMigrationTest.java` | 新增（對照 `BranchMenuAvailabilityMigrationTest`） |
 | `BranchProductStockAdminTest.java` | 新增 |
 
 **本階段零行為變更：** 沒有任何既有程式路徑會讀 `branch_product_stock`。設定了數量也不會影響下單 —— 這是刻意的，不是缺陷。**本階段不得動前端**，所以沒有人會透過 UI 設出一個「看起來設了卻沒用」的數量。
+
+**憑據表在 S1 就建好，而且 `setStock` 的 `DELETE`（§5.3 第 6 步）也在 S1 就寫進去。** 本階段還沒有人寫憑據，所以那個 `DELETE` 一定刪到零列 —— 那是刻意的：把它留到 S2 會讓 S2 同時要加「寫憑據」「讀憑據」「清憑據」三件事，而 S2 已經是四個階段裡最大的一個。S1 寫它的成本是一行 SQL，驗收 14a 在 S2 才會真的驗到它。
 
 **驗收子集：** §10 的第 1–7 條。
 
@@ -432,16 +523,18 @@ record StockInput(String branchId, String productId, Integer quantity) {}
 
 | 動到的檔案 | 內容 |
 | --- | --- |
-| `Catalog.java` | `reserveStock`、`releaseStock` |
-| `CatalogService.java` | 兩者的實作（§5.2、§5.5） |
-| `OrderService.java` | `create` 的接入（§5.4）、`transition` 的回補（§5.5） |
-| `BranchProductStockOrderingTest.java` | 新增，含併發測試 |
+| `Catalog.java` | `reserveStock(branchId, orderId, lines)`、`releaseStock(branchId, orderId)` |
+| `CatalogService.java` | 兩者的實作（§5.2、§5.5），含憑據的寫入、讀取與刪除 |
+| `OrderService.java` | `create` 的接入（§5.4，傳入 `id`）、`transition` 的回補（§5.5，只傳 `id`） |
+| `BranchProductStockOrderingTest.java` | 新增，含併發測試與憑據的四條反向驗收（14a–14d） |
 
 **扣減與回補必須在同一階段。** 只上扣減的話，取消的訂單會永久吃掉備量 —— 那不是「尚未實作的功能」，是一個會讓店員每天手動補數字的缺陷。`AGENTS.md` 要求每階段「單獨合進主線不會破壞任何既有行為」，扣減而不回補破壞的是「取消訂單等於這筆沒發生」這個既有語意。
 
-**本階段是四個裡最大的一個**，若一次執行跑不完，切分點在：**先完成 `reserveStock` + `create` + 不足測試並 push（draft 保留），再做 `releaseStock` + `transition`。** 中間狀態可編譯、測試綠，但 **PR 必須維持 draft**，理由同上。
+**本階段是四個裡最大的一個**，若一次執行跑不完，切分點在：**先完成 `reserveStock`（含寫憑據）+ `create` + 不足測試並 push（draft 保留），再做 `releaseStock` + `transition`。** 中間狀態可編譯、測試綠，但 **PR 必須維持 draft**，理由同上。
 
-**驗收子集：** §10 的第 8–14 條。
+**憑據的寫入必須跟 `reserveStock` 同一刀。** 切成「先扣減、憑據之後再補」會讓中間狀態扣得出去卻回補不回來，那是 §4.6 的缺陷又被做出來一次。憑據是扣減的一部分，不是後續增強。
+
+**驗收子集：** §10 的第 8–14 條與 14a–14d。
 
 ### S3 — 菜單顯示（規模：中小）
 
@@ -499,6 +592,15 @@ record StockInput(String branchId, String productId, Integer quantity) {}
 - [ ] 13. 備量 3、下單 2 份後取消該訂單 → `remaining` 回到 3（S2）
 - [ ] 14. 備量 3、下單 2 份、把 `quantity` 調成 2、再取消訂單 → `remaining` 為 **2**（夾在 `quantity` 以內，不是 3）（S2）
 
+**保留憑據的反向驗收（S2，v1.1 新增，全部是「不應該發生什麼」）**
+
+這四條是 §4.6 那個超賣缺陷的回歸防線。**編號刻意用字母**，讓 v1.0 的 1–24 編號保持不變。
+
+- [ ] 14a. **不限量時成立的訂單不得回補。** 不設備量 → 下單 2 份（成立，無憑據）→ 設定備量 5 → 另一筆訂單買 2 份（`remaining` 變 3）→ 取消最早那筆不限量訂單 → `remaining` **仍是 3**（不是 5）。同時斷言 `branch_product_stock_reservation` 裡沒有那筆訂單的列
+- [ ] 14b. **解除後重建限量，舊訂單不得回補到新一輪。** 設定備量 5 → 下單 2 份（`remaining` 3）→ `quantity=null` 解除限量 → 重新設定備量 5（`remaining` 5）→ 取消第一輪那筆訂單 → `remaining` **仍是 5**，且那筆訂單的憑據已在重新設定時被刪除（§5.3 第 6 步）
+- [ ] 14c. **回補落在憑據的日期，不是「今天」。** 直接寫入一列 `on_date` 為昨天的備量與一筆對應的憑據（測試手法見 §11.1 第 20 條），再取消該訂單 → **昨天那一列**的 `remaining` 增加，**今天那一列（若存在）完全不變**
+- [ ] 14d. **同一筆訂單取消兩次只回補一次。** 備量 3、下單 2 份、取消（`remaining` 回到 3）→ 再次對同一筆訂單呼叫回補路徑 → `remaining` **仍是 3**（憑據已刪，第二次是 no-op）
+
 **菜單顯示（S3）**
 
 - [ ] 15. `remaining` 為 0 時，`GET /api/menu?branchId=X` 該商品的 `availability` 為 `SOLD_OUT`、`remaining` 為 `0`（S3）
@@ -516,7 +618,7 @@ record StockInput(String branchId, String productId, Integer quantity) {}
 
 - [ ] 22. `./mvnw -B -ntp verify` 綠，含 `ModuleBoundariesTest` 與 `TimeZoneGuardTest`
 - [ ] 23. `npm run build` 與 `npm test` 綠
-- [ ] 24. `coffee-orders` 的任何檔案都**沒有**出現 `branch_product_stock` 字串（`grep -rn "branch_product_stock" backend/coffee-orders` 零命中）
+- [ ] 24. `coffee-orders` 的任何檔案都**沒有**出現 `branch_product_stock` 字串（`grep -rn "branch_product_stock" backend/coffee-orders` 零命中 —— 這條 grep 同時涵蓋 `branch_product_stock_reservation`，因為它是前者的前綴）
 
 ---
 
@@ -532,6 +634,7 @@ record StockInput(String branchId, String productId, Integer quantity) {}
 2. `quantity` 寫入 `-1` 或 `10000` 被 DB `CHECK` 擋下
 3. `remaining > quantity` 被 DB `CHECK` 擋下
 4. 同一 `(branch_id, product_id, on_date)` 重複 insert 被主鍵擋下
+4a. `branch_product_stock_reservation` 表與 `idx_bps_reservation_row` 索引存在，欄位型別正確；`quantity` 寫入 `0` 被 `CHECK(quantity > 0)` 擋下；同一 `(order_id, product_id)` 重複 insert 被主鍵擋下；`order_id` 寫一個**不存在的訂單編號**可以成功（證明刻意沒有 FK，§4.6）
 
 **`BranchProductStockAdminTest.java`**
 
@@ -546,10 +649,13 @@ record StockInput(String branchId, String productId, Integer quantity) {}
 **`BranchProductStockOrderingTest.java`**
 
 12. 驗收 8–14 逐條
+12a. **驗收 14a–14d 逐條**（v1.1 新增）。這四條都是「不應該增加」的斷言，所以**一定要先斷言前置狀態**（例如 14a 要先確認取消前 `remaining` 真的是 3），否則「回補沒發生」與「前置狀態本來就不對」會長得一樣
+12b. 憑據的生命週期：扣減後 `branch_product_stock_reservation` 有該訂單的列且 `quantity` 等於**合併後**的數量（同商品兩行各 2 份 → 憑據一列、`quantity=4`，不是兩列）；取消後該列被刪除；不限量的商品**不產生**憑據
 13. **併發：** 備量 1，兩個執行緒同時下單 1 份 → **恰好一個成功、一個收到「已售完」或「僅剩 0 份」**，且最終 `remaining=0`。實作手法沿用既有的 `BranchMenuAvailabilityTest.java:162` `productLockSerializesHeadquartersUnlistedAgainstStoreChanges` 的 `CountDownLatch` 模式
 14. **死鎖：** 兩個執行緒分別下「A+B」與「B+A」（各含兩個商品、順序相反），兩筆都要在合理時間內完成（不卡死）。這一條在驗 §5.2 的第 2 步
 15. 沒有設定備量的商品下單行為**與本規格之前完全相同** —— 不要新寫，確認既有的 `CoffeeIntegrationTest` 與 `HttpWorkflowTest` 仍然綠就算通過
 16. 驗收 24 的 `grep`：寫成一條 ArchUnit 或字串掃描斷言，或在 review 時人工確認。**不強制自動化**，但若 Codex 判斷自動化成本低，歡迎加
+20. **驗收 14c 的測試手法（跨日）：** 不要想辦法讓系統以為「今天是昨天」（`TimeZoneGuardTest` 擋掉無參數 `now()`，而注入 `Clock` 是本規格沒要求的大改）。改成**直接用 `JdbcTemplate` 寫入**一列 `on_date = 昨天的 yyyyMMdd` 的 `branch_product_stock` 與一列對應的憑據，再走正常的取消路徑，斷言昨天那一列被回補、今天那一列不變。既有測試已有直接寫表再走正常路徑的先例，這條沿用同一個手法
 
 ### 11.2 前端
 
@@ -665,13 +771,15 @@ record StockInput(String branchId, String productId, Integer quantity) {}
 
 **推翻它的代價：** `coffee-reporting` 目前依賴 `shared` 並直接查 `orders` / `order_items` / `branches`（唯讀投影例外）。要加庫存維度就要把 `branch_product_stock` 也納入那個例外清單，或改走 `catalog.api`。前者要修 `AGENTS.md` 的「資料存取」一節，不是局部決定。
 
-### 13.9 跨日取消的訂單不回補 —— **不回補**
+### 13.9 跨日取消的訂單回補到**原本扣減的那一天**，不回補到今天 —— **回補原日（v1.1 修訂）**
 
-**決定：** `releaseStock` 找不到**今天**的 `branch_product_stock` 列時直接 `continue`，不新建列、不回補。
+**決定：** `releaseStock` 依憑據的 `on_date` 找列並回補（§5.5 第 3a 步）。昨天的訂單今天取消，回補的是**昨天那一列**。若那一列已經不存在（限量被解除），就不回補、只刪憑據。
 
-**理由：** 昨天的訂單今天取消，昨天的備量已經過期（`on_date` 不同）。回補到今天的備量上等於「昨天沒賣掉的額度今天可以用」，對手作烘焙完全不成立 —— 昨天沒賣掉的司康不會變成今天的庫存。不回補才是對的。
+**v1.0 寫的是「找不到今天的列就不回補」，v1.1 改成這樣，理由：** 原本要守的紅線是「**昨天沒賣掉的額度不可以變成今天的可售量**」—— 那條紅線在 v1.1 依然成立，而且守得更嚴：回補落在昨天那一列，今天的 `remaining` 一個字都不會動。差別在於 v1.0 連「昨天那一列的帳」也一起放棄了，於是昨天的 `已售 = quantity - remaining` 會永遠記著一筆已經取消的訂單。既然憑據已經精確記下是哪一天扣的（§4.6），把那一天的帳改對是零額外成本的。
 
-**推翻它的代價：** 若日後出現「可跨日保存」的商品類別，就需要一個商品層的旗標來區分，並讓 `releaseStock` 依旗標決定回補到哪一天。那是 §13.1 的永續帳範圍。
+**順帶解決的事：** v1.0 的「找不到今天的列就 `continue`」在跨日之外還會吞掉另一種情形 —— 不限量時成立的訂單在限量建立後取消。v1.0 那個版本不但沒吞掉，還會錯誤回補（§4.6 的第一條路徑）。依憑據回補讓「跨日」與「當初沒扣」兩件事各自有正確且不同的處理。
+
+**推翻它的代價：** 若日後出現「可跨日保存」的商品類別（昨天沒賣掉的確實能今天賣），就需要一個商品層的旗標，並讓 `releaseStock` 依旗標決定回補到哪一天。那是 §13.1 的永續帳範圍。憑據已經帶著 `on_date`，所以那一天要改的只有「回補到哪一列」這一個決定點。
 
 ### 13.10 `remaining` 顯示給顧客 —— **顯示**
 
@@ -684,6 +792,21 @@ record StockInput(String branchId, String productId, Integer quantity) {}
 ### 13.11 不足時回 400 而不是 409 —— **400**
 
 見 §6.3 的說明與推翻代價，不重複。
+
+### 13.12 回補靠持久化的保留憑據，不靠推論 —— **憑據表（v1.1 新增）**
+
+**決定：** 新增 `branch_product_stock_reservation`，`reserveStock` 真的扣到就寫一列，`releaseStock` 只依憑據回補並刪除憑據。完整的機制與缺陷推導寫在 §4.6，這裡只記決策與代價。
+
+**理由：** v1.0 讓 `releaseStock` 自己用「今天 + branchId + productId」推論回補對象，而那個推論有兩種情形會推錯（§4.6 的兩條路徑），兩種都會憑空生出可售額度，也就是**真的會超賣**。這類缺陷的特徵是「編譯過、既有測試綠、只在營運現場出現」，而且症狀（備量數字不對）會先被當成店員操作失誤。憑據是唯一能分辨「這筆訂單當初到底扣沒扣、扣的是哪一天、扣了多少」的東西，推論做不到。
+
+**代價：**
+
+1. 多一張表、多一支 `insert`、多一支 `delete`。S1 多一行 SQL，S2 的 `releaseStock` 反而**變簡單**（不必合併訂單品項，憑據已經是合併後的結果）
+2. `releaseStock` 的簽名從 `(branchId, lines)` 變成 `(branchId, orderId)`，`reserveStock` 多一個 `orderId` 參數。因為兩個方法都是 v1.1 連同本規格一起新增的，**沒有任何既有呼叫端要改**
+3. 憑據是「未結」狀態的紀錄，不是歷史帳。回補完就刪，所以它**不能**當成「今天賣了什麼」的查詢來源 —— 那是 `orders` / `order_items` 的工作，也是 §13.8 不加庫存報表維度的理由之一
+4. 不限量的訂單不留憑據，所以「這筆訂單當初沒扣」與「這筆訂單的憑據被 §5.3 第 6 步清掉」在資料上長得一樣。兩者的正確行為都是「不回補」，所以不需要分辨
+
+**推翻它的代價：** 要回到推論式回補，就要先證明上面兩條路徑在營運上不可能發生 —— 做不到，因為「先不設限量、賣一陣子才設」是最自然的使用方式（店員早上不知道今天備多少，中午才決定）。另一條路是改用庫存列版號，§4.6 最後一段寫了為什麼那條更貴。
 
 ---
 
@@ -708,3 +831,4 @@ record StockInput(String branchId, String productId, Integer quantity) {}
 | 日期 | 版本 | 內容 |
 | --- | --- | --- |
 | 2026-10-02 | v1.0 | 初版。G08 由 P2 升為 P1，排為工作順序第 18 項。Flyway 占用 V13。登記 G28（永續庫存帳與選項層庫存） |
+| 2026-10-02 | v1.1 | **修補 v1.0 回補路徑的交易正確性缺口**（Codex 於 [PR #55](https://github.com/choka1227/coffee_GPT6/pull/55) 的 `REQUEST_CHANGES` 指出，判定成立）。v1.0 的 `releaseStock` 用「今天 + branchId + productId」推論回補對象，有兩條路徑會回補未曾扣減的訂單並**真的造成超賣**（推導見新增的 §4.6）。修法：新增 `branch_product_stock_reservation` 保留憑據表（同一支 V13，§4.2），`reserveStock` 加 `orderId` 參數並在實際扣到時寫憑據（§5.2 第 4f 步），`releaseStock` 簽名改為 `(branchId, orderId)` 並只依憑據回補（§5.5），`setStock` 在從無到有建立限量時清掉未結憑據（§5.3 第 6 步）。§13.9 由「跨日不回補」改為「回補到憑據記載的那一天」，紅線不變但帳更準。新增設計決策 §13.12、驗收 14a–14d（四條反向驗收，含 Codex 要求的兩條）、測試要求 4a／12a／12b／20。**階段切分不變**（仍是 S1–S4），憑據表與 `setStock` 的 `DELETE` 放在 S1，憑據的寫入與讀取放在 S2 |
