@@ -21,7 +21,7 @@ import type {
 import { minuteTime, money } from "../../shared/format";
 import { notify } from "../../shared/notice";
 import Modal from "../../shared/Modal.vue";
-import { formatOnDate, overrideSummary, sortOverrides } from "./overrides";
+import { formatOnDate, inputDate, overrideSummary, sortOverrides } from "./overrides";
 const branches = ref<Branch[]>([]),
   editing = ref<Branch | null>(null),
   loading = ref(true),
@@ -112,10 +112,6 @@ async function editHours(branch: Branch) {
     hoursLoading.value = false;
   }
 }
-function inputDate(onDate: number) {
-  const value = String(onDate);
-  return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
-}
 function dateValue(value: string) {
   return Number(value.replaceAll("-", ""));
 }
@@ -131,6 +127,7 @@ function addOverride() {
     closed: true,
     note: "",
     hours: [],
+    lastOrderMinutes: null,
   };
 }
 function editOverride(value: BranchDayOverride) {
@@ -146,6 +143,13 @@ function setOverrideClosed(closed: boolean) {
   overrideDraft.value.hours = closed
     ? []
     : [{ dayOfWeek: 1, openMinute: 540, closeMinute: 1260 }];
+  if (closed) overrideDraft.value.lastOrderMinutes = null;
+}
+
+function updateOverrideLastOrder(event: Event) {
+  if (!overrideDraft.value) return;
+  const value = (event.target as HTMLInputElement).value;
+  overrideDraft.value.lastOrderMinutes = value === "" ? null : Number(value);
 }
 function addOverrideHours() {
   if (!overrideDraft.value || overrideDraft.value.hours.length >= 4) return;
@@ -168,6 +172,7 @@ async function saveOverride() {
         closed: overrideDraft.value.closed,
         note: overrideDraft.value.note,
         hours: overrideDraft.value.hours,
+        lastOrderMinutes: overrideDraft.value.lastOrderMinutes,
       },
       "PUT",
     );
@@ -468,6 +473,15 @@ function updateTime(
             >
           </div>
           <template v-if="!overrideDraft.closed">
+            <label
+              >本日最後點餐（打烊前分鐘，可留空沿用分店設定）<input
+                type="number"
+                min="0"
+                max="120"
+                step="5"
+                :value="overrideDraft.lastOrderMinutes ?? ''"
+                @input="updateOverrideLastOrder"
+            /></label>
             <div
               v-for="(period, index) in overrideDraft.hours"
               :key="index"
