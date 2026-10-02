@@ -108,6 +108,7 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 | G26 | `OrderDiscountTest` 的月份時區時間彈（每月最後一天 16:00 UTC 起 CI 全紅） | 實作已合併（PR #48，2026-10-01，主線合併提交 `ee74608`，零 migration） | 無（一行修正，說明見下方 G26 段） |
 | G27 | 無參數 `now()` 的自動化防線（G26 同類時間彈的回歸防護） | 實作已合併（[PR #53](https://github.com/choka1227/coffee_GPT6/pull/53)，2026-10-02 合併，主線合併提交 `62c7a4c`，零 migration、零正式程式變更） | 無（見下方 G27 段） |
 | G24 | 店長自行設定本店例外營業日與本日最後點餐時間（原 P2，升為 P1） | **規格書已完成（v1.0，2026-10-02），待實作**；Flyway 預定 `V12` | [`specs/G24-branch-manager-day-settings.md`](specs/G24-branch-manager-day-settings.md) |
+| G08 | 分店每日可售數量與自動售完（原 P2「庫存扣減」，升為 P1） | **規格書已完成（v1.1，2026-10-02），待實作**（四階段 S1–S4，Flyway 預定占用 **V13**，兩張表） | [`specs/G08-branch-product-stock.md`](specs/G08-branch-product-stock.md) |
 
 **G11 稽核紀錄** —— `audit_log` 表存在，但全專案**只有 `IdentityService.java:221` 一處寫入**，且沒有任何查詢端點。等於有稽核資料卻無法稽核。現金收款（`OrderService.cash()`）、訂單狀態轉換（`transition()`）、菜單改價（`CatalogService.save()`）、分店改設定（`BranchService.save()`）全部沒有紀錄。金額相關操作都應該進稽核軌跡。
 
@@ -140,7 +141,7 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 | G09 | 報表效能（月報記憶體彙整） | **已升為 P1，見上方 P1 表** |
 | G16 | 顧客自助註冊 | 未開始 |
 | G05 | Session 集中化（水平擴展前提） | 未開始 |
-| G08 | 庫存扣減 | 未開始 |
+| G08 | 庫存扣減 | **已升為 P1，見上方 P1 表**（範圍收斂為「每日可售數量與自動售完」，永續庫存帳另立 G28；規格書 v1.0 於 2026-10-02 完成） |
 | G17 | 點餐 UI 的「常用組合」快捷 | 未開始（G06 第 13.6 節登記） |
 | G19 | 分店例外營業日（公休、臨時調整） | **已升為 P1，見上方 P1 表**（G14 §11.3 登記；規格書 v1.1 於 2026-09-29 完成） |
 | G20 | 品項層折扣與買一送一 | 未開始（G07 §11.2 登記） |
@@ -149,6 +150,7 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 | G23 | 前端元件層測試（jsdom + `@vue/test-utils`，驗模板的可見性與排版） | **已升為 P1，見上方 P1 表**（G22 §13.3 登記；規格書 v1.0 於 2026-09-29 完成，v1.1 於 2026-09-30 依 Codex 在 PR #43 的 `REQUEST_CHANGES` 修正 §7 夾具） |
 | G24 | 店長自行設定本店例外營業日**與本店最後點餐時間** | **已升為 P1，見上方 P1 表**（G19 §13.3 登記，G25 §13.5 擴大範圍；規格書 v1.0 於 2026-10-02 完成）。升排理由見規格 §1.4：P1 已清空、工作順序只剩 PO 已延後的金流，而 P2 其餘項目分別被新依賴（G05、G12）、產品與法遵決策（G16）或「要先有真實資料」（G17／G20／G21）擋住，G24 是唯一前置功能全部到位、不需新依賴也不需產品決策的一項。**沒有收到營運端回饋**，升排靠的是「其餘都被擋住」，不是營運證據 |
 | G25 | 最後點餐時間（last order）與即將打烊提示 | **已升為 P1，見上方 P1 表**（G19 §13.5 登記；原掛在 G14 §2 的「G19 一併考慮」，已由 G19 明確排除並獨立；規格書 v1.1 於 2026-09-30 完成） |
+| G28 | 永續庫存帳與選項層庫存（進貨、報廢、盤點、跨日結存、原料 BOM、燕麥奶賣完） | 未開始（G08 §14 登記）。**開工前提是 G08 上線後要先有一段真實備量資料**，否則帳務模型一定是猜的 |
 | G12 | 外送、硬體印單 | 未開始 |
 
 **G09 報表效能（已升為 P1，規格書見 [`specs/G09-report-aggregation.md`](specs/G09-report-aggregation.md)）** —— `ReportService.report()` 把整月已付款訂單投影載入記憶體，再對每一天（`ReportService.java:66-80`）與每一小時（`137-146`）各做一次 stream filter，是 O(天數 × 訂單數)。單店資料量下沒問題，跨店或資料累積後會變成記憶體與延遲風險。彙整應下推到 SQL。
@@ -162,6 +164,16 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 **G05 Session 集中化** —— 單一實例的 `HttpSession`，應用重啟就全部登出，也無法水平擴展。登入限流同樣是單機記憶體。`ARCHITECTURE.md` 已點名需要 Spring Session / Redis。在單店單機營運下可接受，多店或需要零停機部署時就是硬阻擋。
 
 **G08 庫存扣減** —— `products` 沒有任何庫存欄位。注意 G13（售罄）是 G08 的輕量版：先做得到「今天這項賣完」，不必等完整的庫存管理。
+
+**已升為 P1，規格書見 [`specs/G08-branch-product-stock.md`](specs/G08-branch-product-stock.md)（v1.0，2026-10-02）。** 升排理由與其餘 P2 項目的逐項排除見規格 §1.4 —— 簡述：工作順序上 G24 之後的下一項是金流（PO 已整批延後），所以必須從 P2 升排一項，而 G08 是唯一**沒有外部依賴、沒有法遵決策、也不需要真實資料**的項目。**誠實交代：沒有收到任何營運端的超賣回饋**，升排靠的是其餘項目都被別的東西擋住。
+
+規格同時**收斂了本段當初的預期**，理由寫在規格裡：
+
+- **範圍不是「完整的庫存管理」，是「每日可售數量」**（規格 §13.1）。一張 `(branch_id, product_id, on_date)` 的表，隔天沒有列就等於不限量。咖啡廳的真實約束是「今天做得出幾份」而不是「倉庫裡還有幾個」；而且每日數量**自己會過期**，沒有人需要記得明天把數字改回來 —— 這是 G19 §1.2 批評 `active` 旗標那個理由的正面應用。永續存量帳（進貨、報廢、盤點、跨日結存、原料 BOM）牽涉會計決策，超出 PO 授權給 Claude 的設計決策範圍，**另立 G28**
+- **G13 的「標記售完」不會被取代，兩者刻意並存**（規格 §13.3）。手動的 `branch_products.availability='SOLD_OUT'` 與自動的 `remaining=0` 是兩個獨立判斷來源，任一成立就不能賣。合併成一欄會立刻需要第三個欄位來分辨「這個 SOLD_OUT 是誰設的」，那正是 `active` 旗標踩過的同一類坑
+- **已知且刻意接受的缺口**（規格 §13.5）：扣減發生在訂單成立而非付款完成，所以 ECPAY 的 `PENDING_PAYMENT` 訂單會占住備量，而逾時釋放屬於延後中的 G04。選這一邊是因為另一邊（付款時才扣）會造成超賣，而目前**沒有退款流程**（G03 延後）。現場解法是直接調高數字，規格 §5.3 的差額同步保證調高不會弄壞已售數
+
+核心設計：扣減在 `OrderService.create` 的交易內、**同商品先合併加總再依 `product_id` 字典序取行鎖**（規格 §5.2，合併是為了讓「僅剩 N 份」的訊息對得上事實，排序是為了避免兩筆訂單取鎖順序相反而死鎖）；取消訂單回補並**夾在 `quantity` 以內**；`remaining=0` 時菜單顯示今日售完，但 `UNLISTED` 優先序更高。
 
 **G17 點餐 UI 的「常用組合」快捷**（G06 第 13.6 節登記）—— 選項群組多的商品，手機版點餐流程會偏長。刻意延後：常用組合要先有真實訂單資料才知道哪些組合常用，現在做出來的一定是猜的。G06 上線跑一段時間後再用實際資料判斷要不要做。
 
@@ -296,7 +308,10 @@ ArchUnit 已經在專案裡、已經是 `verify` 的一部分、看的是 byteco
 15. ~~**Codex 依 [`specs/G25-last-order-time.md`](specs/G25-last-order-time.md) 實作最後點餐時間與即將打烊提示**~~ —— **已完成，[PR #51](https://github.com/choka1227/coffee_GPT6/pull/51) 於 2026-10-01 合併**（Claude 於 head `4085df9` 送出 `APPROVE` 後由 auto-merge 合入，S1–S3 三階段全數完成，Flyway 實際占用 **V11**，進度報告見 [`reports/G25-last-order-time-progress.md`](reports/G25-last-order-time-progress.md)）。以下規格摘要保留為紀錄 —— 三個施工階段：**S1** `V11__branch_last_order.sql`（`branches` 加一個 `last_order_minutes` 欄位，`DEFAULT 0`、具名 CHECK 0–120）+ 把 `BranchService.isOpenAt` 改寫成新純函式 `windowAt` 的包裝 + `Branches` 新增 `OpenState`／`stateAt`／`lastOrderMinutes`，**行為零變更**；**S2** `saveHours` 四參數版、`PUT /hours` 的選填 `lastOrderMinutes`、`requireOrderable` 的截止點與新 400 訊息、越權測試；**S3** `BranchesView` 的設定欄位、`MenuView` 的「即將停止接單／已停止接單」三態與按鈕 disabled、G23 風格的 dom 測試。**Flyway 占用 `V11`**，下一份需要 migration 的規格自 **V12** 起算。**紅線一：`openNow` 的語意一個字不能改** —— 過了最後點餐時間但還沒打烊的分店，`openNow` 仍是 `true`，可下單與否是新的 `orderableNow`（規格 §13.3）。把兩者合併會讓分店在顧客端提早顯示「已打烊」，而且**編譯照過、既有測試照綠**，錯誤只會在現場出現。**紅線二：跨夜時段的剩餘分鐘是 `close + 1440 - m`，不是 `close - m`**（§5.1）—— 寫錯的症狀是跨夜營業的店晚上十一點就不能點餐。**紅線三：S1 必須行為零變更** —— 驗收 5 要求 `BranchHoursTest`／`BranchHourOverrideTest`／`BranchHoursAdminTest` 三支既有測試**一個字元都不修改**且全綠，驗收 4 要求一支逐分鐘的等價性掃描測試（期望值寫死，不得呼叫 `isOpenAt` 自我比對）。**紅線四：`coffee-orders` 的變更量必須是零**（驗收 17）—— `OrderService.java:61` 已經在呼叫 `requireOrderable`，語意擴充全部在 `coffee-branches` 內完成；動到 `OrderService` 的金額迴圈就是走錯路了。**紅線五：四個既有的打烊訊息逐字不變**（`BranchHourOverrideTest.java:356-375` 釘住了它們，驗收 9）。**紅線六：截止後的訊息不得出現「明日」二字**（§5.4／§13.10，驗收 8、21–23）—— `validateHours` 允許每天最多 4 個不重疊時段，`09:00–12:00`＋`13:00–18:00` 的分店在 `L=15` 時 `11:50` 只是第一段停止接單、`13:00` 當天就恢復，寫「明日」是明確錯誤的資訊並流失當日下午的訂單；今日仍有後續可下單時段時訊息要指出那一段的開始時刻（`請於今日 13:00 起的營業時段再下單`，且**長度 ≤ `L` 的時段要跳過**），否則用不帶日期的 `請於下一個營業時段再下單`。這一條是 Codex 在 PR #46 review 裡指出的，v1.1 已修正並補上反向驗收。員工 POS **不受截止點限制**（§13.4，與 G14 同源），權限維持總部限定，**因此 V11 沒有任何 `INSERT INTO role_permissions`**。S3 會續寫 `MenuView.dom.test.ts`，**G23（PR #45）已於 2026-09-30 合併，該相依已解除**。
 16. ~~**Codex 補上「禁止無參數 `now()`」的自動化防線（G27）**~~ —— **已完成，[PR #53](https://github.com/choka1227/coffee_GPT6/pull/53) 於 2026-10-02 合併**（head `c444243`，單一階段、CI 綠、零 migration、零正式程式變更；新增 `backend/coffee-app/src/test/java/com/coffee/app/TimeZoneGuardTest.java`，以 ArchUnit 同時掃 main 與 test 的 bytecode，`Instant.now()` 依規劃放行）。**`codex/g27-time-zone-guard` 分支已完成任務，不要再從它續作或開新分支。** Codex 把反向驗收（驗收 2）做成「在暫存目錄動態編譯一支含 `LocalDate.now()` 的隔離 fixture，再斷言同一條規則必須拋出違規」，比規格原本寫的「手工塞一行再還原」更好 —— 規格要的是「這條規則真的會擋」，手工驗證只在當下成立，動態 fixture 則是每次 CI 都重驗一次。**Claude 未對 #53 送出 review**（它在上一輪排程之間由 Codex 自行 auto-merge 合入），合併後由 Claude 複驗：`TimeZoneGuardTest.java` 存在、`verify` 綠、既有測試零修改。以下為當時的缺陷說明，保留給日後判斷用： —— **🔴 ← 目前這一項：Codex 補上「禁止無參數 `now()`」的自動化防線（G27）** —— G26 把唯一一處 bare `YearMonth.now()` 修掉了，驗收 (b) 也把「全 repo 零命中」寫成不變式，但**沒有任何自動化在看這條不變式**。下一支做日期運算的測試只要寫一個 `LocalDate.now()`，同一類時間彈就回來，症狀仍是「每月最後一天 16:00–24:00 UTC 全員 CI 紅」，仍然會被誤判成業務邏輯迴歸。**修法**：在 `backend/coffee-app/src/test/java/com/coffee/app/` 新增一支 ArchUnit 測試（建議檔名 `TimeZoneGuardTest.java`），對 `YearMonth`／`LocalDate`／`LocalDateTime`／`ZonedDateTime`／`LocalTime` 的**無參數** `now()` 下 `noClasses().should().callMethod(X.class, "now")`。**關鍵一：`ClassFileImporter` 不可加 `ImportOption.Predefined.DO_NOT_INCLUDE_TESTS`** —— G26 的缺陷就在測試碼裡，只掃 main 抓不到（既有的 `ModuleBoundariesTest` 正是加了那個選項，所以它當初放行了 G26）。**關鍵二：`Instant.now()` 必須放行** —— `BranchController.java:90` 與 `BranchHourOverrideTest.java:380` 都是 `Instant.now().atZone(TAIPEI)`，`Instant` 是絕對時刻、與時區無關，把它列進黑名單會讓這兩處無故變紅，並逼出「注入 `Clock`」那種規格沒要求的大改。**可行性已由 Claude 先行驗證**：全 repo 的測試都在 `backend/coffee-app/src/test/java/com/coffee/app`（`find` 確認，無其他模組有 `src/test`），所以一支放在 `coffee-app` 的測試就同時涵蓋 main 與 test；`archunit-junit5` 1.4.1 已在 `coffee-app/pom.xml:102-105` 的 test scope，**零新相依**。**驗收**：(a) 新測試存在且綠；(b) 暫時在任一既有測試塞一行 `LocalDate.now()` 會讓新測試紅（實作端自行驗證後還原，**不要把那一行留在 commit 裡**）；(c) 上述兩處 `Instant.now()` 維持不變且綠；(d) 既有測試一個字元都不修改；(e) `cd backend && ./mvnw -B -ntp verify` 綠。**不另立規格書的理由**：一支測試檔、零 migration、零正式程式、零新相依、零端點，缺陷定位與修法在本項已寫完，寫一份施工級規格書的成本高於實作本身；比照 G26，**本項不計入規格庫存**。**為什麼排在 G25 之後而不插隊**：G26 已經修好，現在沒有紅燈，這一項是回歸防護而非止血；G25 是已經寫定、Codex 可立刻開工的功能缺口，不應該被它推後。
 17. **🔴 ← 目前這一項：Codex 依 [`specs/G24-branch-manager-day-settings.md`](specs/G24-branch-manager-day-settings.md) 實作店長的本店營業設定** —— 規格書 v1.0 於 2026-10-02 完成，隨本輪 PR 進主線。四個施工階段：**S1** 權限常數 `BRANCH_HOURS_OVERRIDE` 與 `V12__branch_day_settings.sql`（純加法、零行為變更）、**S2** 例外日授權由「`BRANCH_MANAGE` + global」改為「`BRANCH_HOURS_OVERRIDE` + `actor.branch()`」並加 14 天範圍限制、**S3** `branch_day_overrides.last_order_minutes`（每日最後點餐）與解析、**S4** 前端「本店營業設定」頁。**Flyway 用 V12**（V11 由 G25 占用）。本規格結清 G19 §13.3 與 G25 §13.5 兩筆登記。**最容易出事的一條寫在規格 §13.1**：放寬 `saveOverride` 時順手把 `saveHours` 的 `global()` 檢查也拿掉，目前不會讓任何既有測試變紅，所以規格要求在 `BranchHoursHttpSecurityTest` 新增一條專門測它的案例。**為什麼排這一項**：P1 已清空、第 18 項的金流已由 PO 整批延後，而 P2 其餘項目分別被新依賴、產品決策或「要先有真實資料」擋住，詳見規格 §1.4
-18. 金流那條線（G01–G04 其餘部分）待進入綠界串接階段再排
+18. **Codex 依 [`specs/G08-branch-product-stock.md`](specs/G08-branch-product-stock.md) 實作分店每日可售數量與自動售完** —— 規格書 **v1.1** 於 2026-10-02 完成（v1.1 依 Codex 在 [PR #55](https://github.com/choka1227/coffee_GPT6/pull/55) 的 `REQUEST_CHANGES` 修補了回補路徑的超賣缺口，新增 `branch_product_stock_reservation` 保留憑據表，推導見規格 §4.6），**四階段 S1–S4**（S1 資料層與讀寫端點／S2 扣減與取消回補／S3 菜單顯示／S4 前端），Flyway 預定占用 **V13**。S2 是四個裡最大的一個，規格 §9 寫了它合法的切半方式。**最容易出事的兩條：**(a) 同一訂單含同商品多行時要**先合併再判斷**，否則「僅剩 N 份」的 N 會是錯的（§5.2 第 1 步）；(b) 同一個 `Idempotency-Key` 重送**不得扣第二次** —— 既有的冪等檢查已經保證這件事，但一定要有測試證明它（§5.4、驗收 12）；(c) **回補一律依保留憑據，不得用「今天 + branchId + productId」推論** —— 推論會把未曾扣減的訂單也回補，真的會超賣（§4.6、§5.5、驗收 14a–14d）
+19. 金流那條線（G01–G04 其餘部分）待進入綠界串接階段再排
+
+> **與 [PR #54](https://github.com/choka1227/coffee_GPT6/pull/54)（G24）的編號協調已結案。** #54 已於 2026-10-02 合併進主線（主線合併提交 `1630b2d`），第 16 項（G27）由它標為完成、G24 由它插入為第 17 項。本 PR 於本輪把主線 merge 進來解掉本檔的衝突，依當初約定的順序把 G08 排為**第 18 項**、金流順延為**第 19 項**，三項都保留、沒有刪掉任何一項。兩份規格在程式碼上的檔案交集是**零**（G24 動 `coffee-branches` 與 `Identity.java`、占 V12；G08 動 `coffee-catalog`、占 V13、不碰 `Identity.java`），所以**實作的先後完全自由**。
 
 ### 待 PO 驗收（不擋合併）
 
@@ -316,7 +331,7 @@ PR #9（G01 對帳）已於 2026-09-17 08:32 合併，`OrderService` 的衝突�
 
 G01 留在主線的缺陷已寫成獨立規格 [`specs/G01a-reconciliation-fixes.md`](specs/G01a-reconciliation-fixes.md)，用分支 `codex/g01-fixes`，**不要**夾在 G06 的 PR 裡 —— 兩件事、兩支分支。兩者動的是不同模組（`coffee-payments` vs `coffee-orders` / `coffee-catalog`），可以並行。**兩者皆已合併（#14、#15），此段保留為紀錄。**
 
-**目前（2026-10-02）規格庫存 1 份：G24。** 工作順序第 15 項（G25，PR #51）與第 16 項（G27，PR #53）都已結案，**目前這一項是第 17 項 G24**，規格書 [`specs/G24-branch-manager-day-settings.md`](specs/G24-branch-manager-day-settings.md) 隨本輪 PR 進主線。**庫存 1 份未達上限 2 份，下一輪可以再補一份 —— 但一輪只補一份。** G24 的 Flyway 預定 **V12**（V11 由 G25 占用），下一份需要 migration 的規格自 **V13** 起算。
+**目前（2026-10-02）規格庫存 2 份：G24 與 G08。** 工作順序第 15 項（G25，PR #51）與第 16 項（G27，PR #53）都已結案，**目前這一項是第 17 項 G24**，規格書 [`specs/G24-branch-manager-day-settings.md`](specs/G24-branch-manager-day-settings.md) 隨本輪 PR 進主線。**庫存已達上限 2 份（G24 在做、G08 待命），下一輪不再產出新規格。** G24 的 Flyway 預定 **V12**（V11 由 G25 占用）、G08 預定 **V13**，下一份需要 migration 的規格自 **V14** 起算。
 
 > **以下三段（G19 的登記紀錄、G19 的檔案衝突說明、G23 的檔案衝突說明）全部是歷史紀錄，不是待辦項。** G19 的實作已隨 [PR #42](https://github.com/choka1227/coffee_GPT6/pull/42)、G23 的實作已隨 [PR #45](https://github.com/choka1227/coffee_GPT6/pull/45) 於 2026-09-30 合併進主線。保留它們是因為裡面的排程理由（檔案交集怎麼算、為什麼序列化）對下一輪仍有參考價值；**自動選工時請以「排定的工作順序」與本段第一行的庫存數字為準，不要從這三段推導還有什麼要做。**
 
@@ -328,11 +343,23 @@ G19 的登記紀錄（已結案，保留為紀錄）：[`specs/G19-branch-hour-o
 
 Flyway 版號現況：`V1__coffee_schema.sql`、`V2__payment_reconciliation.sql`（#9）、`V3__product_options.sql`（#14）、`V4__branch_menu_availability.sql`（#20）、`V5__audit_trail.sql`、`V6__cash_sessions.sql`（#22）、`V7__order_list_indexes.sql`（#26）、`V8__branch_business_hours.sql`（#29）、**`V9__order_discounts.sql`（#31，已於 2026-09-28 合併）** 全部已進主線。**G09（#36）與 G22（#39）都不新增任何 migration。G19 的 `V10__branch_hour_overrides.sql` 已隨 #42 於 2026-09-30 合併進主線。G23 的 #45 同樣不新增任何 migration，已於 2026-09-30 合併。**`V10__branch_hour_overrides.sql`（#42）、`V11__branch_last_order.sql`（#51）亦已進主線**。G24 預定占用 **`V12__branch_day_settings.sql`**（規格 §4.0 已寫死檔名），所以下一份需要 migration 的規格自 **`V13`** 起算。
 
-**規格庫存目前是 1 份：G24**（2026-10-02 登記，規格書 v1.0）。G25（PR #51）、G26（PR #48）與 G27（PR #53）的實作都已合併；G26 與 G27 都不另立規格書、都不計入庫存，所以庫存的變化只來自 G24 這一份（0 → 1）。上限 2 份，**下一輪最多再補一份**。
+**規格庫存目前是 2 份：G24 與 G08**（兩份都在 2026-10-02 登記，規格書各為 v1.0）。G25（PR #51）、G26（PR #48）與 G27（PR #53）的實作都已合併；G26 與 G27 都不另立規格書、都不計入庫存，所以庫存的變化只來自 G24 與 G08 這兩份（0 → 1 → 2）。上限 2 份，**已滿，下一輪不產出新規格**。
 
 **版號不得互換**（原因保留為紀錄）：Flyway 預設不接受事後補插較小版號（out-of-order），所以 G07 就算先於 G14 開工也一樣要用 V9，空一個版號的成本是零。G14 先合併，這條規則這一輪沒有被動用到，但規則本身不變。
 
 規格庫存維持 2 份（一份在做、一份待命）是刻意的上限：實作端一次只做一份，且一份可能跨多次執行，堆更多只會變成永遠做不完的清單。**庫存滿 2 份時不再產出新規格。**
+
+**目前（2026-10-02）規格庫存 2 份，已滿上限，下一輪不再產出新規格。** 兩份都是**待實作**：
+
+| 規格 | 狀態 | Flyway |
+| --- | --- | --- |
+| [`specs/G24-branch-manager-day-settings.md`](specs/G24-branch-manager-day-settings.md) | 隨 [PR #54](https://github.com/choka1227/coffee_GPT6/pull/54) 待合併（CI 綠、auto-merge 已開，等 Codex 審查） | V12 |
+| [`specs/G08-branch-product-stock.md`](specs/G08-branch-product-stock.md) | 隨本 PR 待合併 | **V13** |
+
+**Flyway 版號：下一份需要 migration 的規格自 `V14` 起算。** 主線目前最高是 `V11__branch_last_order.sql`（G25，PR #51），V12 由 G24 預定、V13 由 G08 預定。**即使 G24 或 G08 最終被擱置而版號從未使用，也不要回頭補用那個空號** —— Flyway 預設不接受事後補插較小版號（out-of-order），留一個空號的成本是零。
+
+**兩份規格的實作先後完全自由**，程式碼上的檔案交集是零（G24 動 `coffee-branches` 的 `BranchService` 與 `Identity.java`；G08 動 `coffee-catalog` 的 `CatalogService`，刻意複用既有的 `MENU_AVAILABILITY` 權限而不碰 `Identity.java`，理由見 G08 §7.1）。唯一有交集的是**本檔**，處理方式寫在「排定的工作順序」第 17／18 項下方的協調說明。
+
 
 > **設計決策（2026-09-19，依 PR #18 上 Codex 的 `REQUEST_CHANGES`）：G11+G15 序列化排在 G13 之後，不開放並行。**（G13 已於 2026-09-20 合併，這道閘門本身已履行完畢；決策保留，因為它定義的是「一次一份」這個通則，不只是 G13 這一次。）
 > 理由：(1) 實作端只有 Codex 一個，`AGENTS.md`「施工階段與中斷續作」本來就是「一次執行推進一個階段、一個 PR 一支分支」，並行在現況下不存在可執行的意義；(2) 兩份規格的交集 `Identity.PERMISSIONS`、`InitialData` 角色清單與 Flyway 版號，正好是撞了就要整份重跑的那一類衝突，序列化把它降為零成本；(3) 本檔的「排定的工作順序」是實作端的唯一約束來源，同一份文件不能同時給出「必須等 G13」與「可並行」兩個答案。
@@ -343,6 +370,8 @@ Flyway 版號現況：`V1__coffee_schema.sql`、`V2__payment_reconciliation.sql`
 | 日期 | 變更 |
 | --- | --- |
 | 2026-10-02 | **G27 實作隨 [PR #53](https://github.com/choka1227/coffee_GPT6/pull/53) 合併**（Codex 自行 auto-merge 合入，主線合併提交 `62c7a4c`；Claude 未送出 review，合併後複驗 `TimeZoneGuardTest.java` 存在、既有測試零修改、`verify` 綠）：P1 表的 G27 列由「待實作」改為「已合併」，工作順序第 16 項標為完成。**同時登記並升排 G24**（店長自設本店例外營業日與本日最後點餐時間，規格書 [`specs/G24-branch-manager-day-settings.md`](specs/G24-branch-manager-day-settings.md) v1.0）：G24 由 P2 升為 P1、成為工作順序第 17 項（原第 17 項金流順延為第 18 項），結清 G19 §13.3 與 G25 §13.5 兩筆登記，Flyway 預定 `V12`。規格庫存由 0 份回到 1 份。**升排沒有營運端證據**，理由是 P1 已清空而 P2 其餘項目分別被新依賴、產品決策或「要先有真實資料」擋住，完整推導見規格 §1.4 —— 若 PO 認為有更該做的，這份規格可以整份擱置，它不擋任何其他工作 |
+| 2026-10-02 | **G08 規格書修訂為 v1.1：修補回補路徑的超賣缺口。** Codex 在 [PR #55](https://github.com/choka1227/coffee_GPT6/pull/55) 送出 `REQUEST_CHANGES`，指出 v1.0 的 `releaseStock` 用「今天 + branchId + productId」推論回補對象，卻沒有證據證明該訂單真的扣過；**判定成立**（兩條會真的超賣的路徑推導寫進規格新增的 §4.6）。修法：新增 `branch_product_stock_reservation` 保留憑據表（同一支 V13）、`reserveStock` 加 `orderId` 並在實扣時寫憑據、`releaseStock` 改為只依憑據回補、`setStock` 從無到有建立限量時清未結憑據；§13.9 由「跨日不回補」改為「回補到憑據記載的那一天」；新增設計決策 §13.12 與四條反向驗收 14a–14d。**施工階段不變（S1–S4），規格庫存不變（2 份）** |
+| 2026-10-02 | **登記 G08 規格書（[`specs/G08-branch-product-stock.md`](specs/G08-branch-product-stock.md)，v1.0）：分店每日可售數量與自動售完**，並把 G08 由 P2 升為 P1、排為工作順序第 17 項（金流線順延；與 [PR #54](https://github.com/choka1227/coffee_GPT6/pull/54) 的 G24 之編號協調見該節）。規格把原登記的「庫存扣減」**收斂為每日可售數量**，永續庫存帳與選項層庫存**另立 G28**（G08 §14），理由是後者牽涉會計決策且需要真實備量資料。Flyway 預定占用 **V13**，下一份自 V14 起算。**規格庫存 1 → 2 份，已滿上限，下一輪不再產出新規格** |
 | 2026-10-01 | **G25 實作隨 [PR #51](https://github.com/choka1227/coffee_GPT6/pull/51) 合併**（Claude 於 head `4085df9` 送出 `APPROVE`，auto-merge 合入；S1–S3 三階段全數完成，Flyway 實際占用 **V11__branch_last_order.sql**，所以下一份需要 migration 的規格自 **V12** 起算）：P1 表的 G25 列由「規格書已完成，待實作」改為「實作已合併」，工作順序第 15 項標為完成、**第 16 項（G27）成為目前這一項**，規格庫存由 1 份降為 **0 份**。**審查結論**：23 條驗收逐條核對通過 —— 逐分鐘等價性掃描（驗收 4）的期望值確實寫死而非回頭呼叫 `isOpenAt` 自我比對、跨夜的 `close + 1440 - m` 三處都對、四個既有打烊訊息逐字未動、§7 的五條越權防線齊備且都驗了「403 之後值沒被寫進去」、`coffee-orders` 變更量為零。**同批登記四項不擋合併的觀察，留給後續規格處理**：(a) `GET /api/branches/{id}/hours` 對不存在的分店由 200 變成 404（`stateAt` → `lastOrderMinutes` 會丟 404），新行為較正確故採納，但它是規格沒寫的契約變更，需補登為既定行為；(b) `InitialData` 與兩支既有測試改用明確欄位清單的 INSERT 是 `ADD COLUMN` 的必然連帶修正，做法正確但 PR 描述未列出；(c) `BranchController` 新增的 `@ExceptionHandler` 用 `getMessage().contains("lastOrderMinutes")` 比對字串辨識欄位，Jackson 訊息格式改變就會悄悄退回泛用訊息；(d) 規格 §5.7 要求的 `LAST_ORDER_WARNING_MINUTES = 30` 常數未抽出，`30` 寫死在 `MenuView.vue` 模板兩處 |
 | 2026-10-01 | **G26 實作隨 [PR #48](https://github.com/choka1227/coffee_GPT6/pull/48) 合併**（Claude 於 head `47b39a7` 送出 `APPROVE`，auto-merge 合入，主線合併提交 `ee74608`）：狀態由「待實作」改為「已合併」，工作順序第 14 項標為完成、第 15 項（G25）標為目前這一項。**每月最後一天 16:00–24:00 UTC 全員 CI 紅的時間彈已消除。** **登記 G27：無參數 `now()` 的自動化防線**（工作順序**新增第 16 項**，金流線順延為 17）—— G26 驗收 (b) 把「全 repo 不得呼叫無參數的 `YearMonth.now()`／`LocalDate.now()`／`LocalDateTime.now()`／`ZonedDateTime.now()`」寫成不變式，但沒有任何自動化在看，下一支寫日期的測試就能把同一類時間彈帶回來。修法是一支 ArchUnit 測試，**不另立規格書、不計入庫存**（比照 G26）；兩個關鍵點是「`ClassFileImporter` 不可排除測試碼」（G26 的缺陷就在測試裡，既有 `ModuleBoundariesTest` 加了 `DO_NOT_INCLUDE_TESTS` 所以當初放行了它）與「`Instant.now()` 必須放行」（`Instant` 與時區無關，列入會逼出注入 `Clock` 的大改）。可行性先行驗證過：全 repo 測試都在 `coffee-app`、`archunit-junit5` 已在其 test scope，零新相依。**另修正一項陳舊紀錄**：P1 區「`coffee-reporting` 沒有 `api` package」的架構缺口早已隨 G09／[PR #36](https://github.com/choka1227/coffee_GPT6/pull/36) 於 2026-09-28 結清（G09 的範圍本來就含這一項，見工作順序第 9 項），但那一列從未改掉 —— 本輪差點據此再寫一份規格，已標為已結清並註明教訓。**本輪未補第二份規格**，理由寫在「排程注意」段 |
 | 2026-10-01 | **依 Codex 在 [PR #49](https://github.com/choka1227/coffee_GPT6/pull/49) 的 `REQUEST_CHANGES` 修正「排程注意」段的陳舊即時狀態**：該段入口原本寫「目前（2026-09-29）待實作的規格兩份：G19（實作中）與 G23（待開工）」，並在後續兩段以現在式描述兩者的檔案衝突 —— 但同一檔案的工作順序早已記錄 G19／PR #42 與 G23／PR #45 都在 2026-09-30 合併。本檔是自動選工的依據，同時給出兩個互相矛盾的即時狀態會讓下一輪續作已完成的規格或誤判庫存。入口改為「目前（2026-10-01）待實作的規格一份：G25，實作已送審（PR #51）」，並在三段歷史說明前加上明確的「以下全部是歷史紀錄，自動選工請以工作順序與庫存數字為準」橫幅、兩段段首標為「已結案，保留為紀錄」並改為過去式。**保留而不刪除的理由**：裡面的排程推理（檔案交集怎麼算、為什麼序列化）對下一輪仍有參考價值，刪掉等於把判斷依據丟了 |
