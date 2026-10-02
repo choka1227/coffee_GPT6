@@ -596,7 +596,7 @@ public class BranchService implements Branches {
                     onDate,
                     resultBoolean(result, 2),
                     resultString(result, 3),
-                    (Integer) result.getObject(4)));
+                    resultInteger(result, 4)));
     Integer open = (Integer) result.getObject(5);
     if (open != null)
       row.hours.add(
@@ -615,6 +615,14 @@ public class BranchService implements Branches {
   private static String resultString(java.sql.ResultSet result, int column) {
     try {
       return result.getString(column);
+    } catch (java.sql.SQLException error) {
+      throw new IllegalStateException(error);
+    }
+  }
+
+  private static Integer resultInteger(java.sql.ResultSet result, int column) {
+    try {
+      return (Integer) result.getObject(column);
     } catch (java.sql.SQLException error) {
       throw new IllegalStateException(error);
     }
