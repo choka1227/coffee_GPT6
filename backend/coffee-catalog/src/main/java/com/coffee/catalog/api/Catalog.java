@@ -52,6 +52,18 @@ public interface Catalog {
       Long updatedAt,
       String updatedBy) {}
 
+  record ProductStock(
+      String branchId,
+      String productId,
+      String productName,
+      int onDate,
+      Integer quantity,
+      Integer remaining,
+      Long updatedAt,
+      String updatedBy) {}
+
+  record StockLine(String productId, int quantity) {}
+
   List<Product> list(Actor a, boolean manage, String branchId);
 
   Product sellable(String branchId, String id);
@@ -62,6 +74,10 @@ public interface Catalog {
 
   BranchAvailability setAvailability(
       Actor a, String branchId, String productId, String availability);
+
+  List<ProductStock> stock(Actor a, String branchId);
+
+  ProductStock setStock(Actor a, String branchId, String productId, Integer quantity);
 
   List<OptionGroup> productOptions(String productId);
 
