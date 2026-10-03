@@ -79,6 +79,10 @@ public interface Catalog {
 
   ProductStock setStock(Actor a, String branchId, String productId, Integer quantity);
 
+  void reserveStock(String branchId, String orderId, List<StockLine> lines);
+
+  void releaseStock(String branchId, String orderId);
+
   List<OptionGroup> productOptions(String productId);
 
   List<ResolvedOption> resolveOptions(String productId, List<String> optionIds);

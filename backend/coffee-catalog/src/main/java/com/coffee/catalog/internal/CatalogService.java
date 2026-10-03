@@ -366,6 +366,91 @@ public class CatalogService implements Catalog {
         branchId, productId, productName, today, quantity, remaining, now, actor.id());
   }
 
+  @Override
+  @Transactional
+  public void reserveStock(String branchId, String orderId, List<StockLine> lines) {
+    var quantities = new TreeMap<String, Integer>();
+    for (var line : lines) {
+      quantities.merge(line.productId(), line.quantity(), Math::addExact);
+    }
+    int today = today();
+    long now = System.currentTimeMillis();
+    for (var entry : quantities.entrySet()) {
+      var rows = db.queryForList(
+          "select quantity,remaining from branch_product_stock"
+              + " where branch_id=? and product_id=? and on_date=? for update",
+          branchId,
+          entry.getKey(),
+          today);
+      if (rows.isEmpty()) continue;
+      int remaining = ((Number) rows.get(0).get("remaining")).intValue();
+      int requested = entry.getValue();
+      if (remaining == 0) {
+        throw new Problem(400, "本店今日已售完此商品，請調整餐點");
+      }
+      if (remaining < requested) {
+        throw new Problem(400, "本店今日此商品僅剩 " + remaining + " 份，請調整數量");
+      }
+      db.update(
+          "update branch_product_stock set remaining=?,updated_at=?"
+              + " where branch_id=? and product_id=? and on_date=?",
+          Math.subtractExact(remaining, requested),
+          now,
+          branchId,
+          entry.getKey(),
+          today);
+      db.update(
+          "insert into branch_product_stock_reservation"
+              + "(order_id,product_id,branch_id,on_date,quantity,created_at) values(?,?,?,?,?,?)",
+          orderId,
+          entry.getKey(),
+          branchId,
+          today,
+          requested,
+          now);
+    }
+  }
+
+  @Override
+  @Transactional
+  public void releaseStock(String branchId, String orderId) {
+    var reservations = db.queryForList(
+        "select product_id,on_date,quantity from branch_product_stock_reservation"
+            + " where order_id=? and branch_id=? order by product_id for update",
+        orderId,
+        branchId);
+    if (reservations.isEmpty()) return;
+    long now = System.currentTimeMillis();
+    for (var reservation : reservations) {
+      String productId = Objects.toString(reservation.get("product_id"));
+      int onDate = ((Number) reservation.get("on_date")).intValue();
+      int reserved = ((Number) reservation.get("quantity")).intValue();
+      var stocks = db.queryForList(
+          "select quantity,remaining from branch_product_stock"
+              + " where branch_id=? and product_id=? and on_date=? for update",
+          branchId,
+          productId,
+          onDate);
+      if (!stocks.isEmpty()) {
+        int quantity = ((Number) stocks.get(0).get("quantity")).intValue();
+        int remaining = ((Number) stocks.get(0).get("remaining")).intValue();
+        int restored = Math.min(quantity, Math.addExact(remaining, reserved));
+        db.update(
+            "update branch_product_stock set remaining=?,updated_at=?"
+                + " where branch_id=? and product_id=? and on_date=?",
+            restored,
+            now,
+            branchId,
+            productId,
+            onDate);
+      }
+      db.update(
+          "delete from branch_product_stock_reservation where order_id=? and product_id=?",
+          orderId,
+          productId);
+    }
+  }
+
   private int today() {
     return Integer.parseInt(
         LocalDate.now(ZoneId.of("Asia/Taipei")).format(DateTimeFormatter.BASIC_ISO_DATE));

@@ -84,6 +84,12 @@ public class OrderService implements Orders {
     var applied = discounts.apply(q.discountCode(), q.branchId(), subtotal, now);
     int discountAmount = applied == null ? 0 : applied.discountAmount();
     total = Math.subtractExact(subtotal, discountAmount);
+    catalog.reserveStock(
+        q.branchId(),
+        id,
+        q.items().stream()
+            .map(line -> new Catalog.StockLine(line.productId(), line.quantity()))
+            .toList());
     db.update(
         "insert into"
             + " orders(id,branch_id,account_id,status,fulfillment,payment_method,total,discount_amount,note,created_at,idempotency_key,request_hash)"
@@ -486,6 +492,7 @@ public class OrderService implements Orders {
                     next));
     Problem.check(allowed, "訂單狀態已變更，或不允許此狀態轉換");
     db.update("update orders set status=? where id=?", next, id);
+    if ("CANCELLED".equals(next)) catalog.releaseStock(o.branchId(), id);
     audit.record(
         a,
         "ORDER_TRANSITION",

@@ -9,7 +9,7 @@
 ## 施工進度
 
 - [x] S1 — 資料層與讀寫端點
-- [ ] S2 — 扣減、保留憑據與取消回補
+- [x] S2 — 扣減、保留憑據與取消回補
 - [ ] S3 — 菜單剩餘數量與自動售完
 - [ ] S4 — POS 備量設定與剩餘徽章
 
@@ -25,12 +25,28 @@
 
 ## 後續
 
-下一階段是 S2。S1 刻意不把備量接入訂單建立流程，因此目前設定備量不會改變下單行為。
+下一階段是 S3：把今日剩餘數量與自動售完狀態接入菜單查詢。
+
+## S2 完成內容
+
+- `reserveStock` 先依商品合併數量、再按 `productId` 排序取行鎖；不限量商品略過，
+  限量不足則以規格訊息拒絕，成功扣減時同步寫入合併後的 reservation。
+- `OrderService.create` 在寫入訂單前、同一交易內保留庫存；既有 idempotency
+  提前回傳使重送不會重扣，任一品項失敗會回滾整筆扣減。
+- `releaseStock` 只依 reservation 記載的日期與數量回補，回補值夾在目前
+  `quantity` 內；限量列不存在時只刪憑據，不重建庫存列。
+- 訂單轉為 `CANCELLED` 後在同一交易內回補；刪除 reservation 使回補冪等。
+- 新增訂單路徑、同商品多行、整筆回滾、重送、取消、跨日、解除／重建限量、
+  不限量反向驗收，以及最後一份競爭與反向品項順序的併發測試。
 
 ## 驗證
 
 - `git diff --check`：通過
 - `npm test`：通過（80 tests）
 - `npm run build`：通過
+- S2 本地 `npm test`：通過（80 tests）
+- S2 本地 `npm run build`：通過
 - `./mvnw -B -ntp -Dtest=BranchProductStockMigrationTest,BranchProductStockAdminTest test`：
   本機因 Maven Central DNS 解析失敗而未能啟動；以最新推送 head 的 GitHub Actions 為主要後端驗證證據。
+- S2 `./mvnw -B -ntp -Dtest=BranchProductStockOrderingTest,BranchProductStockMigrationTest,BranchProductStockAdminTest test`：
+  本機仍因 Maven Central DNS 解析失敗而未進入編譯；推送後由最新 head 的 GitHub Actions 驗證。
