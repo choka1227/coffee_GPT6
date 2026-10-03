@@ -15,6 +15,7 @@ public interface Catalog {
       String badge,
       boolean active,
       String availability,
+      Integer remaining,
       List<OptionGroup> optionGroups) {}
 
   record OptionItem(

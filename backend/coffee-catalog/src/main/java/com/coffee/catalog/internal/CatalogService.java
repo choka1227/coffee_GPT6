@@ -29,7 +29,8 @@ public class CatalogService implements Catalog {
     return new Product(
         r.getString("id"), r.getString("name"), r.getString("subtitle"),
         r.getString("category"), r.getInt("price"), r.getInt("cost"),
-        r.getString("image"), r.getString("badge"), r.getBoolean("active"), "AVAILABLE", List.of());
+        r.getString("image"), r.getString("badge"), r.getBoolean("active"), "AVAILABLE", null,
+        List.of());
   }
 
   private OptionItem itemRow(ResultSet r, int n) throws SQLException {
@@ -88,17 +89,23 @@ public class CatalogService implements Catalog {
     var products = db.query(
         "select p.*,case when b.availability='UNLISTED' then 'UNLISTED'"
             + " when b.availability='SOLD_OUT' and b.sold_out_date=? then 'SOLD_OUT'"
+            + " when s.remaining=0 then 'SOLD_OUT'"
             + " else 'AVAILABLE' end as effective_availability"
+            + ",case when b.availability='UNLISTED' then null else s.remaining"
+            + " end as effective_remaining"
             + " from products p left join branch_products b"
             + " on b.product_id=p.id and b.branch_id=?"
+            + " left join branch_product_stock s"
+            + " on s.product_id=p.id and s.branch_id=? and s.on_date=?"
             + " where p.active=true and (b.availability is null or b.availability<>'UNLISTED')"
             + " order by p.sort_order,p.name",
         (r, n) -> {
           var p = productRow(r, n);
           return new Product(
               p.id(), p.name(), p.subtitle(), p.category(), p.price(), p.cost(), p.image(),
-              p.badge(), p.active(), r.getString("effective_availability"), List.of());
-        }, today, branchId);
+              p.badge(), p.active(), r.getString("effective_availability"),
+              (Integer) r.getObject("effective_remaining"), List.of());
+        }, today, branchId, branchId, today);
     return withProductOptions(products, false);
   }
 
@@ -107,7 +114,8 @@ public class CatalogService implements Catalog {
         .map(product -> new Product(
             product.id(), product.name(), product.subtitle(), product.category(), product.price(),
             manage ? product.cost() : 0, product.image(), product.badge(), product.active(),
-            product.availability(), productOptions(product.id(), manage)))
+            product.availability(), manage ? null : product.remaining(),
+            productOptions(product.id(), manage)))
         .toList();
   }
 
@@ -129,10 +137,23 @@ public class CatalogService implements Catalog {
       }
       availability = "SOLD_OUT".equals(value) ? "AVAILABLE" : value;
     }
+    Integer remaining = db.query(
+            "select remaining from branch_product_stock"
+                + " where branch_id=? and product_id=? and on_date=?",
+            (r, n) -> (Integer) r.getObject("remaining"),
+            branchId,
+            id,
+            today())
+        .stream()
+        .findFirst()
+        .orElse(null);
+    if (remaining != null && remaining == 0) {
+      throw new Problem(400, "本店今日已售完此商品，請調整餐點");
+    }
     return new Product(
         product.id(), product.name(), product.subtitle(), product.category(), product.price(),
         product.cost(), product.image(), product.badge(), product.active(), availability,
-        productOptions(id, false));
+        remaining, productOptions(id, false));
   }
 
   @Override
@@ -166,7 +187,8 @@ public class CatalogService implements Catalog {
     audit.record(actor, "PRODUCT_SAVE", id, null, "儲存商品 " + product.name());
     return new Product(
         id, product.name(), product.subtitle(), product.category(), product.price(), product.cost(),
-        product.image(), product.badge(), product.active(), "AVAILABLE", productOptions(id, true));
+        product.image(), product.badge(), product.active(), "AVAILABLE", null,
+        productOptions(id, true));
   }
 
   @Override

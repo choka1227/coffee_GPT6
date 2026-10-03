@@ -37,18 +37,22 @@ class BranchProductStockOrderingTest {
   @Autowired JdbcTemplate db;
 
   Actor cashier;
+  Actor headquarters;
 
   @BeforeEach
   void reset() {
     db.update("delete from branch_product_stock_reservation");
     db.update("delete from branch_product_stock");
+    db.update("delete from branch_products");
     cashier = identity.find("cashier");
+    headquarters = identity.find("hq");
   }
 
   @AfterEach
   void clean() {
     db.update("delete from branch_product_stock_reservation");
     db.update("delete from branch_product_stock");
+    db.update("delete from branch_products");
   }
 
   @Test
@@ -242,6 +246,57 @@ class BranchProductStockOrderingTest {
     assertThat(remaining("latte", today())).isZero();
   }
 
+  @Test
+  void menuShowsRemainingAndAutomaticallyMarksExhaustedStockSoldOut() {
+    catalog.setStock(cashier, "taipei", "latte", 2);
+
+    assertThat(menuProduct(cashier, "latte"))
+        .satisfies(
+            product -> {
+              assertThat(product.availability()).isEqualTo("AVAILABLE");
+              assertThat(product.remaining()).isEqualTo(2);
+            });
+
+    orders.create(cashier, createRequest(line("latte", 2)), UUID.randomUUID().toString());
+
+    assertThat(menuProduct(cashier, "latte"))
+        .satisfies(
+            product -> {
+              assertThat(product.availability()).isEqualTo("SOLD_OUT");
+              assertThat(product.remaining()).isZero();
+            });
+    assertThatThrownBy(() -> catalog.sellable("taipei", "latte"))
+        .isInstanceOfSatisfying(
+            Problem.class,
+            problem -> assertThat(problem).hasMessage("本店今日已售完此商品，請調整餐點"));
+  }
+
+  @Test
+  void menuKeepsUnlimitedAndManagementViewsStockNeutral() {
+    assertThat(menuProduct(cashier, "croissant"))
+        .satisfies(
+            product -> {
+              assertThat(product.availability()).isEqualTo("AVAILABLE");
+              assertThat(product.remaining()).isNull();
+            });
+    catalog.setStock(cashier, "taipei", "latte", 2);
+
+    assertThat(catalog.list(headquarters, true, null))
+        .allSatisfy(product -> assertThat(product.remaining()).isNull());
+  }
+
+  @Test
+  void unlistedStillTakesPriorityAndDoesNotLeakRemaining() {
+    catalog.setStock(cashier, "taipei", "latte", 0);
+    catalog.setAvailability(headquarters, "taipei", "latte", "UNLISTED");
+
+    assertThat(catalog.list(cashier, false, "taipei"))
+        .noneMatch(product -> product.id().equals("latte"));
+    assertThatThrownBy(() -> catalog.sellable("taipei", "latte"))
+        .isInstanceOfSatisfying(
+            Problem.class, problem -> assertThat(problem).hasMessage("本店未供應此商品"));
+  }
+
   private void reserveAfter(
       CountDownLatch start, String orderId, AtomicInteger successes, List<Catalog.StockLine> lines) {
     try {
@@ -269,6 +324,13 @@ class BranchProductStockOrderingTest {
 
   private Catalog.StockLine stock(String productId, int quantity) {
     return new Catalog.StockLine(productId, quantity);
+  }
+
+  private Catalog.Product menuProduct(Actor actor, String productId) {
+    return catalog.list(actor, false, "taipei").stream()
+        .filter(product -> product.id().equals(productId))
+        .findFirst()
+        .orElseThrow();
   }
 
   private int remaining(String productId, int onDate) {
