@@ -29,7 +29,8 @@ public class CatalogService implements Catalog {
     return new Product(
         r.getString("id"), r.getString("name"), r.getString("subtitle"),
         r.getString("category"), r.getInt("price"), r.getInt("cost"),
-        r.getString("image"), r.getString("badge"), r.getBoolean("active"), "AVAILABLE", List.of());
+        r.getString("image"), r.getString("badge"), r.getBoolean("active"), "AVAILABLE", null,
+        List.of());
   }
 
   private OptionItem itemRow(ResultSet r, int n) throws SQLException {
@@ -88,17 +89,23 @@ public class CatalogService implements Catalog {
     var products = db.query(
         "select p.*,case when b.availability='UNLISTED' then 'UNLISTED'"
             + " when b.availability='SOLD_OUT' and b.sold_out_date=? then 'SOLD_OUT'"
+            + " when s.remaining=0 then 'SOLD_OUT'"
             + " else 'AVAILABLE' end as effective_availability"
+            + ",case when b.availability='UNLISTED' then null else s.remaining"
+            + " end as effective_remaining"
             + " from products p left join branch_products b"
             + " on b.product_id=p.id and b.branch_id=?"
+            + " left join branch_product_stock s"
+            + " on s.product_id=p.id and s.branch_id=? and s.on_date=?"
             + " where p.active=true and (b.availability is null or b.availability<>'UNLISTED')"
             + " order by p.sort_order,p.name",
         (r, n) -> {
           var p = productRow(r, n);
           return new Product(
               p.id(), p.name(), p.subtitle(), p.category(), p.price(), p.cost(), p.image(),
-              p.badge(), p.active(), r.getString("effective_availability"), List.of());
-        }, today, branchId);
+              p.badge(), p.active(), r.getString("effective_availability"),
+              (Integer) r.getObject("effective_remaining"), List.of());
+        }, today, branchId, branchId, today);
     return withProductOptions(products, false);
   }
 
@@ -107,7 +114,8 @@ public class CatalogService implements Catalog {
         .map(product -> new Product(
             product.id(), product.name(), product.subtitle(), product.category(), product.price(),
             manage ? product.cost() : 0, product.image(), product.badge(), product.active(),
-            product.availability(), productOptions(product.id(), manage)))
+            product.availability(), manage ? null : product.remaining(),
+            productOptions(product.id(), manage)))
         .toList();
   }
 
@@ -129,10 +137,23 @@ public class CatalogService implements Catalog {
       }
       availability = "SOLD_OUT".equals(value) ? "AVAILABLE" : value;
     }
+    Integer remaining = db.query(
+            "select remaining from branch_product_stock"
+                + " where branch_id=? and product_id=? and on_date=?",
+            (r, n) -> (Integer) r.getObject("remaining"),
+            branchId,
+            id,
+            today())
+        .stream()
+        .findFirst()
+        .orElse(null);
+    if (remaining != null && remaining == 0) {
+      throw new Problem(400, "本店今日已售完此商品，請調整餐點");
+    }
     return new Product(
         product.id(), product.name(), product.subtitle(), product.category(), product.price(),
         product.cost(), product.image(), product.badge(), product.active(), availability,
-        productOptions(id, false));
+        remaining, productOptions(id, false));
   }
 
   @Override
@@ -166,7 +187,8 @@ public class CatalogService implements Catalog {
     audit.record(actor, "PRODUCT_SAVE", id, null, "儲存商品 " + product.name());
     return new Product(
         id, product.name(), product.subtitle(), product.category(), product.price(), product.cost(),
-        product.image(), product.badge(), product.active(), "AVAILABLE", productOptions(id, true));
+        product.image(), product.badge(), product.active(), "AVAILABLE", null,
+        productOptions(id, true));
   }
 
   @Override
@@ -264,6 +286,191 @@ public class CatalogService implements Catalog {
         .stream()
         .findFirst()
         .orElse("AVAILABLE");
+  }
+
+  @Override
+  public List<ProductStock> stock(Actor actor, String branchId) {
+    actor.require("MENU_AVAILABILITY");
+    actor.branch(branchId);
+    int today = today();
+    return db.query(
+        "select p.id,p.name,s.quantity,s.remaining,s.updated_at,s.updated_by"
+            + " from products p left join branch_product_stock s"
+            + " on s.product_id=p.id and s.branch_id=? and s.on_date=?"
+            + " where p.active=true order by p.sort_order,p.name",
+        (r, n) -> new ProductStock(
+            branchId,
+            r.getString("id"),
+            r.getString("name"),
+            today,
+            (Integer) r.getObject("quantity"),
+            (Integer) r.getObject("remaining"),
+            (Long) r.getObject("updated_at"),
+            r.getString("updated_by")),
+        branchId,
+        today);
+  }
+
+  @Override
+  @Transactional
+  public ProductStock setStock(
+      Actor actor, String branchId, String productId, Integer quantity) {
+    actor.require("MENU_AVAILABILITY");
+    actor.branch(branchId);
+    var products = db.queryForList(
+        "select id,name from products where id=? and active=true for update", productId);
+    if (products.isEmpty()) throw new Problem(404, "找不到商品");
+    if (quantity != null) {
+      Problem.check(quantity >= 0 && quantity <= 9999, "可售數量需為 0–9999");
+    }
+
+    int today = today();
+    String productName = Objects.toString(products.get(0).get("name"));
+    long now = System.currentTimeMillis();
+    if (quantity == null) {
+      db.update(
+          "delete from branch_product_stock where branch_id=? and product_id=? and on_date=?",
+          branchId,
+          productId,
+          today);
+      audit.record(actor, "STOCK_SET", productId, branchId,
+          "解除 " + productName + " 的今日限量");
+      return new ProductStock(
+          branchId, productId, productName, today, null, null, null, null);
+    }
+
+    var rows = db.queryForList(
+        "select quantity,remaining from branch_product_stock"
+            + " where branch_id=? and product_id=? and on_date=? for update",
+        branchId,
+        productId,
+        today);
+    int remaining;
+    if (rows.isEmpty()) {
+      db.update(
+          "delete from branch_product_stock_reservation"
+              + " where branch_id=? and product_id=? and on_date=?",
+          branchId,
+          productId,
+          today);
+      remaining = quantity;
+      db.update(
+          "insert into branch_product_stock"
+              + "(branch_id,product_id,on_date,quantity,remaining,updated_at,updated_by)"
+              + " values(?,?,?,?,?,?,?)",
+          branchId,
+          productId,
+          today,
+          quantity,
+          remaining,
+          now,
+          actor.id());
+    } else {
+      int oldQuantity = ((Number) rows.get(0).get("quantity")).intValue();
+      int oldRemaining = ((Number) rows.get(0).get("remaining")).intValue();
+      int sold = Math.subtractExact(oldQuantity, oldRemaining);
+      remaining = Math.max(0, Math.subtractExact(quantity, sold));
+      db.update(
+          "update branch_product_stock"
+              + " set quantity=?,remaining=?,updated_at=?,updated_by=?"
+              + " where branch_id=? and product_id=? and on_date=?",
+          quantity,
+          remaining,
+          now,
+          actor.id(),
+          branchId,
+          productId,
+          today);
+    }
+    audit.record(actor, "STOCK_SET", productId, branchId,
+        productName + " 今日可售 " + quantity + " 份，剩餘 " + remaining + " 份");
+    return new ProductStock(
+        branchId, productId, productName, today, quantity, remaining, now, actor.id());
+  }
+
+  @Override
+  @Transactional
+  public void reserveStock(String branchId, String orderId, List<StockLine> lines) {
+    var quantities = new TreeMap<String, Integer>();
+    for (var line : lines) {
+      quantities.merge(line.productId(), line.quantity(), Math::addExact);
+    }
+    int today = today();
+    long now = System.currentTimeMillis();
+    for (var entry : quantities.entrySet()) {
+      var rows = db.queryForList(
+          "select quantity,remaining from branch_product_stock"
+              + " where branch_id=? and product_id=? and on_date=? for update",
+          branchId,
+          entry.getKey(),
+          today);
+      if (rows.isEmpty()) continue;
+      int remaining = ((Number) rows.get(0).get("remaining")).intValue();
+      int requested = entry.getValue();
+      if (remaining == 0) {
+        throw new Problem(400, "本店今日已售完此商品，請調整餐點");
+      }
+      if (remaining < requested) {
+        throw new Problem(400, "本店今日此商品僅剩 " + remaining + " 份，請調整數量");
+      }
+      db.update(
+          "update branch_product_stock set remaining=?,updated_at=?"
+              + " where branch_id=? and product_id=? and on_date=?",
+          Math.subtractExact(remaining, requested),
+          now,
+          branchId,
+          entry.getKey(),
+          today);
+      db.update(
+          "insert into branch_product_stock_reservation"
+              + "(order_id,product_id,branch_id,on_date,quantity,created_at) values(?,?,?,?,?,?)",
+          orderId,
+          entry.getKey(),
+          branchId,
+          today,
+          requested,
+          now);
+    }
+  }
+
+  @Override
+  @Transactional
+  public void releaseStock(String branchId, String orderId) {
+    var reservations = db.queryForList(
+        "select product_id,on_date,quantity from branch_product_stock_reservation"
+            + " where order_id=? and branch_id=? order by product_id for update",
+        orderId,
+        branchId);
+    if (reservations.isEmpty()) return;
+    long now = System.currentTimeMillis();
+    for (var reservation : reservations) {
+      String productId = Objects.toString(reservation.get("product_id"));
+      int onDate = ((Number) reservation.get("on_date")).intValue();
+      int reserved = ((Number) reservation.get("quantity")).intValue();
+      var stocks = db.queryForList(
+          "select quantity,remaining from branch_product_stock"
+              + " where branch_id=? and product_id=? and on_date=? for update",
+          branchId,
+          productId,
+          onDate);
+      if (!stocks.isEmpty()) {
+        int quantity = ((Number) stocks.get(0).get("quantity")).intValue();
+        int remaining = ((Number) stocks.get(0).get("remaining")).intValue();
+        int restored = Math.min(quantity, Math.addExact(remaining, reserved));
+        db.update(
+            "update branch_product_stock set remaining=?,updated_at=?"
+                + " where branch_id=? and product_id=? and on_date=?",
+            restored,
+            now,
+            branchId,
+            productId,
+            onDate);
+      }
+      db.update(
+          "delete from branch_product_stock_reservation where order_id=? and product_id=?",
+          orderId,
+          productId);
+    }
   }
 
   private int today() {

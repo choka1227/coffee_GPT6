@@ -72,6 +72,7 @@ class AuditTrailTest {
                     "",
                     true,
                     "AVAILABLE",
+                    null,
                     List.of()))
             .id();
     Orders.Order created =

@@ -80,6 +80,7 @@ function add() {
     badge: "",
     active: true,
     availability: "AVAILABLE",
+    remaining: null,
     optionGroups: [],
   };
 }

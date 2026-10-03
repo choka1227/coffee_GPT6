@@ -29,8 +29,8 @@ interface MenuScenario {
 async function mountMenu(
   actor: Actor,
   branches: Branch[] = [branchFixture()],
+  product: Product = productFixture(),
 ): Promise<MenuScenario> {
-  const product = productFixture();
   const { fetch, requests } = stubApi({
     "/api/branches": branches,
     "/api/payments/config": { enabled: true, environment: "stage" },
@@ -66,6 +66,34 @@ async function mountMenu(
     "/api/menu/availability": () => {
       product.availability = "SOLD_OUT";
       return {};
+    },
+    "/api/menu/stock": (request: StubbedRequest) => {
+      if (request.method === "GET") {
+        return [
+          {
+            branchId: "B1",
+            productId: product.id,
+            productName: product.name,
+            onDate: 20261003,
+            quantity: product.remaining,
+            remaining: product.remaining,
+            updatedAt: null,
+            updatedBy: null,
+          },
+        ];
+      }
+      const quantity = (request.body as { quantity: number | null }).quantity;
+      product.remaining = quantity;
+      return {
+        branchId: "B1",
+        productId: product.id,
+        productName: product.name,
+        onDate: 20261003,
+        quantity,
+        remaining: quantity,
+        updatedAt: 1,
+        updatedBy: actor.id,
+      };
     },
     "/api/orders": orderFixture(),
     "/api/orders/O1/cash": orderFixture({
@@ -195,6 +223,60 @@ describe("MenuView 可見性", () => {
 
     expect(checkoutButton(wrapper).attributes("disabled")).toBeDefined();
     expect(wrapper.find(".error-state").exists()).toBe(true);
+  });
+
+  it("POS 商品有剩餘量時顯示剩餘徽章", async () => {
+    const { wrapper } = await mountMenu(
+      branchStaffActor(),
+      [branchFixture()],
+      productFixture({ remaining: 2 }),
+    );
+
+    expect(wrapper.get(".remaining-badge").text()).toBe("剩 2 份");
+  });
+
+  it("不限量商品不顯示剩餘徽章", async () => {
+    const { wrapper } = await mountMenu(branchStaffActor());
+
+    expect(wrapper.find(".remaining-badge").exists()).toBe(false);
+  });
+
+  it("門市人員可設定與解除今日備量並由重載菜單更新畫面", async () => {
+    const { wrapper, requests } = await mountMenu(branchStaffActor());
+    const stockButton = wrapper.findAll("button").find((button) => button.text() === "設定備量");
+    expect(stockButton).toBeDefined();
+    await stockButton!.trigger("click");
+    await flushPromises();
+
+    await labelByText(wrapper, "今日備量")!.get("input").setValue("5");
+    await wrapper.get("form.stock-form").trigger("submit");
+    await flushPromises();
+    await flushPromises();
+
+    expect(
+      requests.find(
+        (request) => request.path === "/api/menu/stock" && request.method === "POST",
+      )?.body,
+    ).toEqual({ branchId: "B1", productId: "P1", quantity: 5 });
+    expect(wrapper.get(".remaining-badge").text()).toBe("剩 5 份");
+
+    await wrapper.findAll("button").find((button) => button.text() === "設定備量")!.trigger("click");
+    await flushPromises();
+    await wrapper.findAll("button").find((button) => button.text() === "解除限量")!.trigger("click");
+    await flushPromises();
+    await flushPromises();
+
+    const writes = requests.filter(
+      (request) => request.path === "/api/menu/stock" && request.method === "POST",
+    );
+    expect(writes.at(-1)?.body).toEqual({ branchId: "B1", productId: "P1", quantity: null });
+    expect(wrapper.find(".remaining-badge").exists()).toBe(false);
+  });
+
+  it("顧客模式不顯示設定備量按鈕", async () => {
+    const { wrapper } = await mountMenu(customerActor());
+
+    expect(wrapper.findAll("button").some((button) => button.text() === "設定備量")).toBe(false);
   });
 });
 

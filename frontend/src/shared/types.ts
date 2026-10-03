@@ -56,7 +56,18 @@ export interface Product {
   badge: string;
   active: boolean;
   availability: "AVAILABLE" | "SOLD_OUT";
+  remaining: number | null;
   optionGroups: OptionGroup[];
+}
+export interface ProductStock {
+  branchId: string;
+  productId: string;
+  productName: string;
+  onDate: number;
+  quantity: number | null;
+  remaining: number | null;
+  updatedAt: number | null;
+  updatedBy: string | null;
 }
 export interface BranchAvailability {
   branchId: string;

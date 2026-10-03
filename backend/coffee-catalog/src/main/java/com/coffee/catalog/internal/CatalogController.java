@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 class CatalogController {
   record GroupBinding(List<String> groupIds) {}
   record AvailabilityInput(String branchId, String productId, String availability) {}
+  record StockInput(String branchId, String productId, Integer quantity) {}
 
   private final Catalog s;
 
@@ -40,6 +41,18 @@ class CatalogController {
   Catalog.BranchAvailability setAvailability(
       @RequestAttribute Actor actor, @RequestBody AvailabilityInput input) {
     return s.setAvailability(actor, input.branchId(), input.productId(), input.availability());
+  }
+
+  @GetMapping("/stock")
+  List<Catalog.ProductStock> stock(
+      @RequestAttribute Actor actor, @RequestParam String branchId) {
+    return s.stock(actor, branchId);
+  }
+
+  @PostMapping("/stock")
+  Catalog.ProductStock setStock(
+      @RequestAttribute Actor actor, @RequestBody StockInput input) {
+    return s.setStock(actor, input.branchId(), input.productId(), input.quantity());
   }
 
   @GetMapping("/options")

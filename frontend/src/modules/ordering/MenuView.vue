@@ -24,6 +24,7 @@ import type {
   BranchHoursResponse,
   CartLine,
   Order,
+  ProductStock,
 } from "../../shared/types";
 import { minuteTime, money } from "../../shared/format";
 import { notify } from "../../shared/notice";
@@ -60,6 +61,10 @@ const auth = useAuth(),
   quantity = ref(1),
   pendingCashOrder = ref<Order | null>(null),
   receipt = ref<Order | null>(null),
+  stockProduct = ref<Product | null>(null),
+  stockQuantity = ref<number | undefined>(),
+  stockCurrent = ref<ProductStock | null>(null),
+  stockBusy = ref(false),
   branchHours = ref<BranchHours[]>([]),
   todayOverride = ref<BranchDayOverride | null>(null),
   config = ref({ enabled: false, environment: "stage" });
@@ -410,6 +415,50 @@ async function toggleAvailability(p: Product) {
     busy.value = false;
   }
 }
+async function openStock(p: Product) {
+  if (!p.id || !branchId.value || stockBusy.value) return;
+  stockBusy.value = true;
+  try {
+    const stocks = await api<ProductStock[]>(
+      `/menu/stock?branchId=${encodeURIComponent(branchId.value)}`,
+    );
+    stockCurrent.value = stocks.find((stock) => stock.productId === p.id) || null;
+    stockQuantity.value = stockCurrent.value?.quantity ?? undefined;
+    stockProduct.value = p;
+  } catch (e) {
+    notify((e as Error).message);
+  } finally {
+    stockBusy.value = false;
+  }
+}
+async function saveStock(clear = false) {
+  if (!stockProduct.value?.id || !branchId.value || stockBusy.value) return;
+  const quantity = clear ? null : stockQuantity.value;
+  if (
+    quantity !== null &&
+    (!Number.isInteger(quantity) || quantity === undefined || quantity < 0 || quantity > 9999)
+  ) {
+    notify("可售數量需為 0–9999");
+    return;
+  }
+  stockBusy.value = true;
+  try {
+    await send<ProductStock>("/menu/stock", {
+      branchId: branchId.value,
+      productId: stockProduct.value.id,
+      quantity,
+    });
+    notify(clear ? "已解除今日限量" : "已更新今日備量");
+    stockProduct.value = null;
+    stockCurrent.value = null;
+    stockQuantity.value = undefined;
+    await load();
+  } catch (e) {
+    notify((e as Error).message);
+  } finally {
+    stockBusy.value = false;
+  }
+}
 </script>
 <template>
   <div v-if="!auth.can('ORDER_CREATE')" class="empty-state">
@@ -550,7 +599,10 @@ async function toggleAvailability(p: Product) {
               :alt="p.category + '示意照片'"
               loading="lazy"
             /><span v-if="p.availability === 'SOLD_OUT'" class="product-badge sold-out">今日售完</span
-            ><span v-else-if="p.badge" class="product-badge">{{ p.badge }}</span>
+            ><span v-else-if="p.badge" class="product-badge">{{ p.badge }}</span
+            ><span v-if="p.remaining !== null && p.remaining > 0" class="remaining-badge"
+              >剩 {{ p.remaining }} 份</span
+            >
           </div>
           <div class="product-copy">
             <h3>{{ p.name }}</h3>
@@ -561,12 +613,19 @@ async function toggleAvailability(p: Product) {
                 ><Plus :size="19"
               /></span>
             </div>
-            <button
-              v-if="auth.can('MENU_AVAILABILITY')"
-              class="availability-action"
-              type="button"
-              @click.stop="toggleAvailability(p)"
-            >{{ p.availability === "SOLD_OUT" ? "恢復供應" : "標記售完" }}</button>
+            <div v-if="auth.can('MENU_AVAILABILITY')" class="product-actions">
+              <button
+                class="availability-action"
+                type="button"
+                @click.stop="toggleAvailability(p)"
+              >{{ p.availability === "SOLD_OUT" ? "恢復供應" : "標記售完" }}</button>
+              <button
+                class="availability-action"
+                type="button"
+                :disabled="stockBusy"
+                @click.stop="openStock(p)"
+              >設定備量</button>
+            </div>
           </div>
         </article>
       </div>
@@ -753,6 +812,17 @@ async function toggleAvailability(p: Product) {
     >
       <ShoppingBag :size="19" />{{ mobileCart ? "繼續選餐" : "查看點餐單" }} ·
       {{ count }} 項 <strong>{{ money(total) }}</strong></button
+    ><Modal v-if="stockProduct" :title="`設定 ${stockProduct.name} 今日備量`" @close="stockProduct = null"
+      ><form class="stock-form" @submit.prevent="saveStock(false)">
+        <p class="muted">
+          {{ stockCurrent?.remaining == null ? "目前不限量" : `目前剩 ${stockCurrent.remaining} 份` }}
+        </p>
+        <label>今日備量<input v-model.number="stockQuantity" type="number" min="0" max="9999" step="1" required /></label>
+        <div class="stock-form-actions">
+          <button class="btn secondary" type="button" :disabled="stockBusy" @click="saveStock(true)">解除限量</button>
+          <button class="btn primary" type="submit" :disabled="stockBusy">儲存備量</button>
+        </div>
+      </form></Modal
     ><Modal v-if="selected" :title="selected.name" @close="selected = null"
       ><div class="product-detail">
         <img
