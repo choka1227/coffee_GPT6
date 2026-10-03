@@ -3,7 +3,7 @@
 | 項目 | 內容 |
 | --- | --- |
 | 缺口編號 | G08（P2 升為 P1） |
-| 版本 | **v1.1（2026-10-02）** —— v1.1 修補 v1.0 回補路徑的超賣缺口，新增保留憑據表，見 §4.6、§5.5、§13.12 與 §15 |
+| 版本 | **v1.2（2026-10-03）** —— v1.1 修補 v1.0 回補路徑的超賣缺口，新增保留憑據表（§4.6、§5.5、§13.12）；v1.2 修補兩處規格缺陷：驗收 16 原條件不可能成立（§5.6 的「v1.2 修正」），剩餘徽章與「今日售完」徽章的關係未定（§13.13、驗收 19a）。完整對照見 §15 |
 | 登記來源 | `docs/GAP-ANALYSIS.md` P2 表第 G08 列：「`products` 沒有任何庫存欄位。注意 G13（售罄）是 G08 的輕量版」 |
 | Flyway 版號 | **V13**（V12 由 G24 占用，見 §4.1） |
 | 涉及後端模組 | `coffee-catalog`（主）、`coffee-orders`（呼叫端） |
@@ -373,7 +373,7 @@ releaseStock(branchId, orderId):
 
 | `branch_products` | 當日 `remaining` | `effective_availability` | `remaining` |
 | --- | --- | --- | --- |
-| `UNLISTED` | 任意 | `UNLISTED` | `null`（不供應就不談剩幾份） |
+| `UNLISTED` | 任意 | **整列不回傳** —— 既有 `WHERE` 已把它排除（見下方「v1.2 修正」） | 不適用 |
 | `SOLD_OUT` 且 `sold_out_date=今天` | 任意 | `SOLD_OUT` | 照實回傳 |
 | 其他 | 無列 | `AVAILABLE` | `null` |
 | 其他 | `0` | **`SOLD_OUT`** | `0` |
@@ -382,6 +382,21 @@ releaseStock(branchId, orderId):
 `manage=true` 分支（總部的商品維護）**不接** `branchId`，所以 `remaining` 一律 `null`。這不是疏漏：那個畫面管的是跨店的商品主檔，顯示某一店的剩餘數量沒有意義。
 
 > **注意順序：** 「`remaining == 0` ⇒ `SOLD_OUT`」放在 `UNLISTED` **之後**判斷。`UNLISTED` 代表「本店不供應」，它比「今天賣完」更強，不能被覆蓋。
+
+> **v1.2 修正 —— `UNLISTED` 那一列在顧客／POS 菜單上根本不會出現。**
+> v1.1 的上表（與當時的驗收 16）照抄了 `effective_availability` 的 `CASE`，卻沒有一併讀 `list` 既有的 `WHERE` 子句：
+>
+> ```sql
+> where p.active=true and (b.availability is null or b.availability<>'UNLISTED')
+> ```
+>
+> 這一段把 `UNLISTED` 的商品**整列排除**，所以 `CASE` 裡的 `'UNLISTED'` 分支從來不會被取用 —— 它在本規格之前就已經是不可達的程式碼。`CoffeeIntegrationTest` 明確斷言顧客菜單不含 `UNLISTED` 商品，而本規格 §5.6 又禁止放寬既有斷言，因此 v1.1 的驗收 16（要求回傳 `UNLISTED` 商品並帶 `availability='UNLISTED'`）**在不破壞既有契約的前提下不可能成立**。
+>
+> **決定：維持既有的隱藏契約，不讓 `UNLISTED` 商品出現在顧客／POS 菜單。** 隱藏比回傳更安全：商品不在回應裡，就不可能洩漏 `remaining`。`sellable` 仍以 `本店未供應此商品` 擋下單一商品的直接查詢（`CatalogService.sellable` 既有行為，未改）。驗收 16 已依此改寫。
+>
+> Codex 在 [PR #59](https://github.com/choka1227/coffee_GPT6/pull/59) 依 `AGENTS.md`「先說出來，但講完就繼續做」處理：保留隱藏行為、不動既有斷言、在 PR 描述與 `docs/reports/G08-branch-product-stock.md` 明記偏離。那是對的做法，缺陷在規格端。
+>
+> **推翻它的代價：** 要讓顧客菜單回傳 `UNLISTED` 商品，就得改寫 `CoffeeIntegrationTest` 的既有斷言、決定前端該怎麼渲染一個「本店不供應」的商品卡（目前前端沒有這個狀態的樣式），並確認 `remaining` 在那條路徑上被遮成 `null`。換到的只有「顧客看得到本店不供應的品項」—— 那是體驗上的退步，不是進步。
 
 ### 5.7 前端（S4）
 
@@ -409,7 +424,7 @@ export interface ProductStock {
 
 **`modules/ordering/MenuView.vue`** —— 設定與顯示都放在 POS 菜單，與既有的「標記售完」按鈕（`MenuView.vue:569`）同一處：
 
-1. 商品卡在「今日售完」徽章（`MenuView.vue:552`）旁，`remaining !== null && remaining > 0` 時顯示 `剩 {{ remaining }} 份`
+1. 商品卡在「今日售完」徽章（`MenuView.vue:552`）旁，`availability !== "SOLD_OUT" && remaining !== null && remaining > 0` 時顯示 `剩 {{ remaining }} 份`。**手動標記售完時不顯示剩餘徽章**（兩個徽章不並存，v1.2 新增，理由見 §13.13）
 2. 店員模式的按鈕列（`MenuView.vue:569` 那一組）增加「設定備量」，開一個只有一個數字輸入與「解除限量」的小表單，送 `POST /api/menu/stock`
 3. 成功後重新載入菜單（沿用既有的 `load()`），**不要**在前端自己算 `remaining`
 
@@ -604,13 +619,14 @@ record StockInput(String branchId, String productId, Integer quantity) {}
 **菜單顯示（S3）**
 
 - [ ] 15. `remaining` 為 0 時，`GET /api/menu?branchId=X` 該商品的 `availability` 為 `SOLD_OUT`、`remaining` 為 `0`（S3）
-- [ ] 16. 同時是 `UNLISTED` 且 `remaining=0` 時，`availability` 為 **`UNLISTED`**、`remaining` 為 `null`（S3）
+- [ ] 16. **（v1.2 改寫，原條件不可能成立，推導見 §5.6 的「v1.2 修正」）** 同時是 `UNLISTED` 且 `remaining=0` 時，該商品**不出現在** `GET /api/menu?branchId=X` 的回應中（既有隱藏契約，`CoffeeIntegrationTest` 已鎖定），因此也不洩漏 `remaining`；`sellable("X", 該商品)` 仍以 400「本店未供應此商品」擋下（S3）
 - [ ] 17. 沒有設定備量的商品 `remaining` 為 `null`，`availability` 與本規格之前**完全相同**（S3）
 - [ ] 18. `GET /api/menu?manage=true` 的 `remaining` 一律 `null`（S3）
 
 **前端（S4）**
 
 - [ ] 19. POS 菜單在 `remaining > 0` 時顯示「剩 N 份」，`remaining` 為 `null` 時**不顯示**該徽章（S4）
+- [ ] 19a. **（v1.2 新增）** 手動標記售完且當日 `remaining > 0` 時，商品卡**只顯示「今日售完」，不顯示「剩 N 份」**（兩個徽章不並存，理由見 §13.13）（S4）
 - [ ] 20. 店員可在 POS 菜單設定與解除某商品的今日備量，成功後畫面上的剩餘數字更新（S4）
 - [ ] 21. 顧客模式看不到「設定備量」按鈕（S4）
 
@@ -808,6 +824,24 @@ record StockInput(String branchId, String productId, Integer quantity) {}
 
 **推翻它的代價：** 要回到推論式回補，就要先證明上面兩條路徑在營運上不可能發生 —— 做不到，因為「先不設限量、賣一陣子才設」是最自然的使用方式（店員早上不知道今天備多少，中午才決定）。另一條路是改用庫存列版號，§4.6 最後一段寫了為什麼那條更貴。
 
+### 13.13 剩餘徽章與「今日售完」徽章不並存 —— **售完優先（v1.2 新增）**
+
+**決定：** 商品卡在 `availability === "SOLD_OUT"` 時**只顯示「今日售完」**，即使當日 `remaining > 0` 也不顯示「剩 N 份」。
+
+**為什麼這一條是 v1.2 才出現：** v1.1 的 §5.7 第 1 點只寫了「`remaining !== null && remaining > 0` 時顯示」，沒有說它與既有的「今日售完」徽章（`MenuView.vue:552`）之間的關係。照字面實作出來的結果是兩個獨立的 `v-if`，於是「店員手動標記售完」且「當日還有備量」時，同一張卡會同時出現「今日售完」與「剩 5 份」—— 兩句話互相矛盾，而且店員會以為系統算錯。這是規格沒寫清楚造成的，不是實作判斷錯誤（Codex 在 [PR #59](https://github.com/choka1227/coffee_GPT6/pull/59) 照 v1.1 的字面做對了）。
+
+**理由：**
+
+1. **這是 §13.3「兩個獨立判斷來源，任一成立就不能賣」在 UI 上的必然推論。** 後端兩個來源分開是對的（取消回補才能零狀態），但畫面上要回答的只有一個問題：「現在能不能賣」。不能賣的時候，「還剩幾份」是多餘且誤導的資訊
+2. **手動售完的語意比備量更強。** 店員按「標記售完」可能是品質問題、可能是臨時決定（§13.3 的理由 3）。這種情形下剩餘數字正確但無意義 —— 那些份數今天就是不賣
+3. **資料不必改。** 後端照 §5.6 繼續回傳真實的 `remaining`（手動 `SOLD_OUT` 那一列是「照實回傳」），只在前端決定不渲染。這樣「恢復供應」之後徽章會自己正確顯示剩餘量，不需要任何狀態回捲
+
+**實作：** 剩餘徽章的條件加一個前綴 —— `v-if="p.availability !== 'SOLD_OUT' && p.remaining !== null && p.remaining > 0"`。一行，不動後端、不動 schema。驗收見 §10 第 19a 條。
+
+**代價：** 手動售完期間店員在菜單上看不到當日剩餘量。要查得到的話從「設定備量」表單進去（它會顯示「目前剩 N 份」），所以資訊沒有消失，只是不在卡面上。
+
+**推翻它的代價：** 若日後認為店員需要在卡面上同時看到兩者，做法不是把徽章並列（矛盾仍在），而是把售完徽章的文案改成能同時表達兩件事的句子（例如「今日售完（尚餘 5 份未開賣）」）。那需要文案決定與較寬的徽章版面，成本遠高於現在這一行。
+
 ---
 
 ## 14. 登記給後續的缺口
@@ -832,3 +866,4 @@ record StockInput(String branchId, String productId, Integer quantity) {}
 | --- | --- | --- |
 | 2026-10-02 | v1.0 | 初版。G08 由 P2 升為 P1，排為工作順序第 18 項。Flyway 占用 V13。登記 G28（永續庫存帳與選項層庫存） |
 | 2026-10-02 | v1.1 | **修補 v1.0 回補路徑的交易正確性缺口**（Codex 於 [PR #55](https://github.com/choka1227/coffee_GPT6/pull/55) 的 `REQUEST_CHANGES` 指出，判定成立）。v1.0 的 `releaseStock` 用「今天 + branchId + productId」推論回補對象，有兩條路徑會回補未曾扣減的訂單並**真的造成超賣**（推導見新增的 §4.6）。修法：新增 `branch_product_stock_reservation` 保留憑據表（同一支 V13，§4.2），`reserveStock` 加 `orderId` 參數並在實際扣到時寫憑據（§5.2 第 4f 步），`releaseStock` 簽名改為 `(branchId, orderId)` 並只依憑據回補（§5.5），`setStock` 在從無到有建立限量時清掉未結憑據（§5.3 第 6 步）。§13.9 由「跨日不回補」改為「回補到憑據記載的那一天」，紅線不變但帳更準。新增設計決策 §13.12、驗收 14a–14d（四條反向驗收，含 Codex 要求的兩條）、測試要求 4a／12a／12b／20。**階段切分不變**（仍是 S1–S4），憑據表與 `setStock` 的 `DELETE` 放在 S1，憑據的寫入與讀取放在 S2 |
+| 2026-10-03 | v1.2 | **修補 v1.1 的兩處規格缺陷，皆由 [PR #59](https://github.com/choka1227/coffee_GPT6/pull/59) 的審查發現，實作端無過失。**（1）§5.6 的 `UNLISTED` 列與驗收 16 照抄了 `effective_availability` 的 `CASE`，漏讀 `list` 既有的 `WHERE` 已把 `UNLISTED` 商品整列排除，使原驗收 16 在不破壞 `CoffeeIntegrationTest` 的前提下不可能成立 —— 改為「維持既有隱藏契約」並重寫驗收 16（§5.6 的「v1.2 修正」）。（2）§5.7 第 1 點沒有規定剩餘徽章與既有「今日售完」徽章的關係，照字面實作會讓兩個矛盾的徽章並存 —— 新增 §13.13 定案為「售完優先」並補驗收 19a。驗收 19a 是 G08 唯一未滿足的條件，登記為 **G08a**（一行前端修正，見 `docs/GAP-ANALYSIS.md`）。本版**不動** schema、API、授權與金額規則，已合併的實作除 19a 外全數有效 |
