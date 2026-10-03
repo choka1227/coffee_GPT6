@@ -600,7 +600,9 @@ async function saveStock(clear = false) {
               loading="lazy"
             /><span v-if="p.availability === 'SOLD_OUT'" class="product-badge sold-out">今日售完</span
             ><span v-else-if="p.badge" class="product-badge">{{ p.badge }}</span
-            ><span v-if="p.remaining !== null && p.remaining > 0" class="remaining-badge"
+            ><span
+              v-if="p.availability !== 'SOLD_OUT' && p.remaining !== null && p.remaining > 0"
+              class="remaining-badge"
               >剩 {{ p.remaining }} 份</span
             >
           </div>
