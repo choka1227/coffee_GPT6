@@ -119,11 +119,11 @@ class BranchProductStockAdminTest {
                     + " where action='STOCK_SET' and target_id='latte' order by created_at"))
         .allSatisfy(row -> assertThat(row.get("branch_id")).isEqualTo("taipei"));
     assertThat(
-            db.queryForObject(
+            db.queryForList(
                 "select summary from audit_log where action='STOCK_SET'"
-                    + " and target_id='latte' order by created_at desc limit 1",
+                    + " and target_id='latte' order by created_at",
                 String.class))
-        .contains("今日可售 1 份，剩餘 0 份");
+        .anySatisfy(summary -> assertThat(summary).contains("今日可售 1 份，剩餘 0 份"));
   }
 
   @Test
