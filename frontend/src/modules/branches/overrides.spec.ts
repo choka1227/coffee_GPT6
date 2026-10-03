@@ -1,13 +1,27 @@
 import { describe, expect, it } from "vitest";
 import type { BranchDayOverride } from "../../shared/types";
-import { formatOnDate, overrideSummary, sortOverrides } from "./overrides";
+import {
+  dayWindowLimits,
+  formatOnDate,
+  isWithinDayWindow,
+  overrideSummary,
+  sortOverrides,
+} from "./overrides";
 
 const override = (
   onDate: number,
   closed = true,
   note = "",
   hours: BranchDayOverride["hours"] = [],
-): BranchDayOverride => ({ onDate, dayOfWeek: 1, closed, note, hours });
+  lastOrderMinutes: number | null = null,
+): BranchDayOverride => ({
+  onDate,
+  dayOfWeek: 1,
+  closed,
+  note,
+  hours,
+  lastOrderMinutes,
+});
 
 describe("sortOverrides", () => {
   it("依日期升冪且相同日期維持原順序", () => {
@@ -45,6 +59,40 @@ describe("overrideSummary", () => {
         ]),
       ),
     ).toBe("09:00–12:00、13:00–17:00");
+  });
+
+  it("顯示每日最後點餐與只覆寫最後點餐的摘要", () => {
+    expect(overrideSummary(override(20261010, false, "", [], 40))).toBe(
+      "沿用每週時段 · 最後點餐提前 40 分鐘",
+    );
+    expect(
+      overrideSummary(
+        override(
+          20261010,
+          false,
+          "",
+          [{ dayOfWeek: 6, openMinute: 540, closeMinute: 1020 }],
+          30,
+        ),
+      ),
+    ).toBe("09:00–17:00 · 最後點餐提前 30 分鐘");
+  });
+});
+
+describe("dayWindowLimits", () => {
+  it.each([
+    [20261001, { min: "2026-10-01", max: "2026-10-15" }],
+    [20261025, { min: "2026-10-25", max: "2026-11-08" }],
+    [20261225, { min: "2026-12-25", max: "2027-01-08" }],
+  ])("正確跨月與跨年計算 %s 起 14 天", (today, expected) => {
+    expect(dayWindowLimits(today)).toEqual(expected);
+  });
+
+  it("只接受今日至 today+14 的閉區間", () => {
+    expect(isWithinDayWindow(20261001, 20261001)).toBe(true);
+    expect(isWithinDayWindow(20261015, 20261001)).toBe(true);
+    expect(isWithinDayWindow(20261016, 20261001)).toBe(false);
+    expect(isWithinDayWindow(20260930, 20261001)).toBe(false);
   });
 });
 
@@ -92,6 +140,8 @@ it("總部 UI 接上例外日新增、清單與刪除，顧客端接上公休訊
   expect(branches).toContain('"PUT"');
   expect(branches).toContain('"DELETE"');
   expect(branches).toContain("overrideSummary(value)");
+  expect(branches).toContain("lastOrderMinutes: overrideDraft.value.lastOrderMinutes");
+  expect(branches).toContain("updateOverrideLastOrder");
   expect(menu).toContain("customerClosedMessage");
   expect(menu).toContain("分店今日公休");
 });

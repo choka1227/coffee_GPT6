@@ -19,6 +19,7 @@ import com.coffee.identity.api.Identity;
 import com.coffee.orders.api.Orders;
 import com.coffee.shared.Actor;
 import com.coffee.shared.Problem;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -77,8 +78,15 @@ class BranchHourOverrideTest {
                 saturday,
                 false,
                 weekly,
-                new DayOverride(20261010, false, "", List.of(new Hours(1, 840, 960)))))
+                new DayOverride(20261010, false, "", List.of(new Hours(1, 840, 960)), null)))
         .isEqualTo(new DaySchedule.Periods(List.of(new Hours(1, 840, 960)), true));
+    assertThat(
+            BranchService.resolveDay(
+                saturday,
+                false,
+                weekly,
+                new DayOverride(20261010, false, "", List.of(), 40)))
+        .isEqualTo(new DaySchedule.Periods(weekly, false));
     assertThat(BranchService.resolveDay(saturday, true, weekly, null))
         .isEqualTo(new DaySchedule.AlwaysOpen());
     assertThat(BranchService.resolveDay(saturday, false, weekly, null))
@@ -136,7 +144,7 @@ class BranchHourOverrideTest {
             branches.saveOverride(
                 hq, "taipei", new DayOverride(20261010, true, "", List.of(new Hours(6, 60, 120)))));
     assertProblem(
-        "請至少設定一個營業時段，或改為整天公休",
+        "請至少設定一個營業時段、改為整天公休，或設定本日最後點餐時間",
         () -> branches.saveOverride(hq, "taipei", new DayOverride(20261010, false, "", List.of())));
     assertProblem(
         "例外日的時段不能跨夜",
@@ -201,6 +209,66 @@ class BranchHourOverrideTest {
   }
 
   @Test
+  void dailyLastOrderRoundTripsAndSupportsHoursOrLastOrderOnly() throws Exception {
+    branches.saveHours(hq, "taipei", List.of(new Hours(6, 540, 720)), 0);
+    String periods =
+        "{\"closed\":false,\"note\":\"短日\",\"hours\":[{\"dayOfWeek\":3,"
+            + "\"openMinute\":540,\"closeMinute\":720}],\"lastOrderMinutes\":30}";
+    mvc.perform(
+            put("/api/branches/taipei/hour-overrides/20261010")
+                .session(session("hq"))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(periods))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.lastOrderMinutes").value(30));
+    mvc.perform(
+            get("/api/branches/taipei/hour-overrides")
+                .session(session("hq"))
+                .param("from", "20261010")
+                .param("to", "20261010"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.overrides[0].lastOrderMinutes").value(30));
+
+    String lastOrderOnly =
+        "{\"closed\":false,\"note\":\"\",\"hours\":[],\"lastOrderMinutes\":40}";
+    mvc.perform(
+            put("/api/branches/taipei/hour-overrides/20261010")
+                .session(session("hq"))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(lastOrderOnly))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.hours").isEmpty())
+        .andExpect(jsonPath("$.lastOrderMinutes").value(40));
+
+    assertThat(branches.hours("taipei")).containsExactly(new Hours(6, 540, 720));
+    assertThat(branches.stateAt("taipei", taipei(2026, 10, 10, 11, 30)))
+        .isEqualTo(new Branches.OpenState(true, false, null));
+  }
+
+  @Test
+  void validatesDailyLastOrderShapeAndRange() {
+    assertProblem(
+        "公休日不需要設定最後點餐時間",
+        () ->
+            branches.saveOverride(
+                hq, "taipei", new DayOverride(20261010, true, "", List.of(), 30)));
+    assertProblem(
+        "請至少設定一個營業時段、改為整天公休，或設定本日最後點餐時間",
+        () ->
+            branches.saveOverride(
+                hq, "taipei", new DayOverride(20261010, false, "", List.of(), null)));
+    for (int invalid : List.of(-1, 121)) {
+      assertProblem(
+          "最後點餐提前時間需為 0–120 分鐘",
+          () ->
+              branches.saveOverride(
+                  hq, "taipei", new DayOverride(20261010, false, "", List.of(), invalid)));
+    }
+  }
+
+  @Test
   void validatesReadRangeAndMissingBranch() {
     assertStatus(404, "找不到分店", () -> branches.overrides("missing", 20261010, 20261011));
     assertProblem("日期範圍不正確", () -> branches.overrides("taipei", 20261011, 20261010));
@@ -243,7 +311,7 @@ class BranchHourOverrideTest {
   }
 
   @Test
-  void putUsesPathDateCsrfAndHeadquartersScopeAndWritesAudit() throws Exception {
+  void putUsesPathDateCsrfAndAllowsManagerOnlyForOwnBranch() throws Exception {
     String body =
         "{\"onDate\":20260101,\"closed\":false,\"note\":\"短日\","
             + "\"hours\":[{\"dayOfWeek\":3,\"openMinute\":540,\"closeMinute\":720}]}";
@@ -272,19 +340,126 @@ class BranchHourOverrideTest {
                 Integer.class))
         .isEqualTo(1);
 
-    db.update(
-        "insert into role_permissions(role_code,permission) values('MANAGER','BRANCH_MANAGE')");
-    for (String account : List.of("manager", "cashier", "customer")) {
+    int today = dateInt(Instant.now().atZone(TAIPEI).toLocalDate());
+    mvc.perform(
+            put("/api/branches/taipei/hour-overrides/" + today)
+                .session(session("manager"))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"closed\":true,\"note\":\"\",\"hours\":[]}"))
+        .andExpect(status().isOk());
+    assertThat(
+            db.queryForObject(
+                "select count(*) from audit_log where action='BRANCH_HOURS_OVERRIDE_SAVE'"
+                    + " and target_id=? and branch_id='taipei'",
+                Integer.class,
+                "taipei:" + today))
+        .isEqualTo(1);
+
+    mvc.perform(
+            put("/api/branches/banqiao/hour-overrides/" + today)
+                .session(session("manager"))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"closed\":true,\"note\":\"\",\"hours\":[]}"))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.message").value("只能存取所屬分店資料"));
+    mvc.perform(
+            put("/api/branches/banqiao/hour-overrides/" + today)
+                .session(session("manager2"))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"closed\":true,\"note\":\"\",\"hours\":[]}"))
+        .andExpect(status().isOk());
+    mvc.perform(
+            put("/api/branches/taipei/hour-overrides/" + today)
+                .session(session("manager2"))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"closed\":true,\"note\":\"\",\"hours\":[]}"))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.message").value("只能存取所屬分店資料"));
+
+    for (String account : List.of("cashier", "customer")) {
       mvc.perform(
-              put("/api/branches/taipei/hour-overrides/20261011")
+              put("/api/branches/taipei/hour-overrides/" + today)
                   .session(session(account))
                   .with(csrf())
                   .contentType(MediaType.APPLICATION_JSON)
                   .content("{\"closed\":true,\"note\":\"\",\"hours\":[]}"))
           .andExpect(status().isForbidden())
-          .andExpect(
-              jsonPath("$.message").value(account.equals("manager") ? "此功能限總部範圍" : "沒有此功能的操作權限"));
+          .andExpect(jsonPath("$.message").value("沒有此功能的操作權限"));
     }
+  }
+
+  @Test
+  void managerOverrideDatesAreLimitedToTodayThroughFourteenDays() throws Exception {
+    LocalDate today = Instant.now().atZone(TAIPEI).toLocalDate();
+    String body = "{\"closed\":true,\"note\":\"\",\"hours\":[]}";
+
+    for (LocalDate allowed : List.of(today, today.plusDays(14))) {
+      mvc.perform(
+              put("/api/branches/taipei/hour-overrides/" + dateInt(allowed))
+                  .session(session("manager"))
+                  .with(csrf())
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(body))
+          .andExpect(status().isOk());
+    }
+    for (LocalDate blocked : List.of(today.minusDays(1), today.plusDays(15))) {
+      mvc.perform(
+              put("/api/branches/taipei/hour-overrides/" + dateInt(blocked))
+                  .session(session("manager"))
+                  .with(csrf())
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(body))
+          .andExpect(status().isBadRequest())
+          .andExpect(jsonPath("$.message").value("只能設定今天起 14 天內的日期"));
+    }
+    mvc.perform(
+            put("/api/branches/taipei/hour-overrides/" + dateInt(today.plusDays(200)))
+                .session(session("hq"))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isOk());
+  }
+
+  @Test
+  void managerDeleteUsesTheSameBranchPermissionAndDateRange() throws Exception {
+    LocalDate today = Instant.now().atZone(TAIPEI).toLocalDate();
+    int todayValue = dateInt(today);
+    String body = "{\"closed\":true,\"note\":\"\",\"hours\":[]}";
+    mvc.perform(
+            put("/api/branches/taipei/hour-overrides/" + todayValue)
+                .session(session("manager"))
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isOk());
+    mvc.perform(
+            delete("/api/branches/taipei/hour-overrides/" + todayValue)
+                .session(session("manager"))
+                .with(csrf()))
+        .andExpect(status().isNoContent());
+    mvc.perform(
+            delete("/api/branches/banqiao/hour-overrides/" + todayValue)
+                .session(session("manager"))
+                .with(csrf()))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.message").value("只能存取所屬分店資料"));
+    mvc.perform(
+            delete("/api/branches/taipei/hour-overrides/" + dateInt(today.plusDays(15)))
+                .session(session("manager"))
+                .with(csrf()))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.message").value("只能設定今天起 14 天內的日期"));
+    mvc.perform(
+            delete("/api/branches/taipei/hour-overrides/" + todayValue)
+                .session(session("cashier"))
+                .with(csrf()))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.message").value("沒有此功能的操作權限"));
   }
 
   @Test

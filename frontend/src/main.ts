@@ -31,6 +31,11 @@ const routes = [
     meta: { permissions: ["BRANCH_MANAGE"] },
   },
   {
+    path: "/branch-day",
+    component: () => import("./modules/branches/BranchDayView.vue"),
+    meta: { permissions: ["BRANCH_HOURS_OVERRIDE"] },
+  },
+  {
     path: "/menu",
     component: () => import("./modules/catalog/MenuAdminView.vue"),
     meta: { permissions: ["MENU_MANAGE"] },

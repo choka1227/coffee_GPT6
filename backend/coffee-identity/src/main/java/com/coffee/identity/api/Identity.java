@@ -13,6 +13,7 @@ public interface Identity {
           "REPORT_STORE",
           "REPORT_ALL",
           "BRANCH_MANAGE",
+          "BRANCH_HOURS_OVERRIDE",
           "ACCOUNT_MANAGE",
           "ROLE_MANAGE",
           "MENU_MANAGE",

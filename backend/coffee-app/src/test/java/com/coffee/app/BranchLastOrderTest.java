@@ -155,6 +155,36 @@ class BranchLastOrderTest {
   }
 
   @Test
+  void overnightWindowUsesTheLastOrderValueFromTheOwningDay() {
+    branches.saveHours(hq, "taipei", List.of(new Hours(1, 1320, 120)), 15);
+    branches.saveOverride(
+        hq, "taipei", new DayOverride(20260921, false, "", List.of(), 60));
+
+    assertThat(branches.stateAt("taipei", at(MONDAY, 1530)))
+        .isEqualTo(new OpenState(true, false, null));
+
+    branches.deleteOverride(hq, "taipei", 20260921);
+    branches.saveOverride(
+        hq, "taipei", new DayOverride(20260922, false, "", List.of(), 120));
+    assertThat(branches.stateAt("taipei", at(MONDAY, 1530)))
+        .isEqualTo(new OpenState(true, true, 15));
+  }
+
+  @Test
+  void singleAndListStatesAgreeWithDailyLastOrderWithoutExtraStateQueries() {
+    branches.saveHours(hq, "taipei", List.of(new Hours(1, 540, 720)), 0);
+    branches.saveOverride(
+        hq, "taipei", new DayOverride(20260921, false, "", List.of(), 30));
+    long at = at(MONDAY, 690);
+
+    OpenState single = branches.stateAt("taipei", at);
+    assertThat(branches.stateAt(List.of("taipei"), at)).containsEntry("taipei", single);
+    assertProblem(
+        "分店已停止接單（最後點餐時間 11:30），請於下一個營業時段再下單",
+        () -> branches.requireOrderable("taipei", at));
+  }
+
+  @Test
   void savingLastOrderIsValidatedTransactionalAndLegacyCallsPreserveIt() {
     var original = List.of(new Hours(1, 540, 720));
     branches.saveHours(hq, "taipei", original, 15);

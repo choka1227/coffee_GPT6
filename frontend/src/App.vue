@@ -17,6 +17,7 @@ import {
   KeyRound,
   WalletCards,
   Tags,
+  Clock,
 } from "lucide-vue-next";
 import { useAuth } from "./modules/identity/store";
 import { notice, notify } from "./shared/notice";
@@ -62,6 +63,13 @@ const links = computed(() =>
       label: "分店管理",
       icon: Store,
       show: auth.can("BRANCH_MANAGE"),
+    },
+    {
+      path: "/branch-day",
+      label: "本店營業設定",
+      icon: Clock,
+      show:
+        auth.can("BRANCH_HOURS_OVERRIDE") && !auth.can("BRANCH_MANAGE"),
     },
     {
       path: "/menu",

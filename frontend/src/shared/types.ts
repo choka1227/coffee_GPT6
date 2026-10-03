@@ -37,6 +37,7 @@ export interface BranchDayOverride {
   closed: boolean;
   note: string;
   hours: BranchHours[];
+  lastOrderMinutes: number | null;
 }
 export interface BranchDayOverridesResponse {
   branchId: string;

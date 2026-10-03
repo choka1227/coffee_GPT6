@@ -40,12 +40,22 @@ class BranchController {
       Integer minutesUntilLastOrder) {}
 
   record DayOverrideResponse(
-      int onDate, int dayOfWeek, boolean closed, String note, List<Branches.Hours> hours) {}
+      int onDate,
+      int dayOfWeek,
+      boolean closed,
+      String note,
+      List<Branches.Hours> hours,
+      Integer lastOrderMinutes) {}
 
   record OverridesResponse(
       String branchId, int from, int to, List<DayOverrideResponse> overrides) {}
 
-  record OverrideRequest(Integer onDate, boolean closed, String note, List<Branches.Hours> hours) {}
+  record OverrideRequest(
+      Integer onDate,
+      boolean closed,
+      String note,
+      List<Branches.Hours> hours,
+      Integer lastOrderMinutes) {}
 
   private final Branches service;
 
@@ -155,7 +165,11 @@ class BranchController {
             request == null
                 ? null
                 : new Branches.DayOverride(
-                    onDate, request.closed(), request.note(), request.hours()));
+                    onDate,
+                    request.closed(),
+                    request.note(),
+                    request.hours(),
+                    request.lastOrderMinutes()));
     return response(saved);
   }
 
@@ -172,7 +186,8 @@ class BranchController {
         parseDate(override.onDate()).getDayOfWeek().getValue(),
         override.closed(),
         override.note(),
-        override.hours());
+        override.hours(),
+        override.lastOrderMinutes());
   }
 
   private static LocalDate parseDate(int value) {

@@ -53,6 +53,7 @@ public class InitialData implements ApplicationRunner {
               "REPORT_STORE",
               "PAYMENT_RECONCILE",
               "MENU_AVAILABILITY",
+              "BRANCH_HOURS_OVERRIDE",
               "AUDIT_VIEW",
               "CASH_SESSION"));
       role("HQ", "總部人員", "GLOBAL", Identity.PERMISSIONS);
