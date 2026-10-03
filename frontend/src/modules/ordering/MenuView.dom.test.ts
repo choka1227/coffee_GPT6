@@ -235,6 +235,17 @@ describe("MenuView 可見性", () => {
     expect(wrapper.get(".remaining-badge").text()).toBe("剩 2 份");
   });
 
+  it("手動售完且仍有剩餘量時只顯示今日售完", async () => {
+    const { wrapper } = await mountMenu(
+      branchStaffActor(),
+      [branchFixture()],
+      productFixture({ availability: "SOLD_OUT", remaining: 5 }),
+    );
+
+    expect(wrapper.get(".sold-out").text()).toBe("今日售完");
+    expect(wrapper.find(".remaining-badge").exists()).toBe(false);
+  });
+
   it("不限量商品不顯示剩餘徽章", async () => {
     const { wrapper } = await mountMenu(branchStaffActor());
 
