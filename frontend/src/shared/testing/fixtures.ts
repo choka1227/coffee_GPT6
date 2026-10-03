@@ -86,6 +86,7 @@ export function productFixture(overrides: Partial<Product> = {}): Product {
     badge: "",
     active: true,
     availability: "AVAILABLE",
+    remaining: null,
     optionGroups: [],
     ...overrides,
   };

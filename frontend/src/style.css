@@ -593,18 +593,54 @@ small {
   background: #7f2f2f;
   color: white;
 }
+.remaining-badge {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #244d3ded;
+  color: white;
+  font-size: 11px;
+  font-weight: 650;
+}
 .product-card.unavailable {
   cursor: not-allowed;
   opacity: 0.72;
 }
 .availability-action {
-  margin-top: 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: white;
   color: var(--green);
   padding: 7px 10px;
   font-size: 12px;
+}
+.product-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.stock-form {
+  display: grid;
+  gap: 16px;
+}
+.stock-form label {
+  display: grid;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 650;
+}
+.stock-form input {
+  min-height: 43px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 12px;
+}
+.stock-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 .product-copy {
   padding: 16px;

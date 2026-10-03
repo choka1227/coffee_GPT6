@@ -11,7 +11,7 @@
 - [x] S1 — 資料層與讀寫端點
 - [x] S2 — 扣減、保留憑據與取消回補
 - [x] S3 — 菜單剩餘數量與自動售完
-- [ ] S4 — POS 備量設定與剩餘徽章
+- [x] S4 — POS 備量設定與剩餘徽章
 
 ## S1 完成內容
 
@@ -50,9 +50,17 @@
   既有斷言。本階段保留既有隱藏契約；商品不出現在回應中，因此也不會洩漏
   `remaining`，`sellable` 仍回覆「本店未供應此商品」。
 
+## S4 完成內容
+
+- 前端 `Product` 型別新增 nullable `remaining`，並補齊 `ProductStock` API 型別。
+- 商品有正數剩餘量時顯示「剩 N 份」徽章；不限量與 0 不顯示剩餘徽章。
+- 具 `MENU_AVAILABILITY` 權限的門市人員可從 POS 商品卡開啟備量表單，設定
+  0–9999 或解除限量；成功後重新向後端載入菜單，不在前端自行推算剩餘量。
+- 顧客模式不渲染「設定備量」按鈕；DOM 測試涵蓋徽章、設定、解除與可見性。
+
 ## 後續
 
-下一階段是 S4：在 POS 加入備量設定與剩餘數量徽章。
+G08 四個施工階段均已完成；待最新 head 的完整 GitHub Actions 通過後轉為 ready for review。
 
 ## 驗證
 
@@ -69,3 +77,5 @@
   本機仍因 Maven Central DNS 解析失敗而未進入編譯；推送後由最新 head 的 GitHub Actions 驗證。
 - S3 本地 `npm test`：通過（80 tests）
 - S3 本地 `npm run build`：通過
+- S4 本地 `npm test`：通過（84 tests）
+- S4 本地 `npm run build`：通過
