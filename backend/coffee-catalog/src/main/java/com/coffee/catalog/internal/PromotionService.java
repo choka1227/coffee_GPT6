@@ -7,6 +7,8 @@ import com.coffee.shared.Ids;
 import com.coffee.shared.Problem;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -184,8 +186,82 @@ public class PromotionService implements Promotions {
 
   @Override
   public Applied apply(String branchId, List<Line> lines, long atEpochMs) {
-    return null;
+    var rules = db.query(
+        "select * from item_promotions where active=true"
+            + " and (branch_id is null or branch_id=?)"
+            + " and (starts_at is null or starts_at<=?)"
+            + " and (ends_at is null or ends_at>=?) order by id",
+        this::row,
+        branchId,
+        atEpochMs,
+        atEpochMs);
+    return best(rules, lines);
   }
+
+  static Applied best(List<Rule> rules, List<Line> lines) {
+    Applied selected = null;
+    for (var rule : rules) {
+      var candidate = evaluate(rule, lines);
+      if (candidate != null
+          && candidate.discountAmount() > 0
+          && (selected == null
+              || candidate.discountAmount() > selected.discountAmount()
+              || (candidate.discountAmount() == selected.discountAmount()
+                  && candidate.promotionId().compareTo(selected.promotionId()) < 0))) {
+        selected = candidate;
+      }
+    }
+    return selected;
+  }
+
+  static Applied evaluate(Rule rule, List<Line> lines) {
+    var units = new ArrayList<Unit>();
+    for (int lineIndex = 0; lineIndex < lines.size(); lineIndex++) {
+      var line = lines.get(lineIndex);
+      boolean matches = "PRODUCT".equals(rule.targetKind())
+          ? rule.productId().equals(line.productId())
+          : rule.category().equals(line.category());
+      if (!matches) continue;
+      for (int quantity = 0; quantity < line.quantity(); quantity++) {
+        units.add(new Unit(lineIndex, line.unitPrice()));
+      }
+    }
+    if (units.isEmpty()) return null;
+
+    int discountedUnits;
+    if ("ITEM_PERCENT".equals(rule.kind())) {
+      discountedUnits = units.size();
+    } else {
+      discountedUnits = units.size() / rule.nth();
+      if (discountedUnits == 0) return null;
+      units.sort(Comparator.comparingInt(Unit::unitPrice).thenComparingInt(Unit::lineIndex));
+    }
+
+    var lineDiscounts = new ArrayList<Integer>(lines.size());
+    for (int index = 0; index < lines.size(); index++) lineDiscounts.add(0);
+    int discountAmount = 0;
+    int limit = "ITEM_PERCENT".equals(rule.kind()) ? units.size() : discountedUnits;
+    for (int index = 0; index < limit; index++) {
+      var unit = units.get(index);
+      int discount = Math.multiplyExact(unit.unitPrice(), rule.percent()) / 100;
+      lineDiscounts.set(
+          unit.lineIndex(), Math.addExact(lineDiscounts.get(unit.lineIndex()), discount));
+      discountAmount = Math.addExact(discountAmount, discount);
+    }
+    return new Applied(
+        rule.id(),
+        rule.name(),
+        rule.kind(),
+        rule.percent(),
+        rule.nth(),
+        rule.targetKind(),
+        "PRODUCT".equals(rule.targetKind()) ? rule.productId() : rule.category(),
+        discountedUnits,
+        discountAmount,
+        List.copyOf(lineDiscounts));
+  }
+
+  private record Unit(int lineIndex, int unitPrice) {}
 
   private static void requireHeadquarters(Actor actor) {
     actor.require("MENU_MANAGE");
