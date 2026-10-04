@@ -17,6 +17,15 @@ public interface Orders {
   record OrderDiscount(
       String code, String name, String kind, int percent, int amount, int discountAmount) {}
 
+  record ItemPromotion(
+      String promotionId,
+      String name,
+      String kind,
+      int percent,
+      int nth,
+      int discountedUnits,
+      int discountAmount) {}
+
   record LineOption(String groupName, String optionName, int priceDelta) {}
 
   record Line(
@@ -29,6 +38,7 @@ public interface Orders {
       String sugar,
       int optionsPrice,
       int lineTotal,
+      int discountAmount,
       List<LineOption> options) {}
 
   record Order(
@@ -42,7 +52,9 @@ public interface Orders {
       int total,
       int subtotal,
       int discountAmount,
+      int itemDiscountAmount,
       OrderDiscount discount,
+      ItemPromotion itemPromotion,
       String note,
       long createdAt,
       Long paidAt,
@@ -71,7 +83,7 @@ public interface Orders {
 
   void confirmOnline(String id, int amount, String providerTradeNo, long paidAt);
 
-  /** 只回表頭欄位，items() 固定為空 List（對帳不需要品項，避免 N+1）。 */
+  /** 只回表頭欄位，items() 固定為空 List、itemPromotion() 固定為 null（避免 N+1）。 */
   List<Order> reconciliationCandidates(Actor actor, long since, long until, int limit, int offset);
 
   Order paymentSnapshot(String id);

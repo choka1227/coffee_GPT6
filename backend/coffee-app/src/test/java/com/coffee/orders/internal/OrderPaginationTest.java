@@ -7,6 +7,7 @@ import com.coffee.audit.api.Audit;
 import com.coffee.branches.api.Branches;
 import com.coffee.catalog.api.Catalog;
 import com.coffee.catalog.api.Discounts;
+import com.coffee.catalog.api.Promotions;
 import com.coffee.orders.api.Orders;
 import com.coffee.shared.Actor;
 import com.coffee.shared.Problem;
@@ -37,11 +38,11 @@ class OrderPaginationTest {
     db.execute(
         "create table orders(id varchar(20) primary key,branch_id varchar(36),account_id varchar(36),"
             + "status varchar(24),fulfillment varchar(20),payment_method varchar(10),total integer,discount_amount integer default 0,"
-            + "note varchar(200),created_at bigint,paid_at bigint,tendered integer,change_amount integer)");
+            + "item_discount_amount integer default 0,note varchar(200),created_at bigint,paid_at bigint,tendered integer,change_amount integer)");
     db.execute(
         "create table order_items(id varchar(36) primary key,order_id varchar(20),product_id varchar(36),"
             + "name varchar(80),category varchar(40),unit_price integer,quantity integer,"
-            + "temperature varchar(12),sugar varchar(12),options_price integer)");
+            + "temperature varchar(12),sugar varchar(12),options_price integer,discount_amount integer default 0)");
     db.execute(
         "create table order_item_options(id varchar(36) primary key,order_item_id varchar(36),"
             + "group_name varchar(80),option_name varchar(80),price_delta integer)");
@@ -51,7 +52,12 @@ class OrderPaginationTest {
     db.update("insert into branches values('taipei','台北店'),('taichung','台中店')");
     orders =
         new OrderService(
-            db, mock(Catalog.class), mock(Discounts.class), mock(Branches.class), mock(Audit.class));
+            db,
+            mock(Catalog.class),
+            mock(Discounts.class),
+            mock(Promotions.class),
+            mock(Branches.class),
+            mock(Audit.class));
   }
 
   @Test
@@ -203,7 +209,8 @@ class OrderPaginationTest {
         "TAKEAWAY",
         createdAt);
     db.update(
-        "insert into order_items values(?,?,?,?,?,100,1,null,null,5)",
+        "insert into order_items(id,order_id,product_id,name,category,unit_price,quantity,"
+            + "temperature,sugar,options_price) values(?,?,?,?,?,100,1,null,null,5)",
         itemId,
         orderId,
         "latte",
