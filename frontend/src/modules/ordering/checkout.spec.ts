@@ -13,7 +13,7 @@ describe("checkoutPath", () => {
   it.each([
     [true, "CASH", "", "CUSTOMER_PENDING"],
     [false, "ECPAY", "X10", "ECPAY"],
-    [false, "CASH", "  ", "POS_CASH_SINGLE"],
+    [false, "CASH", "  ", "POS_CASH_TWO_STAGE"],
     [false, "CASH", " X10 ", "POS_CASH_TWO_STAGE"],
   ])("判斷四條結帳路徑", (isCustomer, paymentMethod, discountCode, expected) => {
     expect(checkoutPath({ isCustomer, paymentMethod, discountCode })).toBe(expected);
@@ -131,21 +131,19 @@ describe("G07 驗收 21b／22／23 自動化替代", () => {
     expect(() => amountDue({ path, cartTotal: 140, pendingOrderTotal: null })).toThrow();
   });
 
-  it("23 未帶碼單段式預設帶入應收，兩段式維持未輸入", () => {
-    const single = checkoutPath({
+  it("23 POS 現金無論有無優惠碼都維持兩段式與未輸入", () => {
+    const withoutCode = checkoutPath({
       isCustomer: false,
       paymentMethod: "CASH",
       discountCode: "",
     });
-    expect(single).toBe("POS_CASH_SINGLE");
-    const due = amountDue({ path: single, cartTotal: 140, pendingOrderTotal: null });
-    expect(due).toBe(140);
-    const tendered = effectiveTendered({ path: single, tendered: undefined, amountDue: due });
-    expect(tendered).toBe(140);
-    expect(validateTendered({ tendered, amountDue: due })).toEqual({ ok: true, tendered: 140 });
+    expect(withoutCode).toBe("POS_CASH_TWO_STAGE");
+    expect(() =>
+      amountDue({ path: withoutCode, cartTotal: 140, pendingOrderTotal: null }),
+    ).toThrow();
 
     const twoStageTendered = effectiveTendered({
-      path: "POS_CASH_TWO_STAGE",
+      path: withoutCode,
       tendered: undefined,
       amountDue: 126,
     });

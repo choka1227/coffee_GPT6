@@ -4,6 +4,7 @@ import com.coffee.audit.api.Audit;
 import com.coffee.branches.api.Branches;
 import com.coffee.catalog.api.Catalog;
 import com.coffee.catalog.api.Discounts;
+import com.coffee.catalog.api.Promotions;
 import com.coffee.orders.api.Orders;
 import com.coffee.shared.*;
 import java.nio.charset.StandardCharsets;
@@ -20,14 +21,21 @@ public class OrderService implements Orders {
   private final JdbcTemplate db;
   private final Catalog catalog;
   private final Discounts discounts;
+  private final Promotions promotions;
   private final Branches branches;
   private final Audit audit;
 
   public OrderService(
-      JdbcTemplate db, Catalog catalog, Discounts discounts, Branches branches, Audit audit) {
+      JdbcTemplate db,
+      Catalog catalog,
+      Discounts discounts,
+      Promotions promotions,
+      Branches branches,
+      Audit audit) {
     this.db = db;
     this.catalog = catalog;
     this.discounts = discounts;
+    this.promotions = promotions;
     this.branches = branches;
     this.audit = audit;
   }
@@ -67,6 +75,7 @@ public class OrderService implements Orders {
     String id = Ids.order();
     List<Catalog.Product> products = new ArrayList<>();
     List<List<Catalog.ResolvedOption>> resolved = new ArrayList<>();
+    List<Promotions.Line> promotionLines = new ArrayList<>();
     int total = 0;
     for (LineInput l : q.items()) {
       Problem.check(l != null && l.quantity() >= 1 && l.quantity() <= 50, "單品數量需為 1–50");
@@ -77,12 +86,17 @@ public class OrderService implements Orders {
       Problem.check(unitPrice > 0, "商品金額不正確");
       products.add(p);
       resolved.add(options);
+      promotionLines.add(new Promotions.Line(p.id(), p.category(), unitPrice, l.quantity()));
       total = Math.addExact(total, Math.multiplyExact(unitPrice, l.quantity()));
     }
     Problem.check(total <= 1000000, "單筆訂單金額超過上限");
     int subtotal = total;
-    var applied = discounts.apply(q.discountCode(), q.branchId(), subtotal, now);
-    int discountAmount = applied == null ? 0 : applied.discountAmount();
+    var promotion = promotions.apply(q.branchId(), promotionLines, now);
+    int itemDiscountAmount = promotion == null ? 0 : promotion.discountAmount();
+    int afterItems = Math.subtractExact(subtotal, itemDiscountAmount);
+    var applied = discounts.apply(q.discountCode(), q.branchId(), afterItems, now);
+    int codeDiscountAmount = applied == null ? 0 : applied.discountAmount();
+    int discountAmount = Math.addExact(itemDiscountAmount, codeDiscountAmount);
     total = Math.subtractExact(subtotal, discountAmount);
     catalog.reserveStock(
         q.branchId(),
@@ -92,8 +106,8 @@ public class OrderService implements Orders {
             .toList());
     db.update(
         "insert into"
-            + " orders(id,branch_id,account_id,status,fulfillment,payment_method,total,discount_amount,note,created_at,idempotency_key,request_hash)"
-            + " values(?,?,?,'PENDING_PAYMENT',?,?,?,?,?,?,?,?)",
+            + " orders(id,branch_id,account_id,status,fulfillment,payment_method,total,discount_amount,item_discount_amount,note,created_at,idempotency_key,request_hash)"
+            + " values(?,?,?,'PENDING_PAYMENT',?,?,?,?,?,?,?,?,?)",
         id,
         q.branchId(),
         a.id(),
@@ -101,6 +115,7 @@ public class OrderService implements Orders {
         q.paymentMethod(),
         total,
         discountAmount,
+        itemDiscountAmount,
         q.note(),
         now,
         key,
@@ -114,6 +129,35 @@ public class OrderService implements Orders {
           a, "ORDER_DISCOUNT", id, q.branchId(),
           "套用折扣 " + applied.code() + "，折抵 " + applied.discountAmount() + " 元");
     }
+    if (promotion != null) {
+      db.update(
+          "insert into order_item_promotions(order_id,promotion_id,name,kind,percent,nth,"
+              + "target_kind,target_id,discounted_units,discount_amount,created_at)"
+              + " values(?,?,?,?,?,?,?,?,?,?,?)",
+          id,
+          promotion.promotionId(),
+          promotion.name(),
+          promotion.kind(),
+          promotion.percent(),
+          promotion.nth(),
+          promotion.targetKind(),
+          promotion.targetId(),
+          promotion.discountedUnits(),
+          promotion.discountAmount(),
+          now);
+      audit.record(
+          a,
+          "ORDER_ITEM_DISCOUNT",
+          id,
+          q.branchId(),
+          "套用品項促銷 "
+              + promotion.name()
+              + "，折抵 "
+              + promotion.discountAmount()
+              + " 元（"
+              + promotion.discountedUnits()
+              + " 件）");
+    }
     for (int i = 0; i < q.items().size(); i++) {
       var l = q.items().get(i);
       var p = products.get(i);
@@ -123,8 +167,8 @@ public class OrderService implements Orders {
       String itemId = Ids.next();
       db.update(
           "insert into"
-              + " order_items(id,order_id,product_id,name,category,unit_price,unit_cost,quantity,temperature,sugar,options_price,options_cost)"
-              + " values(?,?,?,?,?,?,?,?,null,null,?,?)",
+              + " order_items(id,order_id,product_id,name,category,unit_price,unit_cost,quantity,temperature,sugar,options_price,options_cost,discount_amount)"
+              + " values(?,?,?,?,?,?,?,?,null,null,?,?,?)",
           itemId,
           id,
           p.id(),
@@ -134,7 +178,8 @@ public class OrderService implements Orders {
           p.cost(),
           l.quantity(),
           optionsPrice,
-          optionsCost);
+          optionsCost,
+          promotion == null ? 0 : promotion.lineDiscounts().get(i));
       for (var option : options)
         db.update(
             "insert into order_item_options(id,order_item_id,group_id,group_name,option_id,option_name,price_delta,cost_delta) values(?,?,?,?,?,?,?,?)",
@@ -230,6 +275,7 @@ public class OrderService implements Orders {
                     r.getInt("total"),
                     r.getInt("total") + r.getInt("discount_amount"),
                     r.getInt("discount_amount"),
+                    r.getInt("item_discount_amount"),
                     r.getString("note"),
                     r.getLong("created_at"),
                     r.getObject("paid_at", Long.class),
@@ -297,7 +343,8 @@ public class OrderService implements Orders {
                   r.getInt("quantity"),
                   r.getString("temperature"),
                   r.getString("sugar"),
-                  r.getInt("options_price"));
+                  r.getInt("options_price"),
+                  r.getInt("discount_amount"));
           lines.computeIfAbsent(line.orderId(), ignored -> new ArrayList<>()).add(line);
         },
         orderIds.toArray());
@@ -357,6 +404,7 @@ public class OrderService implements Orders {
                     row.optionsPrice(),
                     Math.multiplyExact(
                         Math.addExact(row.unitPrice(), row.optionsPrice()), row.quantity()),
+                    row.discountAmount(),
                     optionsByItem.getOrDefault(row.id(), List.of())))
         .toList();
   }
@@ -395,6 +443,7 @@ public class OrderService implements Orders {
       int total,
       int subtotal,
       int discountAmount,
+      int itemDiscountAmount,
       String note,
       long createdAt,
       Long paidAt,
@@ -403,7 +452,7 @@ public class OrderService implements Orders {
     Order toOrder(List<Line> lines, OrderDiscount discount) {
       return new Order(
           id, branchId, branchName, accountId, status, fulfillment, paymentMethod, total,
-          subtotal, discountAmount, discount, note,
+          subtotal, discountAmount, itemDiscountAmount, discount, null, note,
           createdAt, paidAt, tendered, changeAmount, lines);
     }
   }
@@ -418,7 +467,8 @@ public class OrderService implements Orders {
       int quantity,
       String temperature,
       String sugar,
-      int optionsPrice) {}
+      int optionsPrice,
+      int discountAmount) {}
 
   public Order get(Actor a, String id) {
     Order o = snapshot(id);
@@ -553,10 +603,12 @@ public class OrderService implements Orders {
                 r.getInt("total"),
                 r.getInt("total") + r.getInt("discount_amount"),
                 r.getInt("discount_amount"),
+                r.getInt("item_discount_amount"),
                 r.getString("discount_code") == null ? null : new OrderDiscount(
                     r.getString("discount_code"), r.getString("discount_name"),
                     r.getString("discount_kind"), r.getInt("discount_percent"),
                     r.getInt("discount_rule_amount"), r.getInt("discount_amount")),
+                null,
                 r.getString("note"),
                 r.getLong("created_at"),
                 r.getObject("paid_at", Long.class),
@@ -619,7 +671,9 @@ public class OrderService implements Orders {
                     r.getInt("total"),
                     r.getInt("total") + r.getInt("discount_amount"),
                     r.getInt("discount_amount"),
+                    r.getInt("item_discount_amount"),
                     discountSnapshot(r.getString("id")),
+                    promotionSnapshot(r.getString("id")),
                     r.getString("note"),
                     r.getLong("created_at"),
                     r.getObject("paid_at", Long.class),
@@ -640,6 +694,7 @@ public class OrderService implements Orders {
                                 Math.multiplyExact(
                                     Math.addExact(x.getInt("unit_price"), x.getInt("options_price")),
                                     x.getInt("quantity")),
+                                x.getInt("discount_amount"),
                                 db.query(
                                     "select group_name,option_name,price_delta from order_item_options where order_item_id=? order by id",
                                     (z, j) -> new LineOption(
@@ -658,6 +713,22 @@ public class OrderService implements Orders {
             (r, n) -> new OrderDiscount(
                 r.getString("code"), r.getString("name"), r.getString("kind"),
                 r.getInt("percent"), r.getInt("amount"), r.getInt("discount_amount")),
+            orderId)
+        .stream().findFirst().orElse(null);
+  }
+
+  private ItemPromotion promotionSnapshot(String orderId) {
+    return db.query(
+            "select promotion_id,name,kind,percent,nth,discounted_units,discount_amount"
+                + " from order_item_promotions where order_id=?",
+            (r, n) -> new ItemPromotion(
+                r.getString("promotion_id"),
+                r.getString("name"),
+                r.getString("kind"),
+                r.getInt("percent"),
+                r.getInt("nth"),
+                r.getInt("discounted_units"),
+                r.getInt("discount_amount")),
             orderId)
         .stream().findFirst().orElse(null);
   }
