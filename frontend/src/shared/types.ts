@@ -106,9 +106,10 @@ export interface Line {
   sugar: string | null;
   optionsPrice: number;
   lineTotal: number;
+  discountAmount: number;
   options: OrderOption[];
 }
-export interface CartLine extends Omit<Line, "temperature" | "sugar"> {
+export interface CartLine extends Omit<Line, "temperature" | "sugar" | "discountAmount"> {
   optionIds: string[];
 }
 export interface OrderOption {
@@ -127,12 +128,22 @@ export interface Order {
   total: number;
   subtotal: number;
   discountAmount: number;
+  itemDiscountAmount: number;
   discount: {
     code: string;
     name: string;
     kind: "PERCENT" | "AMOUNT";
     percent: number;
     amount: number;
+    discountAmount: number;
+  } | null;
+  itemPromotion: {
+    promotionId: string;
+    name: string;
+    kind: "ITEM_PERCENT" | "NTH_PERCENT";
+    percent: number;
+    nth: number;
+    discountedUnits: number;
     discountAmount: number;
   } | null;
   note: string;
@@ -246,6 +257,20 @@ export interface DiscountRule {
   endsAt: number | null;
   maxRedemptions: number | null;
   redeemedCount: number;
+  active: boolean;
+}
+export interface PromotionRule {
+  id: string | null;
+  name: string;
+  kind: "ITEM_PERCENT" | "NTH_PERCENT";
+  percent: number;
+  nth: number;
+  targetKind: "PRODUCT" | "CATEGORY";
+  productId: string | null;
+  category: string | null;
+  branchId: string | null;
+  startsAt: number | null;
+  endsAt: number | null;
   active: boolean;
 }
 export interface ReconciliationPending {

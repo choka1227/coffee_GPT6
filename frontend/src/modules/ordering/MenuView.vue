@@ -735,13 +735,18 @@ async function saveStock(clear = false) {
             <span>小計</span><b>{{ money(pendingCashOrder.subtotal) }}</b>
           </div>
           <div class="change-row">
-            <span>優惠折抵</span><b>-{{ money(pendingCashOrder.discountAmount) }}</b>
+            <span>品項促銷折抵<small>{{ pendingCashOrder.itemPromotion?.name }}</small></span
+            ><b>-{{ money(pendingCashOrder.itemDiscountAmount) }}</b>
+          </div>
+          <div class="change-row">
+            <span>優惠碼折抵<small>{{ pendingCashOrder.discount?.name }}</small></span
+            ><b>-{{ money(pendingCashOrder.discount?.discountAmount ?? 0) }}</b>
           </div>
           <div class="cart-total">
             <span>應收</span><strong>{{ money(pendingCashOrder.total) }}</strong>
           </div>
         </div>
-        <label v-if="!auth.customer && payment === 'CASH' && (!discountCode.trim() || pendingCashOrder)"
+        <label v-if="!auth.customer && payment === 'CASH' && pendingCashOrder"
           >實收金額<input
             v-model.number="tendered"
             type="number"
@@ -756,9 +761,7 @@ async function saveStock(clear = false) {
         </div>
         <div
           v-if="
-            !auth.customer &&
-            payment === 'CASH' &&
-            (!discountCode.trim() || pendingCashOrder)
+            !auth.customer && payment === 'CASH' && pendingCashOrder
           "
           class="change-row"
         >
@@ -795,9 +798,7 @@ async function saveStock(clear = false) {
               : auth.customer
                 ? "確認點餐"
                 : payment === "CASH"
-                  ? discountCode.trim()
-                    ? "建立訂單並計算應收"
-                    : "確認收款"
+                  ? "建立訂單並計算應收"
                   : "前往付款"
         }}<ArrowRight :size="18" /></button
       ><small class="cart-caption">{{

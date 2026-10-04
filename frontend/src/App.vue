@@ -84,6 +84,12 @@ const links = computed(() =>
       show: auth.can("MENU_MANAGE") && auth.user?.scope === "GLOBAL",
     },
     {
+      path: "/promotions",
+      label: "品項促銷",
+      icon: Tags,
+      show: auth.can("MENU_MANAGE") && auth.user?.scope === "GLOBAL",
+    },
+    {
       path: "/accounts",
       label: "帳號管理",
       icon: UsersRound,
