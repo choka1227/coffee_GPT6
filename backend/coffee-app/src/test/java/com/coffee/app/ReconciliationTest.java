@@ -7,6 +7,8 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+import com.coffee.catalog.api.Discounts;
+import com.coffee.catalog.api.Promotions;
 import com.coffee.identity.api.Identity;
 import com.coffee.orders.api.Orders;
 import com.coffee.payments.api.*;
@@ -46,6 +48,8 @@ import org.springframework.test.web.servlet.MockMvc;
 class ReconciliationTest {
   @Autowired Reports reports;
   @Autowired Orders orders;
+  @Autowired Promotions promotions;
+  @Autowired Discounts discounts;
   @Autowired Identity identity;
   @Autowired ReconciliationService service;
   @Autowired JdbcTemplate db;
@@ -57,9 +61,13 @@ class ReconciliationTest {
   void resetOrders() {
     db.update("delete from payment_reconciliations");
     db.update("delete from payment_events");
+    db.update("delete from order_item_promotions");
+    db.update("delete from order_discounts");
     db.update("delete from order_item_options");
     db.update("delete from order_items");
     db.update("delete from orders");
+    db.update("delete from item_promotions");
+    db.update("delete from discounts");
   }
 
   Actor manager() {
@@ -101,6 +109,45 @@ class ReconciliationTest {
 
   void stub(Map<String, String> p) {
     when(query.query(anyString())).thenReturn(sign(p));
+  }
+
+  @Test
+  void reconciliationCandidateSeparatesCodeDiscountFromTotalDiscount() {
+    var hq = identity.find("hq");
+    promotions.save(
+        hq,
+        new Promotions.Rule(
+            null, "拿鐵每件半價", "ITEM_PERCENT", 50, 0, "PRODUCT",
+            "latte", null, null, null, null, true));
+    discounts.save(
+        hq,
+        new Discounts.Rule(
+            null, "STACK10", "疊加九折", "PERCENT", 10, 0, 0,
+            null, null, null, null, 0, true));
+
+    var order =
+        orders.create(
+            identity.find("customer"),
+            new Orders.Create(
+                "taipei", "TAKEAWAY", "ECPAY", "", "STACK10",
+                List.of(
+                    new Orders.LineInput(
+                        "latte", 1, List.of("temp-hot", "sugar-none")))),
+            UUID.randomUUID().toString());
+
+    var candidate =
+        orders.reconciliationCandidates(manager(), 0, Long.MAX_VALUE, 10, 0).stream()
+            .filter(value -> value.id().equals(order.id()))
+            .findFirst()
+            .orElseThrow();
+
+    assertThat(candidate.itemDiscountAmount()).isPositive();
+    assertThat(candidate.discount()).isNotNull();
+    assertThat(candidate.discount().discountAmount())
+        .isEqualTo(candidate.discountAmount() - candidate.itemDiscountAmount());
+    assertThat(candidate.discountAmount())
+        .isEqualTo(
+            candidate.itemDiscountAmount() + candidate.discount().discountAmount());
   }
 
   @Test
