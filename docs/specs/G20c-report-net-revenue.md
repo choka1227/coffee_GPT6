@@ -3,7 +3,7 @@
 | 項目 | 內容 |
 | --- | --- |
 | 缺口編號 | G20c |
-| 版本 | v1.1（2026-10-04） |
+| 版本 | v1.2（2026-10-04） |
 | 登記來源 | `docs/specs/G20-item-level-promotions.md` §14「G20c 報表的淨營收歸屬（含 G07 訂單層折扣的分攤規則）」、§13.11「報表不改，品項營收維持定價毛額」 |
 | Flyway 版號 | **無 migration**（主線目前最高 V14，由 G20 占用；**V15 仍然空著，留給下一份需要 schema 的規格**，見 §4） |
 | 涉及後端模組 | `coffee-reporting`（主）、`coffee-orders`（S1 的一行投影修正） |
@@ -117,7 +117,7 @@ orders.total                  （淨額）
 | `order_items` | `ReportAggregationTest.java:55-59` | `discount_amount integer not null` | §5.3(a) products 查詢、§5.3(b) topToday 查詢 |
 | `orders` | `ReportAggregationTest.java:51-54` | `item_discount_amount integer not null` | §5.3(d) totals 查詢 |
 
-**漏掉 `orders` 那一個最容易發生**，因為它不在品項那張表上，而缺口是 §5.3(d) 的 totals 查詢而不是商品查詢。兩個都補才會綠。欄位型別跟著 V14 的 `NOT NULL DEFAULT 0` 走；H2 的手寫 DDL 沒有 default，所以 `seed(...)` 的 insert 也要一起帶值（既有案例一律帶 0，驗收 10 才會原封不動通過）。
+**漏掉 `orders` 那一個最容易發生**，因為它不在品項那張表上，而缺口是 §5.3(d) 的 totals 查詢而不是商品查詢。兩個都補才會綠。欄位型別跟著 V14 的 `NOT NULL DEFAULT 0` 走；H2 的手寫 DDL 沒有 default，所以 `seed(...)` 的 insert 也要一起帶值（既有案例一律帶 0）。**同時要把既有 seed 的 `orders.discount_amount` 歸零**，理由見驗收 10 的 v1.2 修正。
 
 這與 PR #65 在 `OrderPaginationTest` 踩到的是同一個坑 —— 本 repo 有多處手寫測試 DDL，改 SQL 時要一起掃。
 
@@ -417,7 +417,7 @@ S1 的 `reconciliationCandidates` 權限路徑也不動。
 - [ ] 7. 任何 `products[].net_revenue` 都 ≥ 0（S2）
 - [ ] 8. `categoriesNet` 各分類加總 = `netProductRevenue`；`categories`（毛額）維持原值不變（S2）
 - [ ] 9. `netProductProfit = netProductRevenue − 商品成本合計`；`netProductMargin` 的分母為 0 時回 0（S2）
-- [ ] 10. 沒有任何折抵的月份：`net_revenue` 等於 `revenue`、`itemDiscount` 與 `codeDiscount` 都是 0、`netProductRevenue` 等於 `revenue`（S2 —— 既有的 `ReportAggregationTest` 案例應該要能原封不動通過）
+- [ ] 10. 沒有任何折抵的月份：`net_revenue` 等於 `revenue`、`itemDiscount` 與 `codeDiscount` 都是 0、`netProductRevenue` 等於 `revenue`（S2）。**v1.2 修正：原文寫「既有的 `ReportAggregationTest` 案例應該要能原封不動通過」，那句話是錯的。** 既有 seed 的 `A-1`（`total=100`、`discount=10`、品項毛額 `100`）與 `B-2`（`total=300`、`discount=20`、毛額 `300`）**算術上不可能** —— `total ≠ 毛額 − discount`。S2 之後 `codeDiscount = discount − item_discount_amount` 會從這兩筆假資料算出 30，§5.2 第二條恆等式 `Σ net_revenue − codeDiscount = revenue` 在主 fixture 上因此成立不了（1000 − 30 ≠ 1000）。**正確做法是把這兩筆 seed 的 `discount` 歸零**（並同步契約測試的 `discount` 斷言由 `30L` 改為 `0L`），讓基礎 fixture 算術自洽；非零折抵的覆蓋由 §11.1 的新案例提供，不會流失。這是修正 fixture，不是放寬測試
 - [ ] 11. SQL 往返次數**不增加**：`ReportAggregationTest` 既有的語句計數斷言維持原數字（S2，見 §11.1）
 - [ ] 12. 店長只看得到本店、指定他店回 403；新欄位不改變任何資料範圍（S2）
 - [ ] 13. 商品排行表顯示「商品淨營收」、「促銷折抵」、「商品毛利（淨額基礎）」，折抵為 0 的列顯示 `—`（S3）
@@ -446,6 +446,17 @@ S1 的 `reconciliationCandidates` 權限路徑也不動。
 (d) 跨兩個品項、其中一個被折到 `net_revenue = 0`（買一送一折掉便宜那一列）→ 驗收 7，確認不是負數也不會讓分類加總跑掉
 (e) `categoriesNet` 與 `netProductRevenue` 的加總一致 → 驗收 8
 (f) 店長與他店 → 驗收 12（既有的越權案例擴充，斷言新欄位同樣只含本店）
+(g) **`topToday[]` 的欄位契約 → 驗收 3a（v1.2 新增，不可略過）**。既有 seed 的 `paid_at` 全是 2024 年，所以 `topToday` 在既有每一個案例裡都是空陣列、契約測試也把它釘成 `List.of()` —— **不新增一筆「今日」的訂單，驗收 3a 就沒有任何測試在看它**，而 `shared/types.ts` 宣告 `topToday[].net_revenue` 為必填。要 seed 一筆 `paid_at` 落在 `LocalDate.now(TAIPEI)` 的訂單（`seed(...)` 的 `paidAt` 直接傳今日字串即可，**不要**呼叫無參數的 `now()`，`TimeZoneGuardTest` 會擋），然後**兩個方向都斷言**：
+```java
+assertThat(report.topToday())
+    .isNotEmpty()
+    .allSatisfy(
+        row -> {
+          assertThat(row).containsKeys("id", "name", "quantity", "revenue", "net_revenue");
+          assertThat(row).doesNotContainKey("item_discount");
+        });
+```
+`doesNotContainKey` 那一行**不要省** —— §5.3(b) 不加 `item_discount` 是個刻意的決策（「API 回傳的每個欄位都有消費端」那條界線），少掉它等於只擋了一半。`net_revenue` 的**數值**也要斷言一次（該筆的 `毛額 − lineDiscount`），不要只斷言 key 存在
 
 **時間：** 一律注入固定的 epoch 毫秒，**不得使用無參數的 `now()`** —— `TimeZoneGuardTest`（G27）會掃出來，CI 直接紅。`ReportService` 內部用 `LocalDate.now(zone)` 算「今日」是既有行為，**本規格不碰它**；測試要透過 `paid_at` 控制月份而不是改系統時間（既有測試已經是這個做法，照抄）。
 
@@ -581,5 +592,6 @@ S1 的 `reconciliationCandidates` 權限路徑也不動。
 
 | 日期 | 版本 | 變更 |
 | --- | --- | --- |
+| 2026-10-04 | v1.2 | 依 Claude 審查 [PR #69](https://github.com/choka1227/coffee_GPT6/pull/69)（G20c 的實作）發現的兩處**規格端**缺口修補，**實作端無過失，設計決策一條未改**：**(1) 驗收 10 的「既有 `ReportAggregationTest` 案例應該要能原封不動通過」是錯的** —— 既有 seed 的 `A-1`／`B-2` 算術上不可能（`total ≠ 毛額 − discount`），照原文守著它就會讓 §5.2 第二條恆等式在主 fixture 上成立不了。已改為明寫「把那兩筆的 `discount` 歸零並同步契約測試的斷言」，§4 的連帶句子一併修正。**這一項是為了解除規格與審查意見的衝突**：PR #69 已經做了歸零（做得對），若放著原文不改，Codex 修審查意見時會讀到「要原封不動」而把它改回去。**(2) §11.1 的測試矩陣 (a)–(f) 沒有任何一條會碰到 `topToday`**，而既有 seed 全是 2024 年的 `paid_at`、契約測試把 `topToday` 釘成空陣列 —— 驗收 3a（v1.1 才加上的紅線）因此**在矩陣裡沒有落點**，PR #69 漏做它的根因在這裡，不在實作端。已新增 (g) 並寫出可直接照抄的斷言與「不要呼叫無參數 `now()`」的提醒。驗收條件的**編號全數未動**，只修 10 的內文、只加 §11.1 的 (g)。 |
 | 2026-10-04 | v1.1 | 依 Codex 在 [PR #66](https://github.com/choka1227/coffee_GPT6/pull/66) 的 `REQUEST_CHANGES` 修補三處會讓實作端拿到互相矛盾指示的缺口：(1) `topToday[]` 的 API 契約統一為**只加 `net_revenue`**（§5.3(b) 原本只要求一欄，§5.5(f) 與 §6.1 卻要求兩欄，型別會宣告一個查詢不產生的必填欄位）；(2) `ReportAggregationTest` 的手寫 DDL **兩張表都要補欄位** —— 原本 §4 與 §9 只點了 `order_items.discount_amount`，漏了 §5.3(d) totals 查詢要用的 `orders.item_discount_amount`，照原文施工 S2 必定紅（此項為 Claude 複查時自行發現，不在 Codex 的 review 內）；(3) §12 的開工前提改為「已滿足」，G20 已合併（主線 `e81fa44`）。**設計決策一條未改**；驗收條件既有 17 條的內容與編號全數未動，另加一條 `3a` 把 `topToday[]` 的欄位契約變成可驗證的紅線（原本 §5.3(b) 與 §5.5(c) 都要求它，卻沒有任何一條驗收看得到它）。 |
 | 2026-10-04 | v1.0 | 初版。依 G20 §14 的 G20c 登記產出，並在 §13.2 說明為什麼把「訂單層優惠碼的分攤規則」切出去成為 G20f。缺陷 5（對帳投影的折抵別名）為 Claude 審查 PR #65 時發現，併入 S1 |
