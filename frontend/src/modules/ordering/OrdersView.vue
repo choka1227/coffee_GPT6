@@ -272,7 +272,7 @@ async function pay(o: Order) {
         </table>
       </div>
       <div class="table-foot">
-        已載入 {{ orders.length }} 筆 · 付款狀態以後端確認為準
+        目前顯示 {{ orders.length }} 筆 · 付款狀態以後端確認為準
         <button
           v-if="nextCursor"
           class="btn small secondary"
@@ -302,13 +302,19 @@ async function pay(o: Order) {
               : [l.temperature, l.sugar].filter(Boolean).join(" / ") || "無選項"
           }}</small></span
         ><b>{{ money(l.lineTotal) }}</b>
+        <span v-if="l.discountAmount > 0" class="muted">促銷折抵</span
+        ><b v-if="l.discountAmount > 0">-{{ money(l.discountAmount) }}</b>
       </div>
       <div class="receipt-row">
         <span>商品小計</span><b>{{ money(selected.subtotal) }}</b>
       </div>
-      <div v-if="selected.discountAmount" class="receipt-row">
-        <span>優惠折抵<small>{{ selected.discount?.name }} · {{ selected.discount?.code }}</small></span>
-        <b>-{{ money(selected.discountAmount) }}</b>
+      <div v-if="selected.itemDiscountAmount" class="receipt-row">
+        <span>品項促銷折抵<small>{{ selected.itemPromotion?.name }}</small></span>
+        <b>-{{ money(selected.itemDiscountAmount) }}</b>
+      </div>
+      <div v-if="selected.discount?.discountAmount" class="receipt-row">
+        <span>優惠碼折抵<small>{{ selected.discount.name }} · {{ selected.discount.code }}</small></span>
+        <b>-{{ money(selected.discount.discountAmount) }}</b>
       </div>
       <div class="receipt-row">
         <b>合計</b><strong>{{ money(selected.total) }}</strong>

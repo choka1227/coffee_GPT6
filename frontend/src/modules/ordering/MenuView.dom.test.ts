@@ -30,6 +30,7 @@ async function mountMenu(
   actor: Actor,
   branches: Branch[] = [branchFixture()],
   product: Product = productFixture(),
+  order = orderFixture(),
 ): Promise<MenuScenario> {
   const { fetch, requests } = stubApi({
     "/api/branches": branches,
@@ -95,7 +96,7 @@ async function mountMenu(
         updatedBy: actor.id,
       };
     },
-    "/api/orders": orderFixture(),
+    "/api/orders": order,
     "/api/orders/O1/cash": orderFixture({
       status: "PAID",
       paidAt: 2,
@@ -117,14 +118,14 @@ async function addProduct(wrapper: VueWrapper): Promise<void> {
 }
 
 describe("MenuView 可見性", () => {
-  it("門市人員以現金結帳時看得到實收與找零並可確認收款", async () => {
+  it("門市現金在建單前不顯示實收與找零", async () => {
     const { wrapper } = await mountMenu(branchStaffActor());
     await addProduct(wrapper);
 
-    expect(labelByText(wrapper, "實收金額")).not.toBeNull();
-    expect(rowByLabel(wrapper, "應找零")).not.toBeNull();
+    expect(labelByText(wrapper, "實收金額")).toBeNull();
+    expect(rowByLabel(wrapper, "應找零")).toBeNull();
     expect(checkoutButton(wrapper).attributes("disabled")).toBeUndefined();
-    expect(checkoutButton(wrapper).text()).toContain("確認收款");
+    expect(checkoutButton(wrapper).text()).toContain("建立訂單並計算應收");
   });
 
   it("顧客點餐時看不到門市實收與找零欄位", async () => {
@@ -293,7 +294,34 @@ describe("MenuView 可見性", () => {
 
 describe("MenuView 兩段式現金收款", () => {
   it("由後端計算折扣應收並只送出允許的訂單與收款欄位", async () => {
-    const { wrapper, requests } = await mountMenu(branchStaffActor());
+    const { wrapper, requests } = await mountMenu(
+      branchStaffActor(),
+      [branchFixture()],
+      productFixture(),
+      orderFixture({
+        subtotal: 280,
+        itemDiscountAmount: 140,
+        discountAmount: 154,
+        total: 126,
+        itemPromotion: {
+          promotionId: "PROMO-1",
+          name: "買一送一",
+          kind: "NTH_PERCENT",
+          percent: 100,
+          nth: 2,
+          discountedUnits: 1,
+          discountAmount: 140,
+        },
+        discount: {
+          code: "WELCOME",
+          name: "新客優惠",
+          kind: "PERCENT",
+          percent: 10,
+          amount: 0,
+          discountAmount: 14,
+        },
+      }),
+    );
     await addProduct(wrapper);
     await labelByText(wrapper, "優惠碼")!.get("input").setValue("WELCOME");
 
@@ -320,8 +348,10 @@ describe("MenuView 兩段式現金收款", () => {
       ["optionIds", "productId", "quantity"].sort(),
     );
 
-    expect(rowByLabel(wrapper, "小計")!.text()).toContain("140");
-    expect(rowByLabel(wrapper, "優惠折抵")!.text()).toContain("14");
+    expect(rowByLabel(wrapper, "小計")!.text()).toContain("280");
+    expect(rowByLabel(wrapper, "品項促銷折抵")!.text()).toContain("140");
+    expect(rowByLabel(wrapper, "品項促銷折抵")!.text()).toContain("買一送一");
+    expect(rowByLabel(wrapper, "優惠碼折抵")!.text()).toContain("14");
     expect(rowByLabel(wrapper, "應收")!.text()).toContain("126");
     const tendered = labelByText(wrapper, "實收金額");
     expect(tendered).not.toBeNull();

@@ -104,6 +104,7 @@ export function orderFixture(overrides: Partial<Order> = {}): Order {
     total: 126,
     subtotal: 140,
     discountAmount: 14,
+    itemDiscountAmount: 0,
     discount: {
       code: "WELCOME",
       name: "新客優惠",
@@ -112,6 +113,7 @@ export function orderFixture(overrides: Partial<Order> = {}): Order {
       amount: 0,
       discountAmount: 14,
     },
+    itemPromotion: null,
     note: "",
     createdAt: 1,
     paidAt: null,
@@ -128,6 +130,7 @@ export function orderFixture(overrides: Partial<Order> = {}): Order {
         sugar: null,
         optionsPrice: 0,
         lineTotal: 140,
+        discountAmount: 0,
         options: [],
       },
     ],

@@ -10,9 +10,7 @@ export function checkoutPath(input: {
   discountCode: string;
 }): CheckoutPath {
   if (input.paymentMethod === "ECPAY") return "ECPAY";
-  const cashAtPos = !input.isCustomer && input.paymentMethod === "CASH";
-  if (cashAtPos && input.discountCode.trim().length > 0) return "POS_CASH_TWO_STAGE";
-  if (cashAtPos) return "POS_CASH_SINGLE";
+  if (!input.isCustomer && input.paymentMethod === "CASH") return "POS_CASH_TWO_STAGE";
   return "CUSTOMER_PENDING";
 }
 
