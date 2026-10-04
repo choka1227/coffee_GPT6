@@ -626,7 +626,7 @@ record StockInput(String branchId, String productId, Integer quantity) {}
 **前端（S4）**
 
 - [ ] 19. POS 菜單在 `remaining > 0` 時顯示「剩 N 份」，`remaining` 為 `null` 時**不顯示**該徽章（S4）
-- [ ] 19a. **（v1.2 新增）** 手動標記售完且當日 `remaining > 0` 時，商品卡**只顯示「今日售完」，不顯示「剩 N 份」**（兩個徽章不並存，理由見 §13.13）（S4）
+- [x] 19a. **（v1.2 新增）** 手動標記售完且當日 `remaining > 0` 時，商品卡**只顯示「今日售完」，不顯示「剩 N 份」**（兩個徽章不並存，理由見 §13.13）（S4；**已由 G08a／[PR #62](https://github.com/choka1227/coffee_GPT6/pull/62) 於 2026-10-04 完成**）
 - [ ] 20. 店員可在 POS 菜單設定與解除某商品的今日備量，成功後畫面上的剩餘數字更新（S4）
 - [ ] 21. 顧客模式看不到「設定備量」按鈕（S4）
 
