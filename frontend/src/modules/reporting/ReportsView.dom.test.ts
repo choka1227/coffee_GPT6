@@ -1,5 +1,5 @@
 import { flushPromises, type VueWrapper } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import ReportsView from "./ReportsView.vue";
 import Chart from "../../shared/Chart.vue";
 import {
@@ -11,6 +11,14 @@ import {
   stubApi,
 } from "../../shared/testing/harness";
 import type { Report } from "../../shared/types";
+
+vi.mock("../../shared/Chart.vue", () => ({
+  default: {
+    name: "Chart",
+    props: ["option", "label", "description"],
+    template: '<div class="chart-stub" role="img" :aria-label="description || label"></div>',
+  },
+}));
 
 async function mountReports(report: Report): Promise<VueWrapper> {
   const { fetch } = stubApi({
