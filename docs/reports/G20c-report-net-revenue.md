@@ -17,6 +17,12 @@
 - S2：保留毛額欄位；新增 `net_revenue`、`item_discount`、`categoriesNet` 與淨額毛利，未增加 SQL 往返。
 - S3：商品表使用淨營收，折抵為零顯示 `—`；摘要拆分兩種折抵；分類圖改用 `categoriesNet`；CSV 標頭明記口徑。
 
+## 審查修正
+
+- 補上 `topToday[]` 的實際今日資料契約測試：固定驗證 `id`、`name`、`quantity`、`revenue`、`net_revenue`，明確排除沒有消費端的 `item_discount`，並釘住毛額 200、品項促銷折抵 50、淨額 150。
+- 既有測試資料有三處算術修正：`A-1` 的 `discount` 由 10 改為 0、`B-2` 由 20 改為 0，API 契約的 `discount` 預期值由 30 改為 0。原 fixture 的 `total` 與「商品毛額 − 折抵」不相等，會使規格 §5.2 的淨額恆等式在主 fixture 上無法成立。
+- 上述 fixture 修正偏離 G20c v1.1 驗收 10 原本的「既有案例原封不動」文字；規格已在 v1.2 明確校正這項錯誤。非零折抵覆蓋沒有流失：折抵案例仍釘住 `itemDiscount=150` 與 `codeDiscount=20`。
+
 ## 驗證
 
 - S1 最新遠端驗證：Verify run #479 completed/success。

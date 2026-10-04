@@ -230,6 +230,43 @@ class ReportAggregationTest {
   }
 
   @Test
+  void topTodayKeepsNetRevenueContractWithoutItemDiscount() {
+    LocalDate today = LocalDate.now(TAIPEI);
+    seedDiscounted(
+        "TODAY-1",
+        "alpha",
+        130,
+        70,
+        50,
+        today.atTime(10, 0).toString(),
+        "TAKEAWAY",
+        "ECPAY",
+        "today-latte",
+        "Today Latte",
+        "coffee",
+        200,
+        60,
+        1,
+        0,
+        0,
+        50);
+
+    Reports.MonthlyReport report =
+        reports.report(global(), today.toString().substring(0, 7), null);
+
+    assertThat(report.topToday())
+        .singleElement()
+        .satisfies(
+            row -> {
+              assertThat(row)
+                  .containsKeys("id", "name", "quantity", "revenue", "net_revenue");
+              assertThat(row).doesNotContainKey("item_discount");
+              assertThat(((Number) row.get("revenue")).longValue()).isEqualTo(200L);
+              assertThat(((Number) row.get("net_revenue")).longValue()).isEqualTo(150L);
+            });
+  }
+
+  @Test
   void branchScopeCannotSeeOrRequestAnotherBranch() {
     Actor alpha = branchActor("alpha");
 
