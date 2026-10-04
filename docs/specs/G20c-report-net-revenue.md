@@ -3,7 +3,7 @@
 | 項目 | 內容 |
 | --- | --- |
 | 缺口編號 | G20c |
-| 版本 | v1.0（2026-10-04） |
+| 版本 | v1.1（2026-10-04） |
 | 登記來源 | `docs/specs/G20-item-level-promotions.md` §14「G20c 報表的淨營收歸屬（含 G07 訂單層折扣的分攤規則）」、§13.11「報表不改，品項營收維持定價毛額」 |
 | Flyway 版號 | **無 migration**（主線目前最高 V14，由 G20 占用；**V15 仍然空著，留給下一份需要 schema 的規格**，見 §4） |
 | 涉及後端模組 | `coffee-reporting`（主）、`coffee-orders`（S1 的一行投影修正） |
@@ -110,7 +110,16 @@ orders.total                  （淨額）
 
 **`V15` 仍然空著。** 下一份需要 schema 的規格請占用 V15，不要因為本規格編號在 G20 之後就以為 V15 被用掉了。
 
-**要注意的測試 DDL：** `ReportAggregationTest` 自己用 `db.execute("create table order_items(...)")` 建一份精簡 schema（`ReportAggregationTest.java:56-60`），那份 DDL **目前沒有 `discount_amount` 欄位**。S2 必須補上，否則新查詢在測試裡會直接炸。這與 PR #65 在 `OrderPaginationTest` 踩到的是同一個坑 —— 本 repo 有多處手寫測試 DDL，改 SQL 時要一起掃。
+**要注意的測試 DDL：** `ReportAggregationTest` 自己用 `db.execute("create table ...")` 建一份精簡 schema，**兩張表都缺本規格要用的欄位，S2 要各補一個**：
+
+| 手寫 DDL | 位置 | 缺的欄位 | 誰要用它 |
+| --- | --- | --- | --- |
+| `order_items` | `ReportAggregationTest.java:55-59` | `discount_amount integer not null` | §5.3(a) products 查詢、§5.3(b) topToday 查詢 |
+| `orders` | `ReportAggregationTest.java:51-54` | `item_discount_amount integer not null` | §5.3(d) totals 查詢 |
+
+**漏掉 `orders` 那一個最容易發生**，因為它不在品項那張表上，而缺口是 §5.3(d) 的 totals 查詢而不是商品查詢。兩個都補才會綠。欄位型別跟著 V14 的 `NOT NULL DEFAULT 0` 走；H2 的手寫 DDL 沒有 default，所以 `seed(...)` 的 insert 也要一起帶值（既有案例一律帶 0，驗收 10 才會原封不動通過）。
+
+這與 PR #65 在 `OrderPaginationTest` 踩到的是同一個坑 —— 本 repo 有多處手寫測試 DDL，改 SQL 時要一起掃。
 
 ---
 
@@ -199,7 +208,9 @@ select i.product_id as id, i.name as name, i.category as category,
 - 排序鍵**維持 `quantity desc, revenue desc`**（毛額）。改排序鍵會讓既有的商品排行順序無聲地變動，那不是本規格要的，而且 `ReportAggregationTest` 有釘排序。
 - `products` 是 `List<Map<String,Object>>`，新增的 key 會自動流到 API 與前端，**`Reports.java` 的 record 不用為它們改任何東西**。
 
-**(b) topToday 查詢**（`ReportService.java:80-88`）同樣加 `net_revenue`。今日前五名在前端是「數量 + 營收」兩欄，營收改用淨額才與主表一致。
+**(b) topToday 查詢**（`ReportService.java:80-88`）**只加 `net_revenue` 一欄**，不加 `item_discount`。今日前五名在前端是「數量 + 營收」兩欄，營收改用淨額才與主表一致。
+
+> **為什麼 topToday 不跟 products 一樣加兩欄**：topToday 的唯一消費端是 §5.5(c) 的今日前五名卡片，那張卡片沒有折抵欄也不會有（它只有兩欄的空間）。`topToday` 在 `shared/types.ts:221` 是自己的 inline 型別、不與 `products[]` 共用，所以兩者欄位不對稱**不會**造成型別重複宣告。多選一個沒有人讀的彙總欄位，只會讓「API 回傳的每個欄位都有消費端」這條界線鬆掉。要是哪天卡片真的要顯示折抵，那時再加一欄 `sum(i.discount_amount) as item_discount` 並補一條驗收 —— 它折在既有查詢裡，往返次數不變，是零風險的加法。
 
 **(c) 分類淨額**：既有的 `categories` 由 `products` 累加（`ReportService.java:115-118`）。在它旁邊再累加一份：
 
@@ -291,7 +302,7 @@ record MonthlyReport(
 - 商品明細的欄位改成「名稱 / 數量 / 淨營收 / 促銷折抵 / 毛額」
 - **標頭列的文字要寫清楚口徑**，匯出的檔案會離開系統，拿到的人沒有頁面可以看
 
-**(f) `shared/types.ts`** 的 `Report` 依 §5.4 同步加欄位；`products[]` 與 `topToday[]` 加 `net_revenue`、`item_discount`。
+**(f) `shared/types.ts`** 的 `Report` 依 §5.4 同步加欄位；`products[]` 加 `net_revenue` 與 `item_discount`，`topToday[]` **只加 `net_revenue`**（理由見 §5.3(b)）。型別宣告要與 SQL 實際產生的欄位**逐一對齊** —— 宣告一個查詢不會回傳的必填欄位，等於在編譯期騙過型別檢查、在執行期拿到 `undefined`。
 
 > **命名**：後端 `queryForList` 回的是 SQL 欄位名，所以前端拿到的 key 是 **snake_case**（`net_revenue`、`item_discount`），與既有的 `id` / `name` / `category` / `revenue` / `cost` 同一個來源。**不要**在後端為它們做 camelCase 轉換 —— 那會讓這張表的 key 一半 snake 一半 camel。型別定義照實寫 snake_case。
 
@@ -301,7 +312,12 @@ record MonthlyReport(
 
 ### 6.1 `GET /api/reports/{month}`（路徑與請求不變）
 
-回應多出 §5.4 列的欄位，以及 `products[]` / `topToday[]` 的 `net_revenue`、`item_discount`。
+回應多出 §5.4 列的欄位，以及：
+
+| 陣列 | 新增的 key |
+| --- | --- |
+| `products[]` | `net_revenue`、`item_discount` |
+| `topToday[]` | `net_revenue`（**只有這一個**，理由見 §5.3(b)） |
 
 **沒有新端點、沒有新的請求參數、沒有任何欄位被移除或改名。**
 
@@ -362,7 +378,7 @@ S1 的 `reconciliationCandidates` 權限路徑也不動。
 
 - `Reports.MonthlyReport` 依 §5.4 擴充
 - `ReportService` 依 §5.3 調整四處查詢（**不新增往返**）
-- `ReportAggregationTest` 的手寫 `order_items` DDL 補 `discount_amount`（§4）
+- `ReportAggregationTest` 的手寫 DDL 補兩個欄位：`order_items.discount_amount` 與 `orders.item_discount_amount`（§4）
 - 測試：§11.1 的 (a)–(f)
 
 **本階段對既有呼叫端是純加法**，前端不改也不會壞（`npm run build` 不受影響，因為 `Report` 介面只是多了可選讀的欄位 —— 但仍要照 §11.3 跑一次前端建置確認）。
@@ -394,6 +410,7 @@ S1 的 `reconciliationCandidates` 權限路徑也不動。
 - [ ] 1. `reconciliationCandidates` 的 select 清單含 `d.discount_amount discount_code_amount`，且 `OrderDiscount` 的最後一個引數讀該別名（S1）
 - [ ] 2. 同時有品項促銷與優惠碼的 ECPAY 待付訂單：`reconciliationCandidates` 回的 `discount().discountAmount()` = 優惠碼折抵、`discountAmount()` = 總折抵（S1）
 - [ ] 3. `products[]` 每列含 `net_revenue` 與 `item_discount`，`revenue` 維持毛額且 key 名稱不變（S2）
+- [ ] 3a. `topToday[]` 每列含 `net_revenue`**且不含 `item_discount`**；`revenue` 維持毛額且 key 名稱不變（S2）。這一條同時驗兩個方向 —— 有 `net_revenue`（否則 §5.5(c) 的卡片沒東西可讀）、沒有 `item_discount`（否則 §5.5(f) 的型別宣告會與實際回傳不符）。編號用 `3a` 而不是插進 4，是為了不動既有 17 條的編號
 - [ ] 4. `Σ products[].revenue − Σ products[].item_discount = Σ products[].net_revenue`（S2）
 - [ ] 5. `Σ products[].net_revenue − codeDiscount = revenue`（S2，本規格最重要的一條）
 - [ ] 6. `itemDiscount + codeDiscount = discount`（S2）
@@ -459,7 +476,7 @@ S1 的 `reconciliationCandidates` 權限路徑也不動。
 
 - **本規格零 migration，V15 仍然空著。** 下一份需要 schema 的規格請占用 V15
 - **動到的既有後端檔案：** `OrderService.java`（S1，一處 select 清單 + 一處讀取）、`Reports.java`（S2）、`ReportService.java`（S2）、`ReportAggregationTest.java`（S2）、`ReconciliationTest.java`（S1）
-- **與 G20（PR #65）的關係：** 本規格**依賴** G20 的 `order_items.discount_amount` 與 `orders.item_discount_amount`。**G20 合併之後才能開工。** 若開工時 G20 還沒合併，先把 `feature/init-project` 的最新狀態 merge 進來確認那兩個欄位在；不在就等
+- **與 G20（PR #65）的關係：** 本規格**依賴** G20 的 `order_items.discount_amount` 與 `orders.item_discount_amount`。**這個前提已經滿足** —— [PR #65](https://github.com/choka1227/coffee_GPT6/pull/65) 已於 2026-10-04 合併進 `feature/init-project`（主線合併提交 `e81fa44`，Flyway `V14__item_promotions.sql`），兩個欄位都在主線上。**本項沒有任何外部閘門，可直接開工。**
 - **動到的既有前端檔案：** `ReportsView.vue`、`shared/types.ts`、`shared/testing/fixtures.ts`（S3）。這三個檔案 G20 S4 剛動過 `types.ts` 與 `fixtures.ts`，**本規格只加報表相關的欄位，不碰 G20 加的 `itemPromotion` / `discountAmount`**
 - 本規格**不碰** `OrderService.create`、`PromotionService`、`DiscountService`、任何 migration
 
@@ -564,4 +581,5 @@ S1 的 `reconciliationCandidates` 權限路徑也不動。
 
 | 日期 | 版本 | 變更 |
 | --- | --- | --- |
+| 2026-10-04 | v1.1 | 依 Codex 在 [PR #66](https://github.com/choka1227/coffee_GPT6/pull/66) 的 `REQUEST_CHANGES` 修補三處會讓實作端拿到互相矛盾指示的缺口：(1) `topToday[]` 的 API 契約統一為**只加 `net_revenue`**（§5.3(b) 原本只要求一欄，§5.5(f) 與 §6.1 卻要求兩欄，型別會宣告一個查詢不產生的必填欄位）；(2) `ReportAggregationTest` 的手寫 DDL **兩張表都要補欄位** —— 原本 §4 與 §9 只點了 `order_items.discount_amount`，漏了 §5.3(d) totals 查詢要用的 `orders.item_discount_amount`，照原文施工 S2 必定紅（此項為 Claude 複查時自行發現，不在 Codex 的 review 內）；(3) §12 的開工前提改為「已滿足」，G20 已合併（主線 `e81fa44`）。**設計決策一條未改**；驗收條件既有 17 條的內容與編號全數未動，另加一條 `3a` 把 `topToday[]` 的欄位契約變成可驗證的紅線（原本 §5.3(b) 與 §5.5(c) 都要求它，卻沒有任何一條驗收看得到它）。 |
 | 2026-10-04 | v1.0 | 初版。依 G20 §14 的 G20c 登記產出，並在 §13.2 說明為什麼把「訂單層優惠碼的分攤規則」切出去成為 G20f。缺陷 5（對帳投影的折抵別名）為 Claude 審查 PR #65 時發現，併入 S1 |
