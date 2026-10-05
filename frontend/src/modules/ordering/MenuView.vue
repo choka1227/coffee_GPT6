@@ -25,6 +25,7 @@ import type {
   CartLine,
   Order,
   ProductStock,
+  ActivePromotion,
 } from "../../shared/types";
 import { minuteTime, money } from "../../shared/format";
 import { notify } from "../../shared/notice";
@@ -39,9 +40,11 @@ import {
   nextIdempotency,
   validateTendered,
 } from "./checkout";
+import { promotionCartHint, promotionText } from "./promotions";
 const auth = useAuth(),
   router = useRouter(),
   products = ref<Product[]>([]),
+  promotions = ref<ActivePromotion[]>([]),
   branches = ref<Branch[]>([]),
   branchId = ref(auth.user?.branchId || ""),
   loading = ref(true),
@@ -78,6 +81,39 @@ const visible = computed(() =>
       (p.name + p.subtitle).includes(query.value),
   ),
 );
+const promotionByProduct = computed(() => {
+  const byProduct = new Map<string, ActivePromotion>();
+  const byCategory = new Map<string, ActivePromotion>();
+  for (const rule of promotions.value) {
+    const target = rule.targetKind === "PRODUCT" ? byProduct : byCategory;
+    if (!target.has(rule.targetId)) target.set(rule.targetId, rule);
+  }
+  return { byProduct, byCategory };
+});
+function promotionForTarget(
+  productId: string | null,
+  category: string,
+): ActivePromotion | null {
+  const { byProduct, byCategory } = promotionByProduct.value;
+  return (productId ? byProduct.get(productId) : undefined) ?? byCategory.get(category) ?? null;
+}
+function promotionFor(p: Product): ActivePromotion | null {
+  return promotionForTarget(p.id, p.category);
+}
+const cartPromotionHints = computed(() => {
+  const matched = new Map<
+    string,
+    { rule: ActivePromotion; matchedUnits: number }
+  >();
+  for (const line of cart.value) {
+    const rule = promotionForTarget(line.productId, line.category);
+    if (!rule) continue;
+    const current = matched.get(rule.id);
+    if (current) current.matchedUnits += line.quantity;
+    else matched.set(rule.id, { rule, matchedUnits: line.quantity });
+  }
+  return Array.from(matched.values()).map(promotionCartHint);
+});
 const total = computed(() =>
   cart.value.reduce((s, l) => s + (l.unitPrice + l.optionsPrice) * l.quantity, 0),
 );
@@ -172,11 +208,19 @@ async function loadBranchHours(showError = true) {
 async function loadMenu(showError = true) {
   if (!branchId.value) {
     products.value = [];
+    promotions.value = [];
     return;
   }
   products.value = [];
+  promotions.value = [];
   try {
-    products.value = await api<Product[]>(`/menu?branchId=${encodeURIComponent(branchId.value)}`);
+    const query = `?branchId=${encodeURIComponent(branchId.value)}`;
+    const [menuResult, promotionResult] = await Promise.all([
+      api<Product[]>(`/menu${query}`),
+      api<ActivePromotion[]>(`/promotions/active${query}`).catch(() => []),
+    ]);
+    products.value = menuResult;
+    promotions.value = promotionResult;
     if (unavailableCart.value.length)
       notify("切換分店後，點餐單中有商品已售完或未供應，請先移除");
   } catch (e) {
@@ -615,6 +659,12 @@ async function saveStock(clear = false) {
                 ><Plus :size="19"
               /></span>
             </div>
+            <p
+              v-if="p.availability !== 'SOLD_OUT' && promotionFor(p)"
+              class="promo-hint"
+            >
+              {{ promotionText(promotionFor(p)!) }}
+            </p>
             <div v-if="auth.can('MENU_AVAILABILITY')" class="product-actions">
               <button
                 class="availability-action"
@@ -689,6 +739,10 @@ async function saveStock(clear = false) {
               ><strong>{{ money((l.unitPrice + l.optionsPrice) * l.quantity) }}</strong>
             </div>
             <small>{{ l.options.length ? l.options.map((o) => o.optionName).join(" / ") : "無選項" }}</small>
+            <small
+              v-if="promotionForTarget(l.productId, l.category)"
+              class="promo-hint cart-line-promo"
+            >{{ promotionText(promotionForTarget(l.productId, l.category)!) }}</small>
             <div class="quantity-control">
               <button :aria-label="'減少' + l.name" @click="adjust(i, -1)">
                 <Minus :size="13" /></button
@@ -698,6 +752,16 @@ async function saveStock(clear = false) {
               </button>
             </div>
           </article>
+        </div>
+        <div
+          v-if="!pendingCashOrder && cartPromotionHints.length"
+          class="cart-promotion-hints"
+        >
+          <p
+            v-for="hint in cartPromotionHints"
+            :key="hint"
+            class="promo-hint cart-promotion-progress"
+          >{{ hint }}</p>
         </div>
         <label class="cart-note"
           >訂單備註 <span>選填</span

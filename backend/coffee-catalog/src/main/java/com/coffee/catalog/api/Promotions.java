@@ -18,6 +18,15 @@ public interface Promotions {
       Long endsAt,
       boolean active) {}
 
+  record ActiveRule(
+      String id,
+      String name,
+      String kind,
+      int percent,
+      int nth,
+      String targetKind,
+      String targetId) {}
+
   record Line(String productId, String category, int unitPrice, int quantity) {}
 
   record Applied(
@@ -33,6 +42,8 @@ public interface Promotions {
       List<Integer> lineDiscounts) {}
 
   List<Rule> list(Actor actor);
+
+  List<ActiveRule> active(Actor actor, String branchId);
 
   Rule save(Actor actor, Rule rule);
 
