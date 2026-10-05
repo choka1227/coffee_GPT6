@@ -108,14 +108,14 @@ const categoryChart = computed<EChartsOption>(() => ({
   },
   series: [
     {
-      name: "分類營業額",
+      name: "分類商品淨營收",
       type: "pie",
       radius: ["52%", "73%"],
       center: ["50%", "43%"],
       avoidLabelOverlap: true,
       label: { show: false },
       itemStyle: { borderColor: "#fff", borderWidth: 5, borderRadius: 5 },
-      data: Object.entries(report.value?.categories || {}).map(
+      data: Object.entries(report.value?.categoriesNet || {}).map(
         ([name, value]) => ({ name, value }),
       ),
     },
@@ -156,7 +156,10 @@ function exportReport() {
   csv("coffee-report-" + r.month + ".csv", [
     ["月份", r.month],
     ["營業額", r.revenue],
-    ["優惠折抵", r.discount],
+    ["總折抵（品項促銷＋優惠碼）", r.discount],
+    ["品項促銷折抵", r.itemDiscount],
+    ["優惠碼折抵", r.codeDiscount],
+    ["商品淨營收（已扣品項促銷）", r.netProductRevenue],
     ["訂單數", r.orders],
     ["平均客單價", r.averageOrder],
     ["商品毛利（未扣營運費用）", r.grossProfit],
@@ -173,8 +176,14 @@ function exportReport() {
       b.achievement,
     ]),
     [],
-    ["商品", "銷售數量", "銷售金額"],
-    ...r.products.map((p) => [p.name, p.quantity, p.revenue]),
+    ["商品名稱", "銷售數量", "商品淨營收（已扣品項促銷）", "品項促銷折抵", "定價毛額（淨營收＋促銷折抵）"],
+    ...r.products.map((p) => [
+      p.name,
+      p.quantity,
+      p.net_revenue,
+      p.item_discount,
+      p.revenue,
+    ]),
   ]);
 }
 </script>
@@ -247,9 +256,12 @@ function exportReport() {
           <small>已確認付款 · {{ month }}</small>
         </article>
         <article class="kpi">
-          <div><span>優惠折抵</span><Receipt :size="19" /></div>
+          <div><span>總折抵</span><Receipt :size="19" /></div>
           <h2>{{ money(report.discount) }}</h2>
-          <small>已付款訂單使用優惠碼的折抵總額</small>
+          <small
+            >品項促銷折抵 {{ money(report.itemDiscount) }}<br />優惠碼折抵
+            {{ money(report.codeDiscount) }}</small
+          >
         </article>
         <article class="kpi">
           <div><span>成交訂單</span><Receipt :size="19" /></div>
@@ -331,7 +343,7 @@ function exportReport() {
             <div>
               <div class="ranking-label">
                 <b>{{ p.name }}</b
-                ><span>{{ p.quantity }} 份</span>
+                ><span>{{ p.quantity }} 份 · {{ money(p.net_revenue) }}</span>
               </div>
               <div class="bar-track">
                 <span
@@ -346,14 +358,14 @@ function exportReport() {
         <section class="panel">
           <div class="panel-heading">
             <div>
-              <h2>餐點分類佔比</h2>
-              <p>依所選月份銷售金額計算</p>
+              <h2>餐點分類淨營收佔比</h2>
+              <p>依所選月份商品淨營收計算</p>
             </div>
           </div>
           <Chart
             v-if="report.revenue"
             :option="categoryChart"
-            label="餐點分類營業額圓環圖"
+            label="餐點分類商品淨營收圓環圖"
           />
           <div v-else class="empty-state compact">尚無銷售資料</div>
         </section>
@@ -464,8 +476,9 @@ function exportReport() {
                 <th>商品</th>
                 <th>分類</th>
                 <th>銷售份數</th>
-                <th>銷售金額</th>
-                <th>商品毛利</th>
+                <th>商品淨營收</th>
+                <th>促銷折抵</th>
+                <th>商品毛利（淨額基礎）</th>
               </tr>
             </thead>
             <tbody>
@@ -478,18 +491,19 @@ function exportReport() {
                 </td>
                 <td>{{ p.category }}</td>
                 <td>{{ number(p.quantity) }}</td>
-                <td>{{ money(p.revenue) }}</td>
-                <td>{{ money(p.revenue - p.cost) }}</td>
+                <td>{{ money(p.net_revenue) }}</td>
+                <td>{{ p.item_discount > 0 ? money(p.item_discount) : "—" }}</td>
+                <td>{{ money(p.net_revenue - p.cost) }}</td>
               </tr>
               <tr v-if="!report.products.length">
-                <td colspan="5">此月份尚無已付款餐點。</td>
+                <td colspan="6">此月份尚無已付款餐點。</td>
               </tr>
             </tbody>
           </table>
         </div>
       </section>
       <p class="report-note">
-        統計以付款確認時間（Asia/Taipei）歸屬月份；排除未付款與取消訂單。商品毛利僅扣除成交時商品成本，不含人事、租金、稅費及金流手續費。
+        統計以付款確認時間（Asia/Taipei）歸屬月份；排除未付款與取消訂單。定價毛額 = 商品淨營收 + 品項促銷折抵；商品毛利以淨額為基礎，僅扣除成交時商品成本，不含優惠碼折抵、人事、租金、稅費及金流手續費。
       </p></template
     >
   </div>

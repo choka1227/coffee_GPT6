@@ -60,8 +60,10 @@ public class ReportService implements Reports {
     var products =
         db.queryForList(
             "select i.product_id as id,i.name as name,i.category as category,sum(i.quantity) as"
-                + " quantity,sum((i.unit_price+i.options_price)*i.quantity) as"
-                + " revenue,sum((i.unit_cost+i.options_cost)*i.quantity) as cost from order_items i"
+                + " quantity,sum((i.unit_price+i.options_price)*i.quantity) as revenue,"
+                + "sum(i.discount_amount) as item_discount,"
+                + "sum((i.unit_price+i.options_price)*i.quantity-i.discount_amount) as net_revenue,"
+                + "sum((i.unit_cost+i.options_cost)*i.quantity) as cost from order_items i"
                 + " join orders o on o.id=i.order_id where o.paid_at>=? and o.paid_at<?"
                 + filter
                 + " group by i.product_id,i.name,i.category order by quantity desc,revenue desc",
@@ -77,8 +79,9 @@ public class ReportService implements Reports {
     var topToday =
         db.queryForList(
             "select i.product_id as id,max(i.name) as name,sum(i.quantity) as"
-                + " quantity,sum((i.unit_price+i.options_price)*i.quantity) as revenue from"
-                + " order_items i join orders o on o.id=i.order_id where o.paid_at>=? and"
+                + " quantity,sum((i.unit_price+i.options_price)*i.quantity) as revenue,"
+                + "sum((i.unit_price+i.options_price)*i.quantity-i.discount_amount) as net_revenue"
+                + " from order_items i join orders o on o.id=i.order_id where o.paid_at>=? and"
                 + " o.paid_at<?"
                 + filter
                 + " group by i.product_id order by quantity desc,revenue desc limit 5",
@@ -115,9 +118,13 @@ public class ReportService implements Reports {
               target == 0 ? 0 : Math.round(rev * 1000.0 / target) / 10.0));
     }
     var categories = new LinkedHashMap<String, Long>();
-    for (var p : products)
+    var categoriesNet = new LinkedHashMap<String, Long>();
+    for (var p : products) {
       categories.merge(
           (String) p.get("category"), ((Number) p.get("revenue")).longValue(), Long::sum);
+      categoriesNet.merge(
+          (String) p.get("category"), ((Number) p.get("net_revenue")).longValue(), Long::sum);
+    }
     var hourlyRows =
         db.query(
             "select ((o.paid_at+28800000)/3600000)%24 as taipei_hour,count(*) as orders"
@@ -137,30 +144,47 @@ public class ReportService implements Reports {
             "select coalesce(sum(o.total),0),coalesce(sum(o.discount_amount),0),count(*),"
                 + "coalesce(sum(case when o.payment_method='CASH' then 1 else 0 end),0),"
                 + "coalesce(sum(case when o.payment_method='ECPAY' then 1 else 0 end),0),"
-                + "coalesce(sum(case when o.fulfillment='TAKEAWAY' then 1 else 0 end),0)"
+                + "coalesce(sum(case when o.fulfillment='TAKEAWAY' then 1 else 0 end),0),"
+                + "coalesce(sum(o.item_discount_amount),0),"
+                + "coalesce(sum(o.discount_amount-o.item_discount_amount),0)"
                 + " from orders o where o.paid_at>=? and o.paid_at<?"
                 + filter,
             (r, n) ->
                 new long[] {
-                  r.getLong(1), r.getLong(2), r.getLong(3), r.getLong(4), r.getLong(5), r.getLong(6)
+                  r.getLong(1), r.getLong(2), r.getLong(3), r.getLong(4),
+                  r.getLong(5), r.getLong(6), r.getLong(7), r.getLong(8)
                 },
             params.toArray());
     long revenue = totals[0], discount = totals[1], count = totals[2];
+    long itemDiscount = totals[6], codeDiscount = totals[7];
+    long netProductRevenue =
+        products.stream()
+            .mapToLong(p -> ((Number) p.get("net_revenue")).longValue())
+            .sum();
+    long netProductProfit = netProductRevenue - cost;
     return new MonthlyReport(
         month,
         today.toString(),
         revenue,
         discount,
+        itemDiscount,
+        codeDiscount,
         count,
         count == 0 ? 0 : Math.round((double) revenue / count),
         quantity,
         revenue - cost,
         revenue == 0 ? 0 : Math.round((revenue - cost) * 1000.0 / revenue) / 10.0,
+        netProductRevenue,
+        netProductProfit,
+        netProductRevenue == 0
+            ? 0
+            : Math.round(netProductProfit * 1000.0 / netProductRevenue) / 10.0,
         daily,
         products,
         topToday,
         performance,
         categories,
+        categoriesNet,
         hourly,
         totals[3],
         totals[4],

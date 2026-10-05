@@ -584,7 +584,8 @@ public class OrderService implements Orders {
     params.add(offset);
     return db.query(
         "select o.*,b.name branch_name,d.code discount_code,d.name discount_name,"
-            + "d.kind discount_kind,d.percent discount_percent,d.amount discount_rule_amount"
+            + "d.kind discount_kind,d.percent discount_percent,d.amount discount_rule_amount,"
+            + "d.discount_amount discount_code_amount"
             + " from orders o join branches b on b.id=o.branch_id"
             + " left join order_discounts d on d.order_id=o.id"
             + " where o.payment_method='ECPAY' and o.status='PENDING_PAYMENT'"
@@ -607,7 +608,7 @@ public class OrderService implements Orders {
                 r.getString("discount_code") == null ? null : new OrderDiscount(
                     r.getString("discount_code"), r.getString("discount_name"),
                     r.getString("discount_kind"), r.getInt("discount_percent"),
-                    r.getInt("discount_rule_amount"), r.getInt("discount_amount")),
+                    r.getInt("discount_rule_amount"), r.getInt("discount_code_amount")),
                 null,
                 r.getString("note"),
                 r.getLong("created_at"),

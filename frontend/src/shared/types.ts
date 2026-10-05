@@ -215,11 +215,16 @@ export interface Report {
   today: string;
   revenue: number;
   discount: number;
+  itemDiscount: number;
+  codeDiscount: number;
+  netProductRevenue: number;
   orders: number;
   averageOrder: number;
   quantity: number;
   grossProfit: number;
   grossMargin: number;
+  netProductProfit: number;
+  netProductMargin: number;
   daily: { day: string; revenue: number; orders: number }[];
   products: {
     id: string;
@@ -227,9 +232,17 @@ export interface Report {
     category: string;
     quantity: number;
     revenue: number;
+    item_discount: number;
+    net_revenue: number;
     cost: number;
   }[];
-  topToday: { id: string; name: string; quantity: number; revenue: number }[];
+  topToday: {
+    id: string;
+    name: string;
+    quantity: number;
+    revenue: number;
+    net_revenue: number;
+  }[];
   branches: {
     id: string;
     name: string;
@@ -239,6 +252,7 @@ export interface Report {
     achievement: number;
   }[];
   categories: Record<string, number>;
+  categoriesNet: Record<string, number>;
   hourly: { hour: string; orders: number }[];
   cashOrders: number;
   onlineOrders: number;

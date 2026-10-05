@@ -1,4 +1,4 @@
-import type { Actor, Branch, Order, Product } from "../types";
+import type { Actor, Branch, Order, Product, Report } from "../types";
 
 const ALL_PERMISSIONS = [
   "ORDER_CREATE",
@@ -134,6 +134,65 @@ export function orderFixture(overrides: Partial<Order> = {}): Order {
         options: [],
       },
     ],
+    ...overrides,
+  };
+}
+
+
+export function reportFixture(overrides: Partial<Report> = {}): Report {
+  return {
+    month: "2026-10",
+    today: "2026-10-04",
+    revenue: 238,
+    discount: 42,
+    itemDiscount: 28,
+    codeDiscount: 14,
+    netProductRevenue: 252,
+    orders: 2,
+    averageOrder: 119,
+    quantity: 3,
+    grossProfit: 128,
+    grossMargin: 53.8,
+    netProductProfit: 142,
+    netProductMargin: 56.3,
+    daily: [{ day: "04", revenue: 238, orders: 2 }],
+    products: [
+      {
+        id: "P1",
+        name: "經典拿鐵",
+        category: "經典咖啡",
+        quantity: 2,
+        revenue: 280,
+        item_discount: 28,
+        net_revenue: 252,
+        cost: 110,
+      },
+    ],
+    topToday: [
+      {
+        id: "P1",
+        name: "經典拿鐵",
+        quantity: 2,
+        revenue: 280,
+        net_revenue: 252,
+      },
+    ],
+    branches: [
+      {
+        id: "B1",
+        name: "台北門市",
+        revenue: 238,
+        orders: 2,
+        target: 300000,
+        achievement: 0.1,
+      },
+    ],
+    categories: { 經典咖啡: 280 },
+    categoriesNet: { 經典咖啡: 252 },
+    hourly: [{ hour: "10", orders: 2 }],
+    cashOrders: 1,
+    onlineOrders: 1,
+    takeawayOrders: 2,
     ...overrides,
   };
 }
