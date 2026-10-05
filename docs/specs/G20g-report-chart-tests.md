@@ -3,7 +3,7 @@
 | 項目 | 內容 |
 | --- | --- |
 | 缺口編號 | G20g |
-| 版本 | v1.0（2026-10-05） |
+| 版本 | v1.1（2026-10-05） |
 | 登記來源 | [`G20c-report-net-revenue.md`](G20c-report-net-revenue.md) §13.6、§14 |
 | 分支 | `codex/g20g-report-chart-tests` |
 | Flyway | **零 migration**（`V15` 仍然空著，本規格一個 SQL 檔都不加） |
@@ -176,15 +176,19 @@ export const chartStub: Component = {
 };
 ```
 
-`ReportsView.dom.test.ts` 頂端的 `vi.mock` 改成引用它：
+`ReportsView.dom.test.ts` 頂端的 `vi.mock` 改成引用它。**唯一正確的寫法是 async factory 配 dynamic import：**
 
 ```ts
-import { chartStub } from "../../shared/testing/harness";
-
-vi.mock("../../shared/Chart.vue", () => ({ default: chartStub }));
+vi.mock("../../shared/Chart.vue", async () => ({
+  default: (await import("../../shared/testing/harness")).chartStub,
+}));
 ```
 
-**`vi.mock` 的 hoisting 要注意：** `vi.mock` 會被 Vitest 提到檔案最上面，所以 factory 裡**不能**直接用到檔案頂層 `import` 進來的識別字 —— 一般情形下會拿到 undefined。這裡安全的原因是 factory 是**延遲執行**的（在模組真的被 require 時才跑），而 `chartStub` 是具名匯出的常數。若實作時遇到 hoisting 報錯（訊息會提到 "Cannot access ... before initialization"），**正確的修法是把 factory 改成 `async () => ({ default: (await import("../../shared/testing/harness")).chartStub })`**，不是把 stub 複製回測試檔。
+**不要寫成靜態 import 版本**（`import { chartStub } from "..."` 配 `vi.mock(..., () => ({ default: chartStub }))`）。`vi.mock` 會被 Vitest 提到檔案最上面，factory 裡**不能**依賴檔案頂層 `import` 建立的 binding：factory 的執行時機是「`ReportsView` 解析到 `Chart.vue` 的那一刻」，**那個時機早於本測試檔自己的 import binding 完成初始化**，於是 `chartStub` 還在 TDZ，拿到的是 `Cannot access 'chartStub' before initialization` 或 undefined。
+
+這件事取決於模組解析次序，所以它**會不會炸是環境相依的** —— 這正是不能把靜態版本當預設、把 async 版本當「炸了再換」的備案的理由：一個時好時壞的寫法比一個穩定壞掉的寫法更難處理。async factory 的 dynamic import 在 factory **執行時**才解析 `harness.ts`，此時它必定已初始化完成，不存在次序問題。
+
+> 這條與 §5.4 的 `vi.hoisted` 是同一個根因的兩種解法：**`vi.mock` 的 factory 不能看見它下面的任何東西。** 需要的值來自別的模組就用 async dynamic import（本節），需要的值是本檔自己造的 mock 函式就用 `vi.hoisted`（§5.4）。
 
 **保留現有 class 名 `chart-stub`。** `ReportsView.dom.test.ts` 現有的三條測試用 `findAllComponents(Chart)` 找元件、不靠 class，但沿用同一個 class 名可以讓既有測試一個字都不用改（驗收 1）。
 
@@ -318,7 +322,7 @@ vi.mock("echarts/core", () => ({
 }));
 ```
 
-然後在 `beforeEach` 裡接起 `init` 的回傳值（`vi.clearAllMocks()` 會清掉 `mockReturnValue`，所以每條測試都要重設）：
+然後在 `beforeEach` 裡接起 `init` 的回傳值（**每條測試都重設，理由見下方**）：
 
 ```ts
 beforeEach(() => {
@@ -335,7 +339,13 @@ beforeEach(() => {
 });
 ```
 
-**`vi.clearAllMocks()` 清掉 `mockReturnValue` 這件事很容易漏** —— 症狀是第一條測試過、第二條起 `chart` 是 `undefined`，而 `Chart.vue` 裡全是 `chart?.setOption(...)` 的選擇性串接，所以**不會丟錯，只會讓斷言默默收到 0 次呼叫**。把 `mockReturnValue` 放在 `clearAllMocks()` 之後就對了。
+**`vi.clearAllMocks()` 不會清掉 `mockReturnValue`。** 它對每個 mock 呼叫 `.mockClear()`，只清呼叫歷史（`mock.calls`、`mock.instances`、`mock.results`），**實作與回傳值原封不動**。會重設實作的是 `vi.resetAllMocks()`／`.mockReset()`。
+
+所以上面那段的順序**不是為了修復 `clearAllMocks` 造成的破壞**，而是為了**測試隔離**：把 `mockReturnValue` 設在 `beforeEach` 裡，每條測試都拿到一個全新的 chart 物件，前一條測試對它做過什麼都不會滲進來。這個寫法本身是對的，照抄即可。
+
+> **這一段在 v1.0 把原因寫反了**（說 `clearAllMocks` 會清掉 `mockReturnValue`），由 Codex 在 [PR #70](https://github.com/choka1227/coffee_GPT6/pull/70) 的審查指出。保留這個註記是因為**錯的因果會讓人在真的遇到問題時找錯方向**：如果有人照 v1.0 的說法相信「回傳值被 clear 掉了」，下次 mock 行為異常時他會去檢查 `clearAllMocks` 的位置，而不是去檢查 `vi.hoisted` 或 factory 的執行時機 —— 那兩個才是這個檔案真正會出事的地方。
+>
+> **真正會「默默收到 0 次呼叫」的失敗模式仍然存在，但成因是別的**：`Chart.vue` 裡全是 `chart?.setOption(...)` 的選擇性串接，所以只要 `init` 因為任何原因回傳 `undefined`（例如 `vi.hoisted` 沒用、factory 拿到還在 TDZ 的 `const`），**不會丟錯，只會讓斷言收到 0 次呼叫**。驗收 8 的 `notMerge` 斷言能擋住它，但看到「0 次呼叫」時要往 §5.4 開頭的 hoisting 去查，不是往 `clearAllMocks` 查。
 
 **`vi.mock("echarts/core")` 必須連 `use` 一起提供。** `Chart.vue` 在模組層就呼叫 `use([...])`（`:13`），mock 漏掉 `use` 會在 import 時就 `TypeError`。同理四個 `echarts/*` 子路徑都要 mock，否則真的 echarts 模組會被載入 —— 載入本身不會炸（炸的是 `init`），但沒必要讓它進來。
 
@@ -482,7 +492,7 @@ function chartOption(wrapper: VueWrapper, label: string): ChartOption {
 可逐條勾選。
 
 - [ ] 1. `ReportsView.dom.test.ts` 既有的三條測試**一個字元都不改**（除了頂端 `vi.mock` 改為引用 `chartStub`）且全綠
-- [ ] 2. `harness.ts` 匯出 `chartStub`，`ReportsView.dom.test.ts` 的 `vi.mock` 引用它，測試檔內**沒有**自己的 stub 定義
+- [ ] 2. `harness.ts` 匯出 `chartStub`，`ReportsView.dom.test.ts` 的 `vi.mock` 以 **async factory 配 dynamic import** 引用它（`async () => ({ default: (await import(".../harness")).chartStub })`，**不是**靠檔案頂層的靜態 `import` binding —— 理由見 §5.1），測試檔內**沒有**自己的 stub 定義
 - [ ] 3. `trend` 的 option 有測試斷言 `xAxis.data` 等於 `daily[].day`、`series[0].data` 等於 `daily[].revenue`、`series[0].type` 為 `"line"`，且 fixture 的 `revenue` 與 `orders` 在每一筆都不相等
 - [ ] 4. `trend` 的測試覆蓋 `revenue: 0` 的那一天，並斷言它在 `series[0].data` 裡是 `0`（不是被濾掉、不是 `null`）
 - [ ] 5. `hourly` 的 option 有測試斷言 `xAxis.data` 長度為 24、`[0]` 為 `"00:00"`、`[23]` 為 `"23:00"`、`series[0].data` 在指定小時的值正確、`series[0].type` 為 `"bar"`
@@ -540,15 +550,18 @@ function chartOption(wrapper: VueWrapper, label: string): ChartOption {
 
 **與 G20a 的並行注意：**
 
-G20a（工作順序第 22 項，規格已在主線、尚未實作）動的是 `modules/ordering/MenuView.vue` 與購物車，**與本規格零重疊**。唯一的交會點是 `src/shared/testing/harness.ts`：G20a §13 的 (b) 提到它要改 `MenuView.dom.test.ts` 的預設 stub 路由。
+G20a（工作順序第 22 項）動的是 `modules/ordering/MenuView.vue` 與購物車，**與本規格在檔案層級零重疊**。
 
-兩邊都碰 `harness.ts` 時：
+**更正（v1.1）：** v1.0 寫「唯一的交會點是 `src/shared/testing/harness.ts`」，**那是錯的**，由 Codex 在 [PR #70](https://github.com/choka1227/coffee_GPT6/pull/70) 的審查指出。G20a 要加的那條 `"/api/promotions/active"` 預設路由是加在 `MenuView.dom.test.ts` 自己的 `mountMenu` 裡（G20a §11.3），而 G20a §11.4 **明文禁止**修改 `harness.ts` 的 `stubApi`。G20a 的實作（[PR #72](https://github.com/choka1227/coffee_GPT6/pull/72)）已證實這一點：它動的 11 個檔案裡**沒有 `harness.ts`**。
+
+所以兩份規格在 `harness.ts` 上**不會相撞** —— 本規格是這一輪唯一新增 `chartStub` 匯出的一方：
 
 - 本規格只**新增**一個具名匯出 `chartStub`，不改 `stubApi`／`mountView` 的任何一行
-- G20a 若要改 `stubApi` 的預設路由，那是不同的函式
-- 所以 git 層面的衝突只會發生在「兩邊都往檔尾加東西」的情形，解法是保留雙方，**不要**二選一
+- G20a 不碰 `harness.ts`
 
-**先合併誰：** 誰先綠誰先合併，後者把主線 merge 進自己的分支再推。本規格刻意不依賴 G20a 的任何產出，反向也成立。
+**先合併誰：** 誰先綠誰先合併。兩邊在檔案層級沒有交集，**不需要任何合併順序協調**；本規格刻意不依賴 G20a 的任何產出，反向也成立。
+
+> 這類「推測出來的交集」比漏寫交集更糟：它會讓實作端為了一個不存在的衝突去預留處理，或在解衝突時誤動對方的檔案。**並行注意只寫查證過的交集**，查不到就寫「無」。
 
 ---
 
@@ -636,7 +649,7 @@ G20a（工作順序第 22 項，規格已在主線、尚未實作）動的是 `m
 
 這些**都不計入規格庫存**，登記的目的是讓下一輪不用重新推導。
 
-編號說明：`G20g` 由 G20c §13.6 占用（即本規格），`G20h` 由 G20a §13.1 占用，所以 `G20i` 是 `G20` 系列下一個未使用號。`G28` 已由 G08 §14 占用，主序列的下一個未使用號是 `G29`。
+編號說明：`G20g` 由 G20c §13.6 占用（即本規格），`G20h` 由 G20a §13.1 占用，`G20i` 由 G20a §14 占用（促銷提示的樣式，2026-10-05 登記），所以 **`G20j`** 是 `G20` 系列下一個未使用號。`G28` 已由 G08 §14 占用，主序列的下一個未使用號是 `G29`。
 
 ---
 
@@ -644,4 +657,5 @@ G20a（工作順序第 22 項，規格已在主線、尚未實作）動的是 `m
 
 | 日期 | 版本 | 變更 |
 | --- | --- | --- |
+| 2026-10-05 | v1.1 | 依 Codex 在 [PR #70](https://github.com/choka1227/coffee_GPT6/pull/70) 的 `REQUEST_CHANGES` 修正三處**規格準確性**問題（三項查證後皆成立，全數採納）：(1) §5.1 原把「在 `vi.mock` factory 裡直接用靜態 import 的 `chartStub`」描述為安全、只把 async dynamic import 當作炸了之後的備案 —— 實際上 factory 的執行時機早於本檔 import binding 初始化，會不會炸取決於模組解析次序，**時好時壞比穩定壞掉更難處理**，故改為直接定 async factory 為唯一寫法，並同步收緊驗收 2；(2) §5.4 原稱 `vi.clearAllMocks()` 會清掉 `mockReturnValue` —— **錯的**，`clearAllMocks` 只清呼叫歷史，重設實作的是 `resetAllMocks`。`beforeEach` 裡重設回傳值的寫法本身正確（理由是測試隔離），但錯的因果會讓人在真的遇到「0 次呼叫」時去查 `clearAllMocks` 而不是查 hoisting，故改寫原因並指向真正的失敗模式;(3) §12 原稱與 G20a 的交會點是 `harness.ts` —— **不存在**，G20a §11.3 要改的是 `MenuView.dom.test.ts` 的 `mountMenu`、§11.4 明文禁止動 `harness.ts`，其實作 PR #72 的 11 個檔案裡也確實沒有 `harness.ts`，故刪除該交集並改為「不需要合併順序協調」 |
 | 2026-10-05 | v1.0 | 初版。依 G20c §13.6／§14 的 G20g 登記產出。缺陷 3（分類圖 `v-if` 口徑不一致）為 Claude 審查 [PR #69](https://github.com/choka1227/coffee_GPT6/pull/69) 時發現、當時列為「不擋，登記備查」第 3 項，依 §13.4 的理由併入本規格。§13.1 記錄「本輪不做 G20f」的理由，避免下一輪把它當成顯然的下一步 |
