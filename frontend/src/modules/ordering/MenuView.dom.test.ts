@@ -33,11 +33,12 @@ async function mountMenu(
   product: Product = productFixture(),
   order = orderFixture(),
   promotionRules: ActivePromotion[] | null = [],
+  extraProducts: Product[] = [],
 ): Promise<MenuScenario> {
   const { fetch, requests } = stubApi({
     "/api/branches": branches,
     "/api/payments/config": { enabled: true, environment: "stage" },
-    "/api/menu": () => [product],
+    "/api/menu": () => [product, ...extraProducts],
     ...(promotionRules === null
       ? {}
       : { "/api/promotions/active": () => promotionRules }),
@@ -112,8 +113,8 @@ async function mountMenu(
   return { wrapper: await mountView(MenuView, { actor, fetch }), requests };
 }
 
-async function addProduct(wrapper: VueWrapper): Promise<void> {
-  await wrapper.get(".product-card").trigger("click");
+async function addProduct(wrapper: VueWrapper, index = 0): Promise<void> {
+  await wrapper.findAll(".product-card")[index].trigger("click");
   const addButton = wrapper
     .findAll("button")
     .find((button) => button.text().includes("加入點餐單"));
@@ -189,6 +190,92 @@ describe("MenuView 可見性", () => {
     expect(wrapper.get(".product-card").text()).toContain("經典拿鐵");
     expect(wrapper.find(".promo-hint").exists()).toBe(false);
     expect(wrapper.find(".error-state").exists()).toBe(false);
+  });
+
+  it("購物車一件時提示再加一件可享第二件半價", async () => {
+    const { wrapper } = await mountMenu(
+      customerActor(),
+      [branchFixture()],
+      productFixture(),
+      orderFixture(),
+      [activePromotionFixture()],
+    );
+    await addProduct(wrapper);
+
+    expect(wrapper.get(".cart-line-promo").text()).toBe("第二杯半價：第 2 件 5 折");
+    expect(wrapper.get(".cart-promotion-progress").text()).toBe(
+      "再加 1 件可享「第二杯半價」第 2 件 5 折",
+    );
+  });
+
+  it("購物車兩件時提示已折一件且下一輪仍需兩件", async () => {
+    const { wrapper } = await mountMenu(
+      customerActor(),
+      [branchFixture()],
+      productFixture(),
+      orderFixture(),
+      [activePromotionFixture()],
+    );
+    await addProduct(wrapper);
+    await wrapper.get('button[aria-label="增加經典拿鐵"]').trigger("click");
+
+    expect(wrapper.get(".cart-promotion-progress").text()).toBe(
+      "已符合「第二杯半價」：已折 1 件，再加 2 件可再折 1 件",
+    );
+  });
+
+  it("分類促銷會跨不同商品累加件數", async () => {
+    const rule = activePromotionFixture({
+      targetKind: "CATEGORY",
+      targetId: "經典咖啡",
+    });
+    const { wrapper } = await mountMenu(
+      customerActor(),
+      [branchFixture()],
+      productFixture({ id: "P1", name: "經典拿鐵", category: "經典咖啡" }),
+      orderFixture(),
+      [rule],
+      [productFixture({ id: "P2", name: "美式咖啡", category: "經典咖啡" })],
+    );
+    await addProduct(wrapper, 0);
+    await addProduct(wrapper, 1);
+
+    expect(wrapper.findAll(".cart-line-promo")).toHaveLength(2);
+    expect(wrapper.findAll(".cart-promotion-progress")).toHaveLength(1);
+    expect(wrapper.get(".cart-promotion-progress").text()).toContain("已折 1 件");
+  });
+
+  it("後端已回傳現金訂單後隱藏預測門檻並保留四行真實金額", async () => {
+    const { wrapper } = await mountMenu(
+      branchStaffActor(),
+      [branchFixture()],
+      productFixture(),
+      orderFixture({
+        subtotal: 280,
+        itemDiscountAmount: 140,
+        discountAmount: 154,
+        total: 126,
+        itemPromotion: {
+          promotionId: "PROMO-1",
+          name: "第二杯半價",
+          kind: "NTH_PERCENT",
+          percent: 50,
+          nth: 2,
+          discountedUnits: 1,
+          discountAmount: 140,
+        },
+      }),
+      [activePromotionFixture()],
+    );
+    await addProduct(wrapper);
+    await checkoutButton(wrapper).trigger("click");
+    await flushPromises();
+
+    expect(wrapper.find(".cart-promotion-progress").exists()).toBe(false);
+    expect(rowByLabel(wrapper, "小計")!.text()).toContain("280");
+    expect(rowByLabel(wrapper, "品項促銷折抵")!.text()).toContain("140");
+    expect(rowByLabel(wrapper, "優惠碼折抵")!.text()).toContain("14");
+    expect(rowByLabel(wrapper, "應收")!.text()).toContain("126");
   });
 
   it("門市現金在建單前不顯示實收與找零", async () => {

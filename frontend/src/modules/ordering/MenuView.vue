@@ -40,7 +40,7 @@ import {
   nextIdempotency,
   validateTendered,
 } from "./checkout";
-import { promotionText } from "./promotions";
+import { promotionCartHint, promotionText } from "./promotions";
 const auth = useAuth(),
   router = useRouter(),
   products = ref<Product[]>([]),
@@ -90,10 +90,30 @@ const promotionByProduct = computed(() => {
   }
   return { byProduct, byCategory };
 });
-function promotionFor(p: Product): ActivePromotion | null {
+function promotionForTarget(
+  productId: string | null,
+  category: string,
+): ActivePromotion | null {
   const { byProduct, byCategory } = promotionByProduct.value;
-  return byProduct.get(p.id!) ?? byCategory.get(p.category) ?? null;
+  return (productId ? byProduct.get(productId) : undefined) ?? byCategory.get(category) ?? null;
 }
+function promotionFor(p: Product): ActivePromotion | null {
+  return promotionForTarget(p.id, p.category);
+}
+const cartPromotionHints = computed(() => {
+  const matched = new Map<
+    string,
+    { rule: ActivePromotion; matchedUnits: number }
+  >();
+  for (const line of cart.value) {
+    const rule = promotionForTarget(line.productId, line.category);
+    if (!rule) continue;
+    const current = matched.get(rule.id);
+    if (current) current.matchedUnits += line.quantity;
+    else matched.set(rule.id, { rule, matchedUnits: line.quantity });
+  }
+  return Array.from(matched.values()).map(promotionCartHint);
+});
 const total = computed(() =>
   cart.value.reduce((s, l) => s + (l.unitPrice + l.optionsPrice) * l.quantity, 0),
 );
@@ -719,6 +739,10 @@ async function saveStock(clear = false) {
               ><strong>{{ money((l.unitPrice + l.optionsPrice) * l.quantity) }}</strong>
             </div>
             <small>{{ l.options.length ? l.options.map((o) => o.optionName).join(" / ") : "無選項" }}</small>
+            <small
+              v-if="promotionForTarget(l.productId, l.category)"
+              class="promo-hint cart-line-promo"
+            >{{ promotionText(promotionForTarget(l.productId, l.category)!) }}</small>
             <div class="quantity-control">
               <button :aria-label="'減少' + l.name" @click="adjust(i, -1)">
                 <Minus :size="13" /></button
@@ -728,6 +752,16 @@ async function saveStock(clear = false) {
               </button>
             </div>
           </article>
+        </div>
+        <div
+          v-if="!pendingCashOrder && cartPromotionHints.length"
+          class="cart-promotion-hints"
+        >
+          <p
+            v-for="hint in cartPromotionHints"
+            :key="hint"
+            class="promo-hint cart-promotion-progress"
+          >{{ hint }}</p>
         </div>
         <label class="cart-note"
           >訂單備註 <span>選填</span
