@@ -19,6 +19,13 @@ class PromotionController {
     return promotions.list(actor);
   }
 
+  @GetMapping("/active")
+  List<Promotions.ActiveRule> active(
+      @RequestAttribute Actor actor,
+      @RequestParam(required = false) String branchId) {
+    return promotions.active(actor, branchId);
+  }
+
   @PostMapping
   Promotions.Rule save(@RequestAttribute Actor actor, @RequestBody Promotions.Rule rule) {
     return promotions.save(actor, rule);

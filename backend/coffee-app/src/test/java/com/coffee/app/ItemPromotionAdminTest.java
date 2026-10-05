@@ -9,10 +9,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.coffee.catalog.api.Promotions;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.coffee.catalog.api.Promotions.Rule;
 import com.coffee.identity.api.Identity;
 import com.coffee.shared.Actor;
 import com.coffee.shared.Problem;
+import java.util.HashSet;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,6 +39,7 @@ class ItemPromotionAdminTest {
   @Autowired Identity identity;
   @Autowired JdbcTemplate db;
   @Autowired MockMvc mvc;
+  @Autowired ObjectMapper mapper;
 
   Actor hq;
 
@@ -42,6 +47,7 @@ class ItemPromotionAdminTest {
   void reset() {
     db.update("delete from order_item_promotions");
     db.update("delete from item_promotions");
+    db.update("delete from audit_log where action='PROMOTION_SAVE'");
     hq = identity.find("hq");
   }
 
@@ -97,6 +103,66 @@ class ItemPromotionAdminTest {
         .andExpect(status().isForbidden());
   }
 
+
+  @Test
+  void activeEndpointReturnsOnlyCurrentApplicableSafeProjection() throws Exception {
+    long now = System.currentTimeMillis();
+    var global = promotions.save(hq, activeRule("全店拿鐵九折", null, null, null, true));
+    var local =
+        promotions.save(hq, activeRule("台北拿鐵五折", "taipei", null, null, true));
+    promotions.save(hq, activeRule("未啟用", null, null, null, false));
+    promotions.save(hq, activeRule("尚未開始", null, now + 60_000, null, true));
+    promotions.save(hq, activeRule("已經結束", null, null, now - 60_000, true));
+
+    var result =
+        mvc.perform(
+                get("/api/promotions/active")
+                    .param("branchId", "taipei")
+                    .session(session("customer")))
+            .andExpect(status().isOk())
+            .andReturn();
+    JsonNode response = mapper.readTree(result.getResponse().getContentAsString());
+    assertThat(response.size()).isEqualTo(2);
+    assertThat(Set.of(response.get(0).get("id").asText(), response.get(1).get("id").asText()))
+        .containsExactlyInAnyOrder(global.id(), local.id());
+    for (JsonNode rule : response) {
+      var keys = new HashSet<String>();
+      rule.fieldNames().forEachRemaining(keys::add);
+      assertThat(keys)
+          .containsExactlyInAnyOrder(
+              "id", "name", "kind", "percent", "nth", "targetKind", "targetId");
+      assertThat(rule.get("targetId").asText()).isEqualTo("latte");
+    }
+
+    var unknownBranch =
+        mvc.perform(
+                get("/api/promotions/active")
+                    .param("branchId", "missing")
+                    .session(session("customer")))
+            .andExpect(status().isOk())
+            .andReturn();
+    JsonNode unknownResponse =
+        mapper.readTree(unknownBranch.getResponse().getContentAsString());
+    assertThat(unknownResponse.size()).isEqualTo(1);
+    assertThat(unknownResponse.get(0).get("id").asText()).isEqualTo(global.id());
+  }
+
+  @Test
+  void activeEndpointRequiresAuthenticationAndBranchId() throws Exception {
+    mvc.perform(get("/api/promotions/active").param("branchId", "taipei"))
+        .andExpect(status().isUnauthorized())
+        .andExpect(jsonPath("$.message").value("請先登入"));
+    mvc.perform(get("/api/promotions/active").session(session("customer")))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.message").value("請選擇分店"));
+    mvc.perform(
+            get("/api/promotions/active")
+                .param("branchId", " ")
+                .session(session("manager")))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.message").value("請選擇分店"));
+  }
+
   @Test
   void validatesEverySpecifiedField() {
     assertProblem(400, "請提供品項促銷", () -> promotions.save(hq, null));
@@ -133,6 +199,23 @@ class ItemPromotionAdminTest {
   private Rule nth(String id, int nth, int percent) {
     return new Rule(id, "買一送一", "NTH_PERCENT", percent, nth, "PRODUCT", "latte", null,
         null, null, null, true);
+  }
+
+  private Rule activeRule(
+      String name, String branchId, Long startsAt, Long endsAt, boolean active) {
+    return new Rule(
+        null,
+        name,
+        "ITEM_PERCENT",
+        10,
+        0,
+        "PRODUCT",
+        "latte",
+        null,
+        branchId,
+        startsAt,
+        endsAt,
+        active);
   }
 
   private Rule withName(String name) {
