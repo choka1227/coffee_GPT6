@@ -287,6 +287,15 @@ export interface PromotionRule {
   endsAt: number | null;
   active: boolean;
 }
+export interface ActivePromotion {
+  id: string;
+  name: string;
+  kind: "ITEM_PERCENT" | "NTH_PERCENT";
+  percent: number;
+  nth: number;
+  targetKind: "PRODUCT" | "CATEGORY";
+  targetId: string;
+}
 export interface ReconciliationPending {
   orderId: string;
   branchId: string;

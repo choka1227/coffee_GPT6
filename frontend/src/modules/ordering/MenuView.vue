@@ -25,6 +25,7 @@ import type {
   CartLine,
   Order,
   ProductStock,
+  ActivePromotion,
 } from "../../shared/types";
 import { minuteTime, money } from "../../shared/format";
 import { notify } from "../../shared/notice";
@@ -39,9 +40,11 @@ import {
   nextIdempotency,
   validateTendered,
 } from "./checkout";
+import { promotionText } from "./promotions";
 const auth = useAuth(),
   router = useRouter(),
   products = ref<Product[]>([]),
+  promotions = ref<ActivePromotion[]>([]),
   branches = ref<Branch[]>([]),
   branchId = ref(auth.user?.branchId || ""),
   loading = ref(true),
@@ -78,6 +81,19 @@ const visible = computed(() =>
       (p.name + p.subtitle).includes(query.value),
   ),
 );
+const promotionByProduct = computed(() => {
+  const byProduct = new Map<string, ActivePromotion>();
+  const byCategory = new Map<string, ActivePromotion>();
+  for (const rule of promotions.value) {
+    const target = rule.targetKind === "PRODUCT" ? byProduct : byCategory;
+    if (!target.has(rule.targetId)) target.set(rule.targetId, rule);
+  }
+  return { byProduct, byCategory };
+});
+function promotionFor(p: Product): ActivePromotion | null {
+  const { byProduct, byCategory } = promotionByProduct.value;
+  return byProduct.get(p.id!) ?? byCategory.get(p.category) ?? null;
+}
 const total = computed(() =>
   cart.value.reduce((s, l) => s + (l.unitPrice + l.optionsPrice) * l.quantity, 0),
 );
@@ -172,11 +188,19 @@ async function loadBranchHours(showError = true) {
 async function loadMenu(showError = true) {
   if (!branchId.value) {
     products.value = [];
+    promotions.value = [];
     return;
   }
   products.value = [];
+  promotions.value = [];
   try {
-    products.value = await api<Product[]>(`/menu?branchId=${encodeURIComponent(branchId.value)}`);
+    const query = `?branchId=${encodeURIComponent(branchId.value)}`;
+    const [menuResult, promotionResult] = await Promise.all([
+      api<Product[]>(`/menu${query}`),
+      api<ActivePromotion[]>(`/promotions/active${query}`).catch(() => []),
+    ]);
+    products.value = menuResult;
+    promotions.value = promotionResult;
     if (unavailableCart.value.length)
       notify("切換分店後，點餐單中有商品已售完或未供應，請先移除");
   } catch (e) {
@@ -615,6 +639,12 @@ async function saveStock(clear = false) {
                 ><Plus :size="19"
               /></span>
             </div>
+            <p
+              v-if="p.availability !== 'SOLD_OUT' && promotionFor(p)"
+              class="promo-hint"
+            >
+              {{ promotionText(promotionFor(p)!) }}
+            </p>
             <div v-if="auth.can('MENU_AVAILABILITY')" class="product-actions">
               <button
                 class="availability-action"
