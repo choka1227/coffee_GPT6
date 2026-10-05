@@ -185,8 +185,29 @@ public class PromotionService implements Promotions {
   }
 
   @Override
+  public List<ActiveRule> active(Actor actor, String branchId) {
+    Problem.check(branchId != null && !branchId.isBlank(), "請選擇分店");
+    return activeRules(branchId, System.currentTimeMillis()).stream()
+        .map(
+            rule ->
+                new ActiveRule(
+                    rule.id(),
+                    rule.name(),
+                    rule.kind(),
+                    rule.percent(),
+                    rule.nth(),
+                    rule.targetKind(),
+                    "PRODUCT".equals(rule.targetKind()) ? rule.productId() : rule.category()))
+        .toList();
+  }
+
+  @Override
   public Applied apply(String branchId, List<Line> lines, long atEpochMs) {
-    var rules = db.query(
+    return best(activeRules(branchId, atEpochMs), lines);
+  }
+
+  private List<Rule> activeRules(String branchId, long atEpochMs) {
+    return db.query(
         "select * from item_promotions where active=true"
             + " and (branch_id is null or branch_id=?)"
             + " and (starts_at is null or starts_at<=?)"
@@ -195,7 +216,6 @@ public class PromotionService implements Promotions {
         branchId,
         atEpochMs,
         atEpochMs);
-    return best(rules, lines);
   }
 
   static Applied best(List<Rule> rules, List<Line> lines) {

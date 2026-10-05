@@ -1,4 +1,4 @@
-import type { Actor, Branch, Order, Product, Report } from "../types";
+import type { ActivePromotion, Actor, Branch, Order, Product, Report } from "../types";
 
 const ALL_PERMISSIONS = [
   "ORDER_CREATE",
@@ -88,6 +88,21 @@ export function productFixture(overrides: Partial<Product> = {}): Product {
     availability: "AVAILABLE",
     remaining: null,
     optionGroups: [],
+    ...overrides,
+  };
+}
+
+export function activePromotionFixture(
+  overrides: Partial<ActivePromotion> = {},
+): ActivePromotion {
+  return {
+    id: "PROMO-1",
+    name: "第二杯半價",
+    kind: "NTH_PERCENT",
+    percent: 50,
+    nth: 2,
+    targetKind: "PRODUCT",
+    targetId: "P1",
     ...overrides,
   };
 }
