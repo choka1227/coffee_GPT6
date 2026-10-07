@@ -12,12 +12,8 @@ import {
 } from "../../shared/testing/harness";
 import type { Report } from "../../shared/types";
 
-vi.mock("../../shared/Chart.vue", () => ({
-  default: {
-    name: "Chart",
-    props: ["option", "label", "description"],
-    template: '<div class="chart-stub" role="img" :aria-label="description || label"></div>',
-  },
+vi.mock("../../shared/Chart.vue", async () => ({
+  default: (await import("../../shared/testing/harness")).chartStub,
 }));
 
 async function mountReports(report: Report): Promise<VueWrapper> {
@@ -39,6 +35,19 @@ function panelByTitle(wrapper: VueWrapper, title: string) {
     .find((section) => section.find("h2").text() === title);
   expect(panel).toBeDefined();
   return panel!;
+}
+
+type ChartOption = {
+  xAxis: { data: unknown[] };
+  series: { type: string; data: unknown[]; name?: string }[];
+};
+
+function chartOption(wrapper: VueWrapper, label: string): ChartOption {
+  const chart = wrapper
+    .findAllComponents(Chart)
+    .find((component) => component.props("label") === label);
+  expect(chart, `找不到 label 為「${label}」的圖`).toBeDefined();
+  return chart!.props("option") as ChartOption;
 }
 
 describe("ReportsView 淨營收口徑", () => {
@@ -130,5 +139,66 @@ describe("ReportsView 淨營收口徑", () => {
     );
 
     expect(panelByTitle(wrapper, "今日人氣 TOP 5").text()).toContain("252");
+  });
+
+  it("每日營業額折線圖的 x 軸是日期、series 是當日營業額", async () => {
+    const wrapper = await mountReports(
+      reportFixture({
+        daily: [
+          { day: "01", revenue: 1000, orders: 7 },
+          { day: "02", revenue: 0, orders: 4 },
+          { day: "03", revenue: 250, orders: 2 },
+        ],
+      }),
+    );
+    const option = chartOption(wrapper, "本月每日營業額折線圖");
+
+    expect(option.xAxis.data).toEqual(["01", "02", "03"]);
+    expect(option.series[0].data).toEqual([1000, 0, 250]);
+    expect(option.series[0].type).toBe("line");
+  });
+
+  it("時段分布圖的 x 軸是 24 個小時、series 是訂單數", async () => {
+    const hourly = Array.from({ length: 24 }, (_, hour) => ({
+      hour: `${String(hour).padStart(2, "0")}:00`,
+      orders: hour === 9 ? 5 : hour === 18 ? 3 : 0,
+    }));
+    const wrapper = await mountReports(reportFixture({ hourly }));
+    const option = chartOption(wrapper, "24 小時成交訂單分布長條圖");
+
+    expect(option.xAxis.data).toHaveLength(24);
+    expect(option.xAxis.data[0]).toBe("00:00");
+    expect(option.xAxis.data[23]).toBe("23:00");
+    expect(option.series[0].data[9]).toBe(5);
+    expect(option.series[0].data[18]).toBe(3);
+    expect(option.series[0].type).toBe("bar");
+  });
+
+  it("營業額為 0 但仍有商品淨營收時，分類圖照樣顯示", async () => {
+    const wrapper = await mountReports(
+      reportFixture({
+        revenue: 0,
+        netProductRevenue: 252,
+        categoriesNet: { 經典咖啡: 252 },
+      }),
+    );
+    const panel = panelByTitle(wrapper, "餐點分類淨營收佔比");
+
+    expect(panel.find(".chart-stub").exists()).toBe(true);
+    expect(panel.text()).not.toContain("尚無銷售資料");
+  });
+
+  it("完全沒有商品淨營收時顯示空狀態而不是空圖", async () => {
+    const wrapper = await mountReports(
+      reportFixture({
+        revenue: 0,
+        netProductRevenue: 0,
+        categoriesNet: {},
+      }),
+    );
+    const panel = panelByTitle(wrapper, "餐點分類淨營收佔比");
+
+    expect(panel.find(".chart-stub").exists()).toBe(false);
+    expect(panel.text()).toContain("尚無銷售資料");
   });
 });

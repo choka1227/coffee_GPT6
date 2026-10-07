@@ -363,7 +363,7 @@ function exportReport() {
             </div>
           </div>
           <Chart
-            v-if="report.revenue"
+            v-if="report.netProductRevenue"
             :option="categoryChart"
             label="餐點分類商品淨營收圓環圖"
           />
