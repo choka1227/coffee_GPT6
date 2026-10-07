@@ -3,7 +3,7 @@
 | 項目 | 內容 |
 | --- | --- |
 | 缺口編號 | G20h |
-| 版本 | v1.0（2026-10-05） |
+| 版本 | v1.1（2026-10-07） |
 | 登記來源 | [`G20a-promotion-hints.md`](G20a-promotion-hints.md) §13.1、§14 |
 | 分支 | `codex/g20h-order-preview` |
 | Flyway | **零 migration**（`V15` 仍然空著，本規格一個 SQL 檔都不加） |
@@ -98,7 +98,9 @@ frontend         modules/ordering/preview.ts（新增）
 
 **零 migration。** 本規格不新增、不修改任何資料表或欄位，`V15` 仍然空著。
 
-**而且不只是「沒有 migration」，是「不寫入任何一列」** —— 這由 §5.3 的 `@Transactional(readOnly = true)` 在結構上保證，不是靠實作記得不要寫。
+**而且不只是「沒有 migration」，是「不寫入任何一列」** —— 這由兩件事把關：`price()` 本身不含任何寫入（§5.2 的純抽取），以及**驗收 7 的列數斷言**。
+
+§5.3 的 `@Transactional(readOnly = true)` 是**唯讀意圖的標記**，在生產（PostgreSQL）**很可能**也擋得住寫入，但**在本專案的 CI（H2）擋不住**，所以**不要把它當成資料庫級的強制**。完整理由與證據見 §13.4。
 
 ---
 
@@ -320,9 +322,22 @@ public Quote preview(Actor a, PreviewRequest q) {
 
 > `itemPromotionOf` / `orderDiscountOf` 是 `create` 裡既有的 `Applied` → `ItemPromotion` / `OrderDiscount` 轉換，**如果 `create` 目前是內嵌寫的，一併抽成私有方法共用**，不要複製第二份。
 
-**`@Transactional(readOnly = true)` 是本規格的結構紅線，不是效能設定。** PostgreSQL 在唯讀交易裡執行任何 `INSERT` / `UPDATE` / `DELETE` 都會直接丟錯。所以**如果日後有人在 `price()` 共用路徑裡加了寫入**（例如把 `redeemed_count` 的增量搬進去、或加一筆稽核記錄），**試算端點會立刻、明確地爆掉**，而不是安靜地開始消耗優惠碼。驗收 7 驗的就是這一條。
+**`@Transactional(readOnly = true)` 標上去，但它不是資料庫級的強制 —— 不要靠它。**
 
-> **沒有 `@Transactional(readOnly = true)` 會怎樣**：§5.1 那個 bug 會在某次重構之後悄悄復活，而且症狀（`redeemed_count` 莫名其妙變大）要幾個月後才有人注意到。**靠審查記得「這條路徑不能寫入」撐不了幾輪**，靠資料庫擋就永遠成立。
+這一行在本規格裡的作用只有兩個：**宣告這條路徑的唯讀意圖**（讓下一個改這段程式的人看得到），以及**在生產環境（PostgreSQL）很可能額外擋住寫入**。
+
+**它擋不住的地方，恰好是會先發現問題的地方：本專案的 CI。** 原因有兩層，兩層都成立：
+
+1. 主線沒有自訂 transaction manager，也沒有 `setEnforceReadOnly(true)`，所以 Spring 只會呼叫 JDBC 的 `Connection.setReadOnly(true)` —— 那是**提示**，不是 `SET TRANSACTION READ ONLY`
+2. CI 的 H2 **會忽略這個提示**：`setReadOnly(true)` 之後 `INSERT` 與 commit 都照樣成功
+
+**所以「日後有人在 `price()` 裡加了寫入，CI 會立刻爆掉」是錯的 —— CI 會是綠的。** 驗收 7 的列數斷言**只能證明當下列出的那幾張表沒被寫**，證明不了半年後新增的那一行。這是本規格承認的防線上限，不是可以用一個 annotation 補掉的洞。
+
+**要把它變成真紅線，得改設定並用 PostgreSQL 驗** —— 那是另一件事，已登記為 §14 的 **G20k**，不夾在本規格裡。
+
+> **那麼真正的防線是什麼：§5.2 的「純抽取」。** `price()` 不寫入，是因為它是從 `create` 的計價段**原封不動抽出來的**，而計價段本來就不寫入（寫入在 `create` 的後半段，不在 `price()` 裡）。
+> **這條防線的有效期限是「下一次有人改 `price()`」為止。** §5.1 那個 bug 的本質是「一個看起來無害的共用方法裡藏著副作用」—— **同一類問題還會再來**，差別只在下次藏的是稽核記錄還是計數器，而**目前沒有任何自動化擋得住它**。
+> 所以 §5.2 的紅線要讀成「抽取時一行都不要動」，不要讀成「反正有 annotation 擋著」。
 
 #### `OrderController` 新增
 
@@ -335,7 +350,7 @@ Orders.Quote preview(@RequestAttribute Actor actor, @RequestBody Orders.PreviewR
 
 加在既有的 `OrderController`（`/api/orders`）裡。**不要**開新的 Controller。
 
-**`POST` 而不是 `GET`**：購物車是一個結構化的清單（含每個品項的 `optionIds`），塞進 query string 會碰到長度上限與編碼問題。**`POST` 不代表會寫入** —— 不寫入由 `@Transactional(readOnly = true)` 保證，不是由 HTTP 動詞保證。代價是要帶 CSRF token（`api.ts:19` 對非 GET 自動帶），這是既有機制，不需要任何設定。
+**`POST` 而不是 `GET`**：購物車是一個結構化的清單（含每個品項的 `optionIds`），塞進 query string 會碰到長度上限與編碼問題。**`POST` 不代表會寫入** —— 不寫入由 `price()` 的實作與驗收 7 把關（**不是**由 `@Transactional(readOnly = true)` 強制，見 §13.4），也不是由 HTTP 動詞決定。代價是要帶 CSRF token（`api.ts:19` 對非 GET 自動帶），這是既有機制，不需要任何設定。
 
 ### 5.4 S2：刻意**不做**的三件驗證
 
@@ -701,7 +716,7 @@ G20a 驗收 12（v1.1 已收緊為必須有測試）要求 `modules/ordering/pro
 ### 11.5 不要做的事
 
 - **不要**為了讓驗收 6 綠而讓 `create` 或 `preview` 任何一邊改用不同的計價路徑。兩邊必須都走 `price()`
-- **不要**把 `@Transactional(readOnly = true)` 拿掉，即使它讓某條測試比較難寫
+- **不要**把 `@Transactional(readOnly = true)` 拿掉，即使它讓某條測試比較難寫 —— 它是唯讀意圖的標記，也是生產環境可能的額外一層。但**同樣不要把它當成資料庫級的強制**：在 CI（H2）它擋不住寫入，所以驗收 7 的列數斷言仍然是必要的，不能因為「有 annotation」就省掉（§13.4）
 - **不要**在 `promotions.ts` 裡引用 `OrderQuote` 或任何金額欄位（驗收 13）
 - **不要**修改 `shared/testing/harness.ts` 的 `stubApi`（未設定路由回 404 是刻意的）
 - **不要**為 debounce 引入 lodash 或任何套件 —— `setTimeout` 夠用（驗收 19）
@@ -758,13 +773,23 @@ G20a 驗收 12（v1.1 已收緊為必須有測試）要求 `modules/ordering/pro
 
 **推翻的代價：** 加那兩行呼叫即可，前端不必改（它本來就要處理試算失敗，§5.7）。**所以這個決定很便宜就能推翻** —— 如果日後發現顧客因為「有金額」而誤以為能下單，直接加回去。
 
-### 13.4 `@Transactional(readOnly = true)` 是紅線，不是效能設定
+### 13.4 `@Transactional(readOnly = true)` 標上去，但**不當成資料庫級的強制**
 
-**決定：** `preview` 標 `readOnly = true`。
+**決定：** `preview` 標 `readOnly = true`，作用是**宣告唯讀意圖**＋**生產環境（PostgreSQL）可能的額外一層**。「這條路徑不可寫入」的**實際**防線是 §5.2 的純抽取與驗收 7 的列數斷言，**不是這個 annotation**。
 
-**理由：** 它讓「這條路徑不可寫入」由資料庫強制，而不是靠下一個改這段程式的人記得。§5.1 那個 bug 的本質是「一個看起來無害的共用方法裡藏著副作用」—— **同一類問題還會再來**，差別只在下次藏的是稽核記錄還是計數器。有這一行，下次會在 CI 就爆掉。
+**為什麼改成這樣寫（v1.1 的修正）：** v1.0 把它寫成「資料庫強制、日後有人在共用路徑加寫入會在 CI 立即失敗」。**那個宣稱不成立**，Codex 在 [PR #73](https://github.com/choka1227/coffee_GPT6/pull/73) 的 `REQUEST_CHANGES` 指出並給了可重現的證據：
 
-**推翻的代價：** 拿掉它，就要改為靠審查與測試覆蓋每一條可能的寫入路徑。**驗收 7 只能驗它當下沒有寫入，驗不了半年後新增的那一行。**
+| 層 | 現況 | 結果 |
+| --- | --- | --- |
+| Spring | 主線沒有自訂 `JdbcTransactionManager`／`DataSourceTransactionManager`，**沒有 `setEnforceReadOnly(true)`** | 只呼叫 JDBC `Connection.setReadOnly(true)`，**不**下 `SET TRANSACTION READ ONLY` |
+| JDBC driver（CI） | `application-dev.yml` 與測試走 **H2**（`MODE=PostgreSQL` 只影響 SQL 方言，不影響交易屬性） | H2 **忽略**這個提示：`setReadOnly(true)` 後 `isReadOnly()` 仍為 `false`，`INSERT` 與 commit 都成功 |
+| JDBC driver（生產） | `application.yml` 走 **PostgreSQL**（`jdbc:postgresql://`） | pgjdbc 依 `readOnlyMode` 的預設**可能**真的下 `SET TRANSACTION READ ONLY`，寫入會丟錯 —— **但本專案沒有固定這個參數、也沒有任何測試證明它**，所以本規格**不把它列為紅線** |
+
+**也就是說：v1.0 承諾的「半年後有人在 `price()` 加寫入，CI 會爆」恰好是最不會發生的那一種。** CI 跑 H2，會是綠的；真要爆是爆在生產。**宣稱一條不存在的防線比沒有防線更糟** —— 它會讓下一輪的人以為這裡已經有人看著，於是不再寫測試。
+
+**這一輪為什麼選「承認上限」而不是「補成真紅線」：** 要讓 DB 級唯讀可驗證，得同時動 transaction manager 設定（`setEnforceReadOnly(true)`）、把參數固定下來、並補一套**跑真 PostgreSQL** 的測試（Testcontainers 或等價物，等於新依賴）。那會把本規格從「零新依賴、三階段」變成「動基礎設施」，**而且與試算端點本身無關** —— 任何 `readOnly` 路徑都受益。所以切出去登記為 **G20k**（§14），本規格只負責把話說準。
+
+**推翻的代價：** 若日後決定做 G20k，本節與 §4、§5.3、§11.5 要一起改回「資料庫強制」的說法，**而且那時候必須附上 PostgreSQL 級的測試作為證據**，不能再用 annotation 的存在當證據。反向推翻（連 annotation 都拿掉）則連唯讀意圖的標記都沒了，不建議 —— 它的成本是零。
 
 ### 13.5 競態用「單調序號」而不是 `AbortController`
 
@@ -799,6 +824,7 @@ G20a 驗收 12（v1.1 已收緊為必須有測試）要求 `modules/ordering/pro
 | 編號 | 內容 | 來源 |
 | --- | --- | --- |
 | **G20j** | **試算端點的限流**。`POST /api/orders/preview` 每次都會查菜單與促銷規則。目前靠 300ms debounce 把量壓下來，但那是**前端自律**，繞過前端直接打端點不受限。本 repo 目前沒有任何限流基礎設施（錯誤碼表裡的 429 還沒有任何端點在用），要做就是一整套，不該夾在本規格裡 | §2.2 |
+| **G20k** | **可驗證的 DB 級唯讀紅線**。替唯讀交易設定 `setEnforceReadOnly(true)`、固定 pgjdbc 的 `readOnlyMode`，並補一套跑真 PostgreSQL 的測試，證明「在 `readOnly` 路徑裡寫入會失敗」。**做完才能把 §13.4 的說法改回「資料庫強制」。** 要新依賴（Testcontainers 或等價物）與基礎設施變更，所以不夾在本規格裡；受益範圍是全專案所有 `readOnly` 路徑，不只試算端點 | 本規格 §13.4（Codex 於 [PR #73](https://github.com/choka1227/coffee_GPT6/pull/73) 指出 v1.0 的錯誤宣稱） |
 | G20b | 多規則疊加與單位消耗模型（**開工前提仍是要有真實促銷方案**） | G20 §13.2 |
 | G20d | 選項層促銷（加料免費、第二份加料半價） | G20 §2.2 |
 | G20f | 訂單層優惠碼折抵分攤到品項（**分攤演算法已寫好**放在 G20c 附錄 A）。**本規格沒有推翻 G20c §13.2 的拒絕理由** —— 試算端點讓顧客看得到總折抵，但不需要知道它怎麼攤到每個品項 | G20c §13.2 |
@@ -806,7 +832,7 @@ G20a 驗收 12（v1.1 已收緊為必須有測試）要求 `modules/ordering/pro
 
 **這些都不計入規格庫存**，登記的目的是讓下一輪不用重新推導。
 
-編號說明：`G20i` 由 G20a §14 占用（促銷提示的樣式，本規格 S3 順道做掉），`G20j` 由本規格占用，所以 **`G20k`** 是 `G20` 系列下一個未使用號。主序列的下一個未使用號仍是 `G29`。
+編號說明：`G20i` 由 G20a §14 占用（促銷提示的樣式，本規格 S3 順道做掉），`G20j` 與 `G20k` 都由本規格占用，所以 **`G20l`** 是 `G20` 系列下一個未使用號。主序列的下一個未使用號仍是 `G29`。
 
 ---
 
@@ -814,4 +840,5 @@ G20a 驗收 12（v1.1 已收緊為必須有測試）要求 `modules/ordering/pro
 
 | 日期 | 版本 | 變更 |
 | --- | --- | --- |
-| 2026-10-05 | v1.0 | 初版。依 G20a §13.1／§14 的 G20h 登記產出，開工前提（G20 與 G20a 皆已合併）於本日滿足。**本規格最重要的發現是 §5.1**：`DiscountService.apply` 會 `redeemed_count+1` 並取行鎖，試算若直接重用它，顧客光是加減購物車就會把優惠碼額度用光 —— 因此 S1 先把 `quote` 與 `apply` 分家。結構上的防線是 §5.3 的 `@Transactional(readOnly = true)`，讓「試算不可寫入」由資料庫強制而不是靠審查記得。驗收 6（先 preview 再 create，比對 `total` 相等）是本規格存在的理由 |
+| 2026-10-07 | v1.1 | **依 Codex 在 [PR #73](https://github.com/choka1227/coffee_GPT6/pull/73) 的 `REQUEST_CHANGES` 修正 `@Transactional(readOnly = true)` 的錯誤宣稱。** v1.0 在 §4／§5.3／§11.5／§13.4 把它寫成「資料庫強制唯讀、日後有人在共用路徑加寫入會在 CI 立即失敗」，**那不成立**：主線沒有 `setEnforceReadOnly(true)`，CI 跑的 H2 會忽略 `Connection.setReadOnly(true)`，寫入與 commit 都會成功 —— 承諾的 CI 防線恰好不存在。**退件成立。** 四節已改為「唯讀意圖的標記＋生產（PostgreSQL）可能的額外一層」，並明寫**實際防線是 §5.2 的純抽取與驗收 7 的列數斷言**、**驗收 7 只能驗當下、驗不了日後新增的寫入**。§13.4 附上三層（Spring／CI driver／生產 driver）的現況對照表。「把它補成可驗證的 DB 級紅線」切出去登記為 **G20k**（§14），因為要動 transaction manager 設定並引入跑真 PostgreSQL 的測試（新依賴），與試算端點無關且受益範圍是全專案。**驗收條件、API、施工階段、權限與金額規則一字未改** —— 本次只修敘述，不改要實作的東西。 |
+| 2026-10-05 | v1.0 | 初版。依 G20a §13.1／§14 的 G20h 登記產出，開工前提（G20 與 G20a 皆已合併）於本日滿足。**本規格最重要的發現是 §5.1**：`DiscountService.apply` 會 `redeemed_count+1` 並取行鎖，試算若直接重用它，顧客光是加減購物車就會把優惠碼額度用光 —— 因此 S1 先把 `quote` 與 `apply` 分家。~~結構上的防線是 §5.3 的 `@Transactional(readOnly = true)`，讓「試算不可寫入」由資料庫強制而不是靠審查記得。~~（**此句 v1.1 已更正，不成立** —— 見上一列）驗收 6（先 preview 再 create，比對 `total` 相等）是本規格存在的理由 |

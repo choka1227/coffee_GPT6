@@ -3,7 +3,7 @@
 | 項目 | 內容 |
 | --- | --- |
 | 缺口編號 | G20a |
-| 版本 | v1.0（2026-10-04） |
+| 版本 | v1.1（2026-10-05） |
 | 來源 | G20 §13.5「不自動把贈品加進購物車」與 §13.12「菜單不顯示促銷徽章」各自登記的同一個缺口，G20 §14 列為 G20a |
 | 前置條件 | **已滿足。** G20 已隨 [PR #65](https://github.com/choka1227/coffee_GPT6/pull/65) 於 2026-10-04 合併進主線（合併提交 `e81fa44`，Flyway `V14__item_promotions.sql`） |
 | Flyway | **零 migration。`V15` 仍然空著** |
@@ -183,10 +183,12 @@ public List<ActiveRule> active(Actor actor, String branchId) {
 ```java
 @GetMapping("/active")
 List<Promotions.ActiveRule> active(
-    @RequestAttribute Actor actor, @RequestParam String branchId) {
+    @RequestAttribute Actor actor, @RequestParam(required = false) String branchId) {
   return promotions.active(actor, branchId);
 }
 ```
+
+**`required = false` 是刻意的，不是筆誤**（v1.1 更正，v1.0 此處寫成預設的 `required = true`，與本規格自己的 §6.3 錯誤表互相矛盾）：`required = true` 時，缺少 `branchId` 會在請求進到 Service 之前就被 Spring 擋下來丟 `MissingServletRequestParameterException`，回出去的訊息**不會**是 §6.3 指定的 `請選擇分店`，而且是英文的。要讓「缺少」與「空白」兩種情形都回同一個中文訊息，參數就必須進得到 `PromotionService.active` 的 `Problem.check`。
 
 加在既有的 `PromotionController`（`/api/promotions`）裡。**路由不會與既有的 `@GetMapping`（`/api/promotions` 本身）相撞** —— 一個是集合路徑、一個是子路徑 `/active`，Spring 以最長前綴比對。
 
@@ -526,7 +528,7 @@ export function promotionCartHint(input: {
 
 ### S3
 
-- [ ] 12. `modules/ordering/promotions.ts` 全檔**不出現** `unitPrice`、`optionsPrice`、`price`、`total` 任何一個字，也沒有任何 `*` 乘法 —— 提示層不算錢（可用一條讀取原始碼的測試或 code review 檢查，見 §11.2）
+- [ ] 12. `modules/ordering/promotions.ts` 全檔**不出現** `unitPrice`、`optionsPrice`、`price`、`total` 任何一個字，也沒有任何 `*` 乘法 —— 提示層不算錢。**必須由 §11.2 那條讀取原始碼的測試守住**（v1.1 收緊：v1.0 寫成「可用測試**或 code review** 檢查」，而 code review 不會在下一次有人改這個檔時自動再跑一次 —— 那正是 §11.2 說它是「唯一一條靠結構而不是靠審查維持的紅線」要避免的事。**這條收緊不回頭要求 [PR #72](https://github.com/choka1227/coffee_GPT6/pull/72) 補**：它依 v1.0 的字面選了 code review，Claude 已於審查時逐字確認通過，是合規的；收緊適用於**未來任何改動 `promotions.ts` 的工作**）
 - [ ] 13. 購物車有 1 件、規則為 `nth=2` → 顯示「再加 1 件可享…第 2 件 5 折」
 - [ ] 14. 購物車有 2 件、規則為 `nth=2` → 顯示「已符合…已折 1 件，**再加 2 件**可再折 1 件」（**不是「再加 1 件」** —— 已經折掉第 2 件，下一件折抵要湊到第 4 件，所以 `unitsToNext = nth − matchedUnits % nth = 2 − 0 = 2`。這一條與驗收 13 刻意成對，就是要釘住「餘數為 0 時補滿一整輪」這個邊界）
 - [ ] 15. `targetKind='CATEGORY'` 時**跨商品累加**：同分類兩個不同商品各 1 件 → 件數為 2，門檻判定與單一商品 2 件**相同**
@@ -687,6 +689,7 @@ it("提示層不算錢", async () => {
 | 編號 | 內容 | 來源 |
 | --- | --- | --- |
 | **G20h** | **後端購物車試算端點**（`POST /api/orders/preview`：收購物車、回 `Promotions.Applied` 與小計／折抵／應收，不寫任何資料）。讓購物車能顯示**真實**的預估折抵金額，而金額仍然只有後端一個來源。要處理 debounce 與「晚回來的舊回應不能覆蓋新狀態」的競態 | §13.1 |
+| **G20i** | **促銷提示的樣式**（`promo-hint` / `cart-line-promo` / `cart-promotion-progress` 三個 class 目前沒有任何 CSS，提示會以未加樣式的 `<p>`／`<small>` 呈現）。§5.5 給了 class 名卻沒給樣式，§13.6 也只說「純視覺，可以靠樣式補」—— **是規格端沒寫，實作照規格做是對的**。規模極小，適合夾進下一個本來就要動 `MenuView.vue` 的工作，不值得單獨開一輪 | §5.5／§13.6（Claude 審查 PR #72 時登記） |
 | G20b | 多規則疊加與單位消耗模型（**開工前提仍是要有真實促銷方案**） | G20 §13.2 |
 | G20d | 選項層促銷（加料免費、第二份加料半價） | G20 §2.2 |
 | G20f | 訂單層優惠碼折抵分攤到品項（**分攤演算法已寫好**放在 G20c 附錄 A） | G20c §13.2 |
@@ -700,4 +703,5 @@ it("提示層不算錢", async () => {
 
 | 日期 | 版本 | 變更 |
 | --- | --- | --- |
+| 2026-10-05 | v1.1 | 審查 [PR #72](https://github.com/choka1227/coffee_GPT6/pull/72)（G20a 實作，已 `APPROVE`）時發現的**兩處規格端缺陷**，都不是實作的問題：(1) §5.3 的範例碼寫 `@RequestParam String branchId`（預設 `required = true`），與本規格自己的 §6.3「缺少 `branchId` 回 400 `請選擇分店`」互相矛盾 —— `required=true` 會讓 Spring 在進到 Service 前就丟英文的 `MissingServletRequestParameterException`。實作端已自行改為 `required = false` 並在 PR 描述主動揭露，**做法正確**，本版把範例碼與理由補正，避免下一個讀規格的人改回去;(2) 驗收 12 原寫「可用測試**或 code review** 檢查」，但 §11.2 同時說那條測試是「唯一一條靠結構而不是靠審查維持的紅線」—— 兩句互相抵消。本版收緊為必須有測試，且明述不回頭要求 #72 補。另登記 §5.5 的 `promo-hint` 無樣式（見 §14） |
 | 2026-10-04 | v1.0 | 初版。依 G20 §14 的 G20a 登記產出。核心設計決策是 §13.1「前端不算折抵金額」—— 把 G20 §13.12 登記的「純加法」限縮為「只顯示規則條件」，並把「顯示真實預估金額」切出去成為 **G20h**（後端試算端點），理由是前端重做一份計價演算法必定與後端漂移。§13.6 明確避開 G08a 的徽章優先序坑 |
