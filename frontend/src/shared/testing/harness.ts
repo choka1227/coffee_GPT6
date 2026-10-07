@@ -10,6 +10,19 @@ import { expect, vi } from "vitest";
 import { useAuth } from "../../modules/identity/store";
 import type { Actor } from "../types";
 
+/**
+ * `Chart.vue` 的測試替身。
+ *
+ * jsdom 沒有 ECharts 所需的 canvas context；報表測試只需要保留傳入的
+ * option，讓測試能核對圖表資料，不需要真的繪圖。
+ */
+export const chartStub: Component = {
+  name: "Chart",
+  props: ["option", "label", "description"],
+  template:
+    '<div class="chart-stub" role="img" :aria-label="description || label"></div>',
+};
+
 export interface StubbedRequest {
   path: string;
   method: string;
