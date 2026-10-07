@@ -3,7 +3,7 @@
 | 項目 | 內容 |
 | --- | --- |
 | 缺口編號 | G20h |
-| 版本 | v1.1（2026-10-07） |
+| 版本 | v1.2（2026-10-07） |
 | 登記來源 | [`G20a-promotion-hints.md`](G20a-promotion-hints.md) §13.1、§14 |
 | 分支 | `codex/g20h-order-preview` |
 | Flyway | **零 migration**（`V15` 仍然空著，本規格一個 SQL 檔都不加） |
@@ -259,7 +259,9 @@ var priced = price(q.branchId(), q.items(), q.discountCode(), now, true);
 >
 > 參數名用 `redeem` 不用 `preview`，因為它描述的是**這次呼叫會不會消耗兌換次數**，那才是兩條路徑真正的差別。
 
-**驗證「純抽取」的方法：** `create` 的行為零變更，所以 `OrderDiscountTest`、`ItemPromotionOrderTest`、`DiscountRedemptionTest`、`CoffeeIntegrationTest`、`HttpWorkflowTest` **全部一字不改且全綠**。驗收 1 與 14 釘這一條。
+**驗證「純抽取」的方法：** `create` 的行為零變更，所以 `OrderDiscountTest`、`ItemPromotionOrderTest`、`DiscountRedemptionTest`、`CoffeeIntegrationTest`、`HttpWorkflowTest` 這五個檔案裡的**既有測試案例與斷言一字不改，且五個檔案全綠**。驗收 1 與 14 釘這一條。
+
+> **這條紅線禁的是「改鬆既有行為測試來讓抽取過關」，不是禁止在這些檔案新增案例。** S1 就會依 §11.1 在 `DiscountRedemptionTest` **新增** 4 條 `quote`／`apply` 的案例，那是規格要求的，不違反驗收 14。界線很單純：**既有的那幾行一行都不准動**（不得修改、放寬、刪除或 `@Disabled`），新增的另寫新案例。
 
 ### 5.3 S2：`Orders.preview` 與端點
 
@@ -602,7 +604,7 @@ G20a 驗收 12（v1.1 已收緊為必須有測試）要求 `modules/ordering/pro
 
 ### S1 —— 優惠碼的不消耗試算（小）
 
-**動到：** `Discounts.java`（+1 方法）、`DiscountService.java`（`apply` 拆成 `resolve` + `applied`，新增 `quote`）、`DiscountRedemptionTest`（+2 條）
+**動到：** `Discounts.java`（+1 方法）、`DiscountService.java`（`apply` 拆成 `resolve` + `applied`，新增 `quote`）、`DiscountRedemptionTest`（**新增** §11.1 的 4 條案例，**既有案例一條都不動**）
 
 **這一階段不新增任何端點**，合進主線後對外行為**完全沒有變化** —— 只是多了一個沒有人呼叫的 `quote`。這正是 AGENTS.md「能編譯、測試綠、但功能尚未接上」那種安全的中間狀態。
 
@@ -646,7 +648,7 @@ G20a 驗收 12（v1.1 已收緊為必須有測試）要求 `modules/ordering/pro
 - [ ] 8. **試算不佔用庫存**：對設有每日可售數量的商品試算 10 次後，該商品的剩餘量**不變**，且之後仍可正常下單
 - [ ] 9. **越權測試：** 店員對**非所屬分店**試算回 **403**；無 `ORDER_CREATE` 的帳號回 **403**；未登入回 **401**
 - [ ] 10. 售完／已下架／本店未供應的商品在購物車裡時，試算回 **400** 且訊息與 `create` **完全相同**
-- [ ] 14. **`create` 的行為零變更**：`OrderDiscountTest`、`ItemPromotionOrderTest`、`DiscountRedemptionTest`、`CoffeeIntegrationTest`、`HttpWorkflowTest` **一字不改且全綠**
+- [ ] 14. **`create` 的行為零變更**：`OrderDiscountTest`、`ItemPromotionOrderTest`、`DiscountRedemptionTest`、`CoffeeIntegrationTest`、`HttpWorkflowTest` 裡的**既有測試案例與斷言一字不改**（不得修改、放寬、刪除或 `@Disabled` 任何一條），且五個檔案**全綠**。**依規格新增案例不違反本條** —— S1 會在 `DiscountRedemptionTest` 新增 §11.1 的 4 條（§5.2）
 - [ ] 15. `Identity.PERMISSIONS` **一字未改**
 - [ ] 16. **零 migration** —— `db/migration/` 沒有新增任何檔案
 
@@ -668,7 +670,7 @@ G20a 驗收 12（v1.1 已收緊為必須有測試）要求 `modules/ordering/pro
 
 ## 11. 測試要求
 
-### 11.1 後端 S1（`DiscountRedemptionTest` 加測，不新建檔）
+### 11.1 後端 S1（`DiscountRedemptionTest` **新增** 4 條，不新建檔）
 
 | 情境 | 驗什麼 | 驗收 |
 | --- | --- | --- |
@@ -676,6 +678,8 @@ G20a 驗收 12（v1.1 已收緊為必須有測試）要求 `modules/ordering/pro
 | `quote` 後 `apply` 一次 | `redeemed_count` 為 1 | 2 |
 | 同輸入的 `quote` vs `apply` | `Applied` 每個欄位相等 | 1 |
 | 五種無效情形 ×2 方法 | 狀態碼與訊息相同 | 3 |
+
+> 這 4 條**全部是新增**（最後一條可用參數化寫成一個方法）。`DiscountRedemptionTest` 既有的案例與斷言**一行都不動**，所以與**驗收 14 不衝突** —— 驗收 14 管的是既有案例，不管新增（§5.2）。
 
 ### 11.2 後端 S2（新檔 `OrderPreviewTest`）
 
@@ -717,6 +721,7 @@ G20a 驗收 12（v1.1 已收緊為必須有測試）要求 `modules/ordering/pro
 
 - **不要**為了讓驗收 6 綠而讓 `create` 或 `preview` 任何一邊改用不同的計價路徑。兩邊必須都走 `price()`
 - **不要**把 `@Transactional(readOnly = true)` 拿掉，即使它讓某條測試比較難寫 —— 它是唯讀意圖的標記，也是生產環境可能的額外一層。但**同樣不要把它當成資料庫級的強制**：在 CI（H2）它擋不住寫入，所以驗收 7 的列數斷言仍然是必要的，不能因為「有 annotation」就省掉（§13.4）
+- **不要**為了讓純抽取或新端點過關，去修改、放寬、刪除或 `@Disabled` 驗收 14 那五個檔案裡的**任何一條既有案例或斷言** —— 那些斷言是「`create` 行為零變更」的唯一證據。**要加新案例一律可以**（S1 就會加 4 條），動既有的那幾行才是紅線
 - **不要**在 `promotions.ts` 裡引用 `OrderQuote` 或任何金額欄位（驗收 13）
 - **不要**修改 `shared/testing/harness.ts` 的 `stubApi`（未設定路由回 404 是刻意的）
 - **不要**為 debounce 引入 lodash 或任何套件 —— `setTimeout` 夠用（驗收 19）
@@ -840,5 +845,6 @@ G20a 驗收 12（v1.1 已收緊為必須有測試）要求 `modules/ordering/pro
 
 | 日期 | 版本 | 變更 |
 | --- | --- | --- |
+| 2026-10-07 | v1.2 | **依 Codex 在 [PR #73](https://github.com/choka1227/coffee_GPT6/pull/73) 第二次 `REQUEST_CHANGES` 修正一組互相矛盾的驗收條件。** v1.1 的 §9 S1 與 §11.1 要求在 `DiscountRedemptionTest` 新增 `quote`／`apply` 案例，但 §5.2 與**驗收 14**（且驗收 14 就在 S1 的驗收子集裡）把同一個檔案列為「一字不改且全綠」—— 實作者**無法同時滿足兩者**。**退件成立。** 驗收 14 已改為「**既有**測試案例與斷言一字不改（不得修改、放寬、刪除或 `@Disabled`），且五個檔案全綠」，並明寫「依規格新增案例不違反本條」；§5.2、§9 S1、§11.1、§11.5 同步改為同一套說法。原意保留：禁的是**為了讓純抽取過關而改鬆既有行為測試**，不是禁止新增 S1 必要的案例。順帶把 §9 S1 的「+2 條」對齊 §11.1 實際列出的 4 條。**API、施工階段、權限與金額規則一字未改。** |
 | 2026-10-07 | v1.1 | **依 Codex 在 [PR #73](https://github.com/choka1227/coffee_GPT6/pull/73) 的 `REQUEST_CHANGES` 修正 `@Transactional(readOnly = true)` 的錯誤宣稱。** v1.0 在 §4／§5.3／§11.5／§13.4 把它寫成「資料庫強制唯讀、日後有人在共用路徑加寫入會在 CI 立即失敗」，**那不成立**：主線沒有 `setEnforceReadOnly(true)`，CI 跑的 H2 會忽略 `Connection.setReadOnly(true)`，寫入與 commit 都會成功 —— 承諾的 CI 防線恰好不存在。**退件成立。** 四節已改為「唯讀意圖的標記＋生產（PostgreSQL）可能的額外一層」，並明寫**實際防線是 §5.2 的純抽取與驗收 7 的列數斷言**、**驗收 7 只能驗當下、驗不了日後新增的寫入**。§13.4 附上三層（Spring／CI driver／生產 driver）的現況對照表。「把它補成可驗證的 DB 級紅線」切出去登記為 **G20k**（§14），因為要動 transaction manager 設定並引入跑真 PostgreSQL 的測試（新依賴），與試算端點無關且受益範圍是全專案。**驗收條件、API、施工階段、權限與金額規則一字未改** —— 本次只修敘述，不改要實作的東西。 |
 | 2026-10-05 | v1.0 | 初版。依 G20a §13.1／§14 的 G20h 登記產出，開工前提（G20 與 G20a 皆已合併）於本日滿足。**本規格最重要的發現是 §5.1**：`DiscountService.apply` 會 `redeemed_count+1` 並取行鎖，試算若直接重用它，顧客光是加減購物車就會把優惠碼額度用光 —— 因此 S1 先把 `quote` 與 `apply` 分家。~~結構上的防線是 §5.3 的 `@Transactional(readOnly = true)`，讓「試算不可寫入」由資料庫強制而不是靠審查記得。~~（**此句 v1.1 已更正，不成立** —— 見上一列）驗收 6（先 preview 再 create，比對 `total` 相等）是本規格存在的理由 |
