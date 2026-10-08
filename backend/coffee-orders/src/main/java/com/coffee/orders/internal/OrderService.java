@@ -16,8 +16,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class OrderService implements Orders {
+  private static final int PREVIEW_LIMIT = 60;
+  private static final long PREVIEW_WINDOW_MS = 60_000L;
+  private static final int PREVIEW_MAX_KEYS = 20_000;
   private static final Set<String> ORDER_STATUSES =
       Set.of("PENDING_PAYMENT", "PAID", "PREPARING", "READY", "COMPLETED", "CANCELLED");
+  private final RateLimiter previewLimiter =
+      new RateLimiter(
+          "試算過於頻繁，請稍後再試", PREVIEW_LIMIT, PREVIEW_WINDOW_MS, PREVIEW_MAX_KEYS);
   private final JdbcTemplate db;
   private final Catalog catalog;
   private final Discounts discounts;
@@ -239,6 +245,7 @@ public class OrderService implements Orders {
       a.require("POS_ORDER");
       a.branch(q.branchId());
     }
+    previewLimiter.hit(a.id(), System.currentTimeMillis());
     var priced = price(q.branchId(), q.items(), q.discountCode(), System.currentTimeMillis(), false);
     List<PreviewLine> lines = new ArrayList<>();
     for (int i = 0; i < priced.lines().size(); i++) {
