@@ -109,6 +109,58 @@ class DiscountRedemptionTest {
     assertThat(count("RACE-ONE")).isEqualTo(1);
   }
 
+  @Test
+  void quoteTwentyTimesDoesNotConsumeTheCode() {
+    insert("QUOTE-20", 1);
+
+    for (int i = 0; i < 20; i++) {
+      assertThat(discounts.quote("QUOTE-20", "taipei", 505, 1L)).isNotNull();
+    }
+
+    assertThat(count("QUOTE-20")).isZero();
+  }
+
+  @Test
+  void quoteThenApplyConsumesTheCodeOnce() {
+    insert("QUOTE-APPLY", 1);
+
+    assertThat(discounts.quote("QUOTE-APPLY", "taipei", 505, 1L)).isNotNull();
+    assertThat(count("QUOTE-APPLY")).isZero();
+    assertThat(discounts.apply("QUOTE-APPLY", "taipei", 505, 1L)).isNotNull();
+
+    assertThat(count("QUOTE-APPLY")).isEqualTo(1);
+  }
+
+  @Test
+  void quoteAndApplyReturnTheSameAppliedFields() {
+    insert("SAME-RESULT", 2);
+
+    var quoted = discounts.quote(" same-result ", "taipei", 505, 1L);
+    var applied = discounts.apply("SAME-RESULT", "taipei", 505, 1L);
+
+    assertThat(quoted).isEqualTo(applied);
+    assertThat(count("SAME-RESULT")).isEqualTo(1);
+  }
+
+  @Test
+  void quoteAndApplyRejectTheSameInvalidRules() {
+    long at = 1_000_000L;
+    insert("QUOTE-INACTIVE", null, false, null, null, null);
+    insert("QUOTE-FUTURE", null, true, at + 1, null, null);
+    insert("QUOTE-EXPIRED", null, true, null, at - 1, null);
+    insert("QUOTE-BRANCH", null, true, null, null, "taichung");
+    insertWithMinimum("QUOTE-MINIMUM", 506);
+    insert("QUOTE-CAPPED", 1);
+    db.update("update discounts set redeemed_count=1 where code=?", "QUOTE-CAPPED");
+
+    assertSameProblem("QUOTE-INACTIVE", 505, at);
+    assertSameProblem("QUOTE-FUTURE", 505, at);
+    assertSameProblem("QUOTE-EXPIRED", 505, at);
+    assertSameProblem("QUOTE-BRANCH", 505, at);
+    assertSameProblem("QUOTE-MINIMUM", 505, at);
+    assertSameProblem("QUOTE-CAPPED", 505, at);
+  }
+
   private boolean applyAfterSignal(String code, CountDownLatch ready, CountDownLatch start) {
     ready.countDown();
     await(start);
@@ -140,6 +192,33 @@ class DiscountRedemptionTest {
             + " values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         UUID.randomUUID().toString(), code, code, "PERCENT", 10, 0, 0, branchId, startsAt,
         endsAt, max, 0, active, now, now);
+  }
+
+  private void insertWithMinimum(String code, int minSubtotal) {
+    long now = System.currentTimeMillis();
+    db.update(
+        "insert into discounts(id,code,name,kind,percent,amount,min_subtotal,branch_id,"
+            + "starts_at,ends_at,max_redemptions,redeemed_count,active,created_at,updated_at)"
+            + " values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        UUID.randomUUID().toString(), code, code, "PERCENT", 10, 0, minSubtotal, null, null,
+        null, null, 0, true, now, now);
+  }
+
+  private void assertSameProblem(String code, int subtotal, long at) {
+    Problem quoted = problem(() -> discounts.quote(code, "taipei", subtotal, at));
+    Problem applied = problem(() -> discounts.apply(code, "taipei", subtotal, at));
+
+    assertThat(quoted.status).isEqualTo(applied.status);
+    assertThat(quoted).hasMessage(applied.getMessage());
+  }
+
+  private Problem problem(Runnable action) {
+    try {
+      action.run();
+      throw new AssertionError("預期優惠碼驗證失敗");
+    } catch (Problem problem) {
+      return problem;
+    }
   }
 
   private void assertInvalid(String code, long at) {

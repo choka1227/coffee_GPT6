@@ -73,31 +73,15 @@ public class OrderService implements Orders {
       a.branch(q.branchId());
     }
     String id = Ids.order();
-    List<Catalog.Product> products = new ArrayList<>();
-    List<List<Catalog.ResolvedOption>> resolved = new ArrayList<>();
-    List<Promotions.Line> promotionLines = new ArrayList<>();
-    int total = 0;
-    for (LineInput l : q.items()) {
-      Problem.check(l != null && l.quantity() >= 1 && l.quantity() <= 50, "單品數量需為 1–50");
-      var p = catalog.sellable(q.branchId(), l.productId());
-      var options = catalog.resolveOptions(p.id(), l.optionIds());
-      int optionPrice = options.stream().mapToInt(Catalog.ResolvedOption::priceDelta).sum();
-      int unitPrice = Math.addExact(p.price(), optionPrice);
-      Problem.check(unitPrice > 0, "商品金額不正確");
-      products.add(p);
-      resolved.add(options);
-      promotionLines.add(new Promotions.Line(p.id(), p.category(), unitPrice, l.quantity()));
-      total = Math.addExact(total, Math.multiplyExact(unitPrice, l.quantity()));
-    }
-    Problem.check(total <= 1000000, "單筆訂單金額超過上限");
-    int subtotal = total;
-    var promotion = promotions.apply(q.branchId(), promotionLines, now);
-    int itemDiscountAmount = promotion == null ? 0 : promotion.discountAmount();
-    int afterItems = Math.subtractExact(subtotal, itemDiscountAmount);
-    var applied = discounts.apply(q.discountCode(), q.branchId(), afterItems, now);
-    int codeDiscountAmount = applied == null ? 0 : applied.discountAmount();
-    int discountAmount = Math.addExact(itemDiscountAmount, codeDiscountAmount);
-    total = Math.subtractExact(subtotal, discountAmount);
+    var priced = price(q.branchId(), q.items(), q.discountCode(), now, true);
+    int total = priced.total();
+    int subtotal = priced.subtotal();
+    var promotion = priced.promotion();
+    var applied = priced.code();
+    int itemDiscountAmount = priced.itemDiscountAmount();
+    int discountAmount = priced.discountAmount();
+    List<Catalog.Product> products = priced.products();
+    List<List<Catalog.ResolvedOption>> resolved = priced.resolved();
     catalog.reserveStock(
         q.branchId(),
         id,
@@ -187,6 +171,118 @@ public class OrderService implements Orders {
             option.optionName(), option.priceDelta(), option.costDelta());
     }
     return snapshot(id);
+  }
+
+  private record Priced(
+      List<Catalog.Product> products,
+      List<List<Catalog.ResolvedOption>> resolved,
+      List<Promotions.Line> lines,
+      int subtotal,
+      Promotions.Applied promotion,
+      Discounts.Applied code,
+      int itemDiscountAmount,
+      int codeDiscountAmount,
+      int discountAmount,
+      int total) {}
+
+  private Priced price(
+      String branchId, List<LineInput> items, String discountCode, long now, boolean redeem) {
+    List<Catalog.Product> products = new ArrayList<>();
+    List<List<Catalog.ResolvedOption>> resolved = new ArrayList<>();
+    List<Promotions.Line> promotionLines = new ArrayList<>();
+    int gross = 0;
+    for (LineInput l : items) {
+      Problem.check(l != null && l.quantity() >= 1 && l.quantity() <= 50, "單品數量需為 1–50");
+      var p = catalog.sellable(branchId, l.productId());
+      var options = catalog.resolveOptions(p.id(), l.optionIds());
+      int optionPrice = options.stream().mapToInt(Catalog.ResolvedOption::priceDelta).sum();
+      int unitPrice = Math.addExact(p.price(), optionPrice);
+      Problem.check(unitPrice > 0, "商品金額不正確");
+      products.add(p);
+      resolved.add(options);
+      promotionLines.add(new Promotions.Line(p.id(), p.category(), unitPrice, l.quantity()));
+      gross = Math.addExact(gross, Math.multiplyExact(unitPrice, l.quantity()));
+    }
+    Problem.check(gross <= 1000000, "單筆訂單金額超過上限");
+    int subtotal = gross;
+    var promotion = promotions.apply(branchId, promotionLines, now);
+    int itemDiscountAmount = promotion == null ? 0 : promotion.discountAmount();
+    int afterItems = Math.subtractExact(subtotal, itemDiscountAmount);
+    var applied =
+        redeem
+            ? discounts.apply(discountCode, branchId, afterItems, now)
+            : discounts.quote(discountCode, branchId, afterItems, now);
+    int codeDiscountAmount = applied == null ? 0 : applied.discountAmount();
+    int discountAmount = Math.addExact(itemDiscountAmount, codeDiscountAmount);
+    return new Priced(
+        products,
+        resolved,
+        promotionLines,
+        subtotal,
+        promotion,
+        applied,
+        itemDiscountAmount,
+        codeDiscountAmount,
+        discountAmount,
+        Math.subtractExact(subtotal, discountAmount));
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Quote preview(Actor a, PreviewRequest q) {
+    a.require("ORDER_CREATE");
+    Problem.check(q != null && q.branchId() != null && !q.branchId().isBlank(), "請選擇分店");
+    Problem.check(
+        q.items() != null && !q.items().isEmpty() && q.items().size() <= 50,
+        "請選擇 1–50 個品項");
+    if (!a.customer()) {
+      a.require("POS_ORDER");
+      a.branch(q.branchId());
+    }
+    var priced = price(q.branchId(), q.items(), q.discountCode(), System.currentTimeMillis(), false);
+    List<PreviewLine> lines = new ArrayList<>();
+    for (int i = 0; i < priced.lines().size(); i++) {
+      var line = priced.lines().get(i);
+      int lineDiscount =
+          priced.promotion() == null ? 0 : priced.promotion().lineDiscounts().get(i);
+      lines.add(
+          new PreviewLine(
+              line.productId(),
+              line.unitPrice(),
+              line.quantity(),
+              Math.multiplyExact(line.unitPrice(), line.quantity()),
+              lineDiscount));
+    }
+    return new Quote(
+        priced.subtotal(),
+        priced.itemDiscountAmount(),
+        priced.codeDiscountAmount(),
+        priced.discountAmount(),
+        priced.total(),
+        priced.promotion() == null ? null : itemPromotionOf(priced.promotion()),
+        priced.code() == null ? null : orderDiscountOf(priced.code()),
+        lines);
+  }
+
+  private ItemPromotion itemPromotionOf(Promotions.Applied promotion) {
+    return new ItemPromotion(
+        promotion.promotionId(),
+        promotion.name(),
+        promotion.kind(),
+        promotion.percent(),
+        promotion.nth(),
+        promotion.discountedUnits(),
+        promotion.discountAmount());
+  }
+
+  private OrderDiscount orderDiscountOf(Discounts.Applied discount) {
+    return new OrderDiscount(
+        discount.code(),
+        discount.name(),
+        discount.kind(),
+        discount.percent(),
+        discount.amount(),
+        discount.discountAmount());
   }
 
   private Create normalize(Create q) {

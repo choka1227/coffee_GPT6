@@ -33,5 +33,7 @@ public interface Discounts {
 
   Rule save(Actor actor, Rule rule);
 
+  Applied quote(String code, String branchId, int subtotal, long atEpochMs);
+
   Applied apply(String code, String branchId, int subtotal, long atEpochMs);
 }
