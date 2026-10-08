@@ -11,7 +11,7 @@
 
 - [x] S1 — `RateLimiter` 與純單元測試
 - [x] S2 — 試算端點限流
-- [ ] S3 — 登入限流收斂與測試
+- [x] S3 — 登入限流收斂與測試
 
 ## S1 驗收證據
 
@@ -27,13 +27,22 @@
 - 限流在權限與格式驗證之後、`price()` 之前執行；403 與 400 請求不消耗額度。
 - 新增測試覆蓋第 61 次回 429、帳號隔離、跨店與格式錯誤不計數，以及建立訂單不受試算額度影響。
 
+## S3 驗收證據
+
+- 登入端改用共用 `RateLimiter`，維持每個來源 15 分鐘 20 次、相同 429 訊息與成功後清零。
+- 移除原有 `Attempts` record、map 與重複計數程式。
+- 真實 HTTP 測試覆蓋前 20 次錯誤為 401、第 21 次為 429，以及成功登入後計數清零。
+
 ## 驗證
 
 - `cd frontend && npm test -- --run`：通過，12 個測試檔、136 個案例。
 - `cd frontend && npm run build`：通過；只有既有的 chunk-size 警告。
 - `cd backend && ./mvnw -B -ntp -pl coffee-app -am -Dtest=RateLimiterTest -Dsurefire.failIfNoSpecifiedTests=false test`：Maven Central DNS 解析失敗，未能在本地啟動 Maven；此為外部環境問題，推送後由遠端 CI 驗證。
-- 遠端 CI：等待 S1 head 推送。
+- 遠端 S1 head `c595852`：Actions #562 completed/success。
+- 遠端 S2 head `5906947`：Actions #568 completed/success。
+- S3 測試先行 head `33ef94e`：Actions #570 在既有登入實作上 completed/success。
+- S3 重構 latest head：推送後等待遠端 CI。
 
 ## 下一步
 
-S3：先用既有登入限流實作補上真實 HTTP 測試，再改用共用 `RateLimiter` 並確認行為不變。
+等待最新 head 遠端 CI 完整驗證；全綠後更新 PR 驗證證據並轉 ready for review。
