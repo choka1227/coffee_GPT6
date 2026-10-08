@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onBeforeUnmount, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
   Search,
@@ -26,6 +26,7 @@ import type {
   Order,
   ProductStock,
   ActivePromotion,
+  OrderQuote,
 } from "../../shared/types";
 import { minuteTime, money } from "../../shared/format";
 import { notify } from "../../shared/notice";
@@ -41,6 +42,13 @@ import {
   validateTendered,
 } from "./checkout";
 import { promotionCartHint, promotionText } from "./promotions";
+import {
+  beginQuote,
+  emptyQuoteState,
+  resetQuote,
+  settleQuote,
+  showsQuote,
+} from "./preview";
 const auth = useAuth(),
   router = useRouter(),
   products = ref<Product[]>([]),
@@ -63,6 +71,7 @@ const auth = useAuth(),
   selectedOptionIds = ref<string[]>([]),
   quantity = ref(1),
   pendingCashOrder = ref<Order | null>(null),
+  quoteState = ref(emptyQuoteState()),
   receipt = ref<Order | null>(null),
   stockProduct = ref<Product | null>(null),
   stockQuantity = ref<number | undefined>(),
@@ -73,6 +82,8 @@ const auth = useAuth(),
   config = ref({ enabled: false, environment: "stage" });
 let retryBody = "",
   retryKey = "";
+const QUOTE_DEBOUNCE_MS = 300;
+let quoteTimer: ReturnType<typeof setTimeout> | undefined;
 const categories = ["全部餐點", "經典咖啡", "風味特調", "茶與其他", "手作烘焙"];
 const visible = computed(() =>
   products.value.filter(
@@ -117,6 +128,7 @@ const cartPromotionHints = computed(() => {
 const total = computed(() =>
   cart.value.reduce((s, l) => s + (l.unitPrice + l.optionsPrice) * l.quantity, 0),
 );
+const previewTotal = computed(() => quoteState.value.quote?.total ?? total.value);
 const count = computed(() => cart.value.reduce((s, l) => s + l.quantity, 0));
 const selectedOptionsPrice = computed(() =>
   (selected.value?.optionGroups || []).flatMap((g) => g.items)
@@ -248,12 +260,54 @@ async function load() {
   }
 }
 onMounted(load);
+function cancelQuoteTimer() {
+  if (quoteTimer !== undefined) clearTimeout(quoteTimer);
+  quoteTimer = undefined;
+}
+function clearQuote() {
+  cancelQuoteTimer();
+  quoteState.value = resetQuote(quoteState.value);
+}
+async function requestQuote() {
+  if (!cart.value.length || !branchId.value || pendingCashOrder.value) return;
+  const begun = beginQuote(quoteState.value);
+  quoteState.value = begun.state;
+  try {
+    const quote = await send<OrderQuote>("/orders/preview", {
+      branchId: branchId.value,
+      discountCode: discountCode.value,
+      items: cart.value.map(({ productId, quantity, optionIds }) => ({
+        productId,
+        quantity,
+        optionIds,
+      })),
+    });
+    quoteState.value = settleQuote(quoteState.value, begun.seq, { ok: true, quote });
+  } catch {
+    quoteState.value = settleQuote(quoteState.value, begun.seq, { ok: false });
+  }
+}
+function scheduleQuote() {
+  cancelQuoteTimer();
+  if (!cart.value.length || !branchId.value || pendingCashOrder.value) {
+    clearQuote();
+    return;
+  }
+  quoteTimer = setTimeout(() => {
+    quoteTimer = undefined;
+    void requestQuote();
+  }, QUOTE_DEBOUNCE_MS);
+}
+watch([cart, discountCode], scheduleQuote, { deep: true });
+onBeforeUnmount(cancelQuoteTimer);
 watch(branchId, async () => {
   if (!menuReady) return;
+  clearQuote();
   error.value = "";
   loading.value = true;
   await Promise.all([loadMenu(false), loadBranchHours(false)]);
   loading.value = false;
+  scheduleQuote();
 });
 function choose(p: Product) {
   if (
@@ -819,9 +873,21 @@ async function saveStock(clear = false) {
             step="1"
             :placeholder="pendingCashOrder ? '請輸入實收金額' : String(total)"
         /></label>
+        <div
+          v-if="!pendingCashOrder && showsQuote(quoteState) && quoteState.quote!.discountAmount > 0"
+          class="cart-estimate"
+        >
+          <div class="estimate-row"><span>小計</span><span>{{ money(quoteState.quote!.subtotal) }}</span></div>
+          <div v-if="quoteState.quote!.itemDiscountAmount" class="estimate-row discount">
+            <span>品項促銷折抵</span><span>-{{ money(quoteState.quote!.itemDiscountAmount) }}</span>
+          </div>
+          <div v-if="quoteState.quote!.codeDiscountAmount" class="estimate-row discount">
+            <span>優惠碼折抵</span><span>-{{ money(quoteState.quote!.codeDiscountAmount) }}</span>
+          </div>
+        </div>
         <div v-if="!pendingCashOrder" class="cart-total">
-          <span>{{ discountCode.trim() ? "小計（折扣前）" : "總計" }} <small>含稅</small></span
-          ><strong>{{ money(total) }}</strong>
+          <span>總計 <small>含稅</small></span
+          ><strong>{{ money(previewTotal) }}</strong>
         </div>
         <div
           v-if="

@@ -1,5 +1,5 @@
 import { flushPromises, type VueWrapper } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import MenuView from "./MenuView.vue";
 import {
   activePromotionFixture,
@@ -17,7 +17,13 @@ import {
   stubApi,
   type StubbedRequest,
 } from "../../shared/testing/harness";
-import type { ActivePromotion, Actor, Branch, Product } from "../../shared/types";
+import type {
+  ActivePromotion,
+  Actor,
+  Branch,
+  OrderQuote,
+  Product,
+} from "../../shared/types";
 
 // 這些測試證明的是「畫面有沒有出現」，不是授權。真正的授權一律在後端；
 // 前端把實收欄位藏起來不等於顧客不能送實收金額，那條防線由後端越權測試守。
@@ -27,6 +33,20 @@ interface MenuScenario {
   requests: StubbedRequest[];
 }
 
+function quoteFixture(overrides: Partial<OrderQuote> = {}): OrderQuote {
+  return {
+    subtotal: 140,
+    itemDiscountAmount: 0,
+    codeDiscountAmount: 0,
+    discountAmount: 0,
+    total: 140,
+    itemPromotion: null,
+    discount: null,
+    items: [],
+    ...overrides,
+  };
+}
+
 async function mountMenu(
   actor: Actor,
   branches: Branch[] = [branchFixture()],
@@ -34,8 +54,13 @@ async function mountMenu(
   order = orderFixture(),
   promotionRules: ActivePromotion[] | null = [],
   extraProducts: Product[] = [],
+  previewQuote: OrderQuote = quoteFixture({
+    subtotal: product.price,
+    total: product.price,
+  }),
+  previewFails = false,
 ): Promise<MenuScenario> {
-  const { fetch, requests } = stubApi({
+  const { fetch: stubbedFetch, requests } = stubApi({
     "/api/branches": branches,
     "/api/payments/config": { enabled: true, environment: "stage" },
     "/api/menu": () => [product, ...extraProducts],
@@ -103,6 +128,7 @@ async function mountMenu(
       };
     },
     "/api/orders": order,
+    "/api/orders/preview": previewQuote,
     "/api/orders/O1/cash": orderFixture({
       status: "PAID",
       paidAt: 2,
@@ -110,6 +136,24 @@ async function mountMenu(
       changeAmount: 24,
     }),
   });
+  const fetch = previewFails
+    ? vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        const path = new URL(
+          typeof input === "string" ? input : input.toString(),
+          "http://localhost",
+        ).pathname;
+        if (path !== "/api/orders/preview") return stubbedFetch(input, init);
+        const headers = new Headers(init.headers);
+        const body = typeof init.body === "string" ? JSON.parse(init.body) : undefined;
+        requests.push({ path, method: (init.method ?? "GET").toUpperCase(), body, headers });
+        return {
+          ok: false,
+          status: 500,
+          text: async () => JSON.stringify({ message: "試算服務暫時無法使用" }),
+          json: async () => ({ message: "試算服務暫時無法使用" }),
+        } as Response;
+      })
+    : stubbedFetch;
   return { wrapper: await mountView(MenuView, { actor, fetch }), requests };
 }
 
@@ -124,6 +168,82 @@ async function addProduct(wrapper: VueWrapper, index = 0): Promise<void> {
 }
 
 describe("MenuView 可見性", () => {
+  it("有折抵時顯示試算明細並以後端總額為總計", async () => {
+    const { wrapper } = await mountMenu(
+      customerActor(),
+      [branchFixture()],
+      productFixture(),
+      orderFixture(),
+      [],
+      [],
+      quoteFixture({
+        subtotal: 140,
+        itemDiscountAmount: 20,
+        codeDiscountAmount: 10,
+        discountAmount: 30,
+        total: 110,
+      }),
+    );
+    vi.useFakeTimers();
+    try {
+      await addProduct(wrapper);
+      await vi.advanceTimersByTimeAsync(300);
+      await flushPromises();
+
+      const estimate = wrapper.get(".cart-estimate");
+      expect(estimate.text()).toContain("小計");
+      expect(estimate.text()).toContain("140");
+      expect(estimate.text()).toContain("品項促銷折抵");
+      expect(estimate.text()).toContain("20");
+      expect(estimate.text()).toContain("優惠碼折抵");
+      expect(estimate.text()).toContain("10");
+      expect(rowByLabel(wrapper, "總計")!.text()).toContain("110");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("零折抵時不顯示試算明細且總計維持毛額", async () => {
+    const { wrapper } = await mountMenu(customerActor());
+    vi.useFakeTimers();
+    try {
+      await addProduct(wrapper);
+      await vi.advanceTimersByTimeAsync(300);
+      await flushPromises();
+
+      expect(wrapper.find(".cart-estimate").exists()).toBe(false);
+      expect(rowByLabel(wrapper, "總計")!.text()).toContain("140");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("試算回 500 時購物車照常顯示且總計退回毛額", async () => {
+    const { wrapper } = await mountMenu(
+      customerActor(),
+      [branchFixture()],
+      productFixture(),
+      orderFixture(),
+      [],
+      [],
+      quoteFixture(),
+      true,
+    );
+    vi.useFakeTimers();
+    try {
+      await addProduct(wrapper);
+      await vi.advanceTimersByTimeAsync(300);
+      await flushPromises();
+
+      expect(wrapper.get(".cart-item").text()).toContain("經典拿鐵");
+      expect(wrapper.find(".error-state").exists()).toBe(false);
+      expect(wrapper.find(".cart-estimate").exists()).toBe(false);
+      expect(rowByLabel(wrapper, "總計")!.text()).toContain("140");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("商品卡顯示第 N 件與規則名稱", async () => {
     const { wrapper } = await mountMenu(
       customerActor(),
@@ -276,6 +396,7 @@ describe("MenuView 可見性", () => {
     expect(rowByLabel(wrapper, "品項促銷折抵")!.text()).toContain("140");
     expect(rowByLabel(wrapper, "優惠碼折抵")!.text()).toContain("14");
     expect(rowByLabel(wrapper, "應收")!.text()).toContain("126");
+    expect(wrapper.find(".cart-estimate").exists()).toBe(false);
   });
 
   it("門市現金在建單前不顯示實收與找零", async () => {
