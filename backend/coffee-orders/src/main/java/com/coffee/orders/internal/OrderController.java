@@ -25,6 +25,12 @@ class OrderController {
     return s.create(actor, q, key);
   }
 
+  @PostMapping("/preview")
+  Orders.Quote preview(
+      @RequestAttribute Actor actor, @RequestBody Orders.PreviewRequest request) {
+    return s.preview(actor, request);
+  }
+
   @GetMapping
   Orders.Page page(
       @RequestAttribute Actor actor,

@@ -14,6 +14,11 @@ public interface Orders {
       String discountCode,
       List<LineInput> items) {}
 
+  record PreviewRequest(String branchId, String discountCode, List<LineInput> items) {}
+
+  record PreviewLine(
+      String productId, int unitPrice, int quantity, int lineTotal, int discountAmount) {}
+
   record OrderDiscount(
       String code, String name, String kind, int percent, int amount, int discountAmount) {}
 
@@ -25,6 +30,16 @@ public interface Orders {
       int nth,
       int discountedUnits,
       int discountAmount) {}
+
+  record Quote(
+      int subtotal,
+      int itemDiscountAmount,
+      int codeDiscountAmount,
+      int discountAmount,
+      int total,
+      ItemPromotion itemPromotion,
+      OrderDiscount discount,
+      List<PreviewLine> items) {}
 
   record LineOption(String groupName, String optionName, int priceDelta) {}
 
@@ -68,6 +83,8 @@ public interface Orders {
   record Page(List<Order> items, String nextCursor) {}
 
   Order create(Actor a, Create request, String key);
+
+  Quote preview(Actor a, PreviewRequest request);
 
   Page page(Actor a, Query query);
 
