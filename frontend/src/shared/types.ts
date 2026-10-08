@@ -296,6 +296,25 @@ export interface ActivePromotion {
   targetKind: "PRODUCT" | "CATEGORY";
   targetId: string;
 }
+export type OrderItemPromotion = NonNullable<Order["itemPromotion"]>;
+export type OrderDiscountSummary = NonNullable<Order["discount"]>;
+export interface PreviewLine {
+  productId: string;
+  unitPrice: number;
+  quantity: number;
+  lineTotal: number;
+  discountAmount: number;
+}
+export interface OrderQuote {
+  subtotal: number;
+  itemDiscountAmount: number;
+  codeDiscountAmount: number;
+  discountAmount: number;
+  total: number;
+  itemPromotion: OrderItemPromotion | null;
+  discount: OrderDiscountSummary | null;
+  items: PreviewLine[];
+}
 export interface ReconciliationPending {
   orderId: string;
   branchId: string;
