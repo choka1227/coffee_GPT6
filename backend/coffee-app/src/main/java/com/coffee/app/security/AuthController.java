@@ -4,7 +4,6 @@ import com.coffee.identity.api.Identity;
 import com.coffee.shared.*;
 import jakarta.servlet.http.*;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
@@ -19,10 +18,8 @@ public class AuthController {
   private final Identity identity;
   private final HttpSessionSecurityContextRepository contextRepository;
   private final CookieCsrfTokenRepository csrfRepository;
-  private final Map<String, Attempts> attempts = new ConcurrentHashMap<>();
-
-  private record Attempts(int count, long until) {}
-  ;
+  private final RateLimiter logins =
+      new RateLimiter("登入嘗試過多，請 15 分鐘後再試", 20, 900_000L, 10_000);
 
   record Login(String username, String password) {}
 
@@ -49,16 +46,9 @@ public class AuthController {
             && input.password().length() <= 100,
         "帳號或密碼格式不正確");
     String key = req.getRemoteAddr();
-    long now = System.currentTimeMillis();
-    attempts.entrySet().removeIf(e -> e.getValue().until < now);
-    var current = attempts.get(key);
-    if (current != null && current.count >= 20) throw new Problem(429, "登入嘗試過多，請 15 分鐘後再試");
-    if (attempts.size() > 10000) throw new Problem(429, "系統忙碌，請稍後再試");
-    attempts.compute(
-        key,
-        (k, v) -> new Attempts(v == null ? 1 : v.count + 1, v == null ? now + 900000 : v.until));
+    logins.hit(key, System.currentTimeMillis());
     Actor a = identity.authenticate(input.username(), input.password());
-    attempts.remove(key);
+    logins.clear(key);
     req.getSession(true);
     req.changeSessionId();
     req.getSession().setAttribute("ACCOUNT_ID", a.id());
