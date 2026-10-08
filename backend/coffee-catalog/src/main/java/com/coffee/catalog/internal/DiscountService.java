@@ -129,11 +129,26 @@ public class DiscountService implements Discounts {
   @Override
   @Transactional
   public Applied apply(String requestedCode, String branchId, int subtotal, long atEpochMs) {
+    Rule rule = resolve(requestedCode, branchId, subtotal, atEpochMs, true);
+    if (rule == null) return null;
+    db.update("update discounts set redeemed_count=redeemed_count+1 where id=?", rule.id());
+    return applied(rule, subtotal);
+  }
+
+  @Override
+  public Applied quote(String requestedCode, String branchId, int subtotal, long atEpochMs) {
+    Rule rule = resolve(requestedCode, branchId, subtotal, atEpochMs, false);
+    return rule == null ? null : applied(rule, subtotal);
+  }
+
+  private Rule resolve(
+      String requestedCode, String branchId, int subtotal, long atEpochMs, boolean lock) {
     String code = normalize(requestedCode);
     if (code == null) return null;
     Problem.check(code.matches("[A-Z0-9-]{4,20}"), "優惠碼格式不正確");
     Rule rule = db.query(
-            "select * from discounts where code=? for update", this::row, code).stream()
+            "select * from discounts where code=?" + (lock ? " for update" : ""), this::row, code)
+        .stream()
         .findFirst()
         .orElseThrow(() -> new Problem(404, INVALID));
     if (!rule.active()
@@ -146,11 +161,13 @@ public class DiscountService implements Discounts {
     if (rule.maxRedemptions() != null && rule.redeemedCount() >= rule.maxRedemptions()) {
       throw new Problem(409, "此優惠碼的使用次數已達上限");
     }
-    int discountAmount = calculate(rule, subtotal);
-    db.update("update discounts set redeemed_count=redeemed_count+1 where id=?", rule.id());
+    return rule;
+  }
+
+  private Applied applied(Rule rule, int subtotal) {
     return new Applied(
         rule.id(), rule.code(), rule.name(), rule.kind(), rule.percent(), rule.amount(), subtotal,
-        discountAmount);
+        calculate(rule, subtotal));
   }
 
   public static int calculate(Rule rule, int subtotal) {
