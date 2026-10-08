@@ -3,13 +3,13 @@
 | 項目 | 內容 |
 | --- | --- |
 | 缺口編號 | G20j |
-| 版本 | v1.0（2026-10-08） |
+| 版本 | v1.1（2026-10-08，同日依 Codex 在 [PR #78](https://github.com/choka1227/coffee_GPT6/pull/78) 的 `REQUEST_CHANGES` 把開工前提與並行注意同步為「G20h 已合併」） |
 | 登記來源 | [`G20h-order-preview.md`](G20h-order-preview.md) §2.2、§14 |
 | 分支 | `codex/g20j-rate-limit` |
 | Flyway | **零 migration**（`V15` 仍然空著，本規格一個 SQL 檔都不加） |
 | 新依賴 | **零**（`ConcurrentHashMap` 夠用，不引入 Bucket4j／Resilience4j／Redis） |
 | 施工階段 | **三階段**（S1 設施／S2 接上試算端點／S3 把登入的那份收斂進來） |
-| 開工前提 | **S1 可以立刻開工**；S2 需要 `OrderService.preview` 在主線上，即 [PR #77](https://github.com/choka1227/coffee_GPT6/pull/77)（G20h）已合併 |
+| 開工前提 | **已滿足，S1–S3 都可以立刻開工**。[PR #77](https://github.com/choka1227/coffee_GPT6/pull/77)（G20h）已於 2026-10-08 合併進主線（`0d8f5dd`），`OrderService.preview` 已存在（`OrderService.java:232`） |
 
 ---
 
@@ -356,7 +356,7 @@ logins.clear(key);
 
 **動到：** `OrderService.java`（+3 常數、+1 欄位、+1 行）、`OrderPreviewTest.java`（新增案例）
 
-**前提：** G20h（PR #77）已合併。沒合併就先做 S1，S1 不依賴它。
+**前提：已滿足。** G20h（[PR #77](https://github.com/choka1227/coffee_GPT6/pull/77)）已於 2026-10-08 合併進主線（`0d8f5dd`），`OrderService.preview` 與 `price()` 都在（`OrderService.java:232`、`:188`）。
 
 **驗收子集：** 5、6、7、8、9、12、13、14
 
@@ -477,9 +477,16 @@ logins.clear(key);
 | `AuthController.java` | 不動 | S3 動 |
 | 前端 | 動 | **不動** |
 
-**有交集，而且合併順序是硬的：G20h 先，G20j 的 S2 後。** `preview()` 這個方法在 G20h 合併前根本不存在，S2 沒有東西可以改。
+**曾經有交集，而且合併順序是硬的：G20h 先，G20j 的 S2 後。** `preview()` 這個方法在 G20h 合併前根本不存在，S2 沒有東西可以改。
 
-**所以：S1 現在就能做（零交集），S2 與 S3 等 PR #77 合併。** PR #77 已於本輪取得 `APPROVE`，auto-merge 條件滿足即進主線，實務上不會卡很久。真的要在它合併前開工，就只做 S1 並推上去，PR 維持 draft 並在進度檢查表註明「S2 等 G20h」。
+**這道閘門已經解除：[PR #77](https://github.com/choka1227/coffee_GPT6/pull/77) 已於 2026-10-08 合併進主線（`0d8f5dd`）**，上表 ⚠️ 的兩個檔案都已經是主線上的既有檔案：
+
+- `OrderService.java:232` 的 `preview()` 與 `:188` 的 `price()` 都在，S2 §5.2 的程式碼片段（`a.require` → 兩條 `Problem.check` → `if (!a.customer())` → `price()`）與主線實際的行序**逐行相符**，那一行 `previewLimiter.hit(a.id(), ...)` 插在 `if (!a.customer())` 區塊之後、`var priced = price(...)` 之前
+- `OrderPreviewTest.java` 已存在（278 行），S2 只在它後面**新增**案例，既有案例一條都不動
+
+**所以三個階段都沒有前置閘門，S1／S2／S3 可以依序一路做下去，不需要為了等 G20h 而只做 S1、也不需要為此維持 draft。** 階段之間仍然可以停（§9「階段之外」），但那是額度的考量，不再是相依的限制。
+
+> **`codex/g20h-order-preview` 分支已完成任務**，不要從它續作；G20j 用自己的分支 `codex/g20j-rate-limit`，從合併後的主線開出。
 
 兩份都零 migration，不可能撞 Flyway 版號。
 
