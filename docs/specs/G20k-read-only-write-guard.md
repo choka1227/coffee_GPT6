@@ -235,13 +235,21 @@ public static <T> Captured<T> around(Supplier<T> call);  // arm → 呼叫 → d
 2. 取第一個語彙（以空白或括號切），轉小寫
 3. 第一個語彙屬於 {insert, update, delete, merge, truncate, alter, create, drop, grant, revoke, replace}
      → 記為寫入
-4. 或者：整句（轉小寫、把連續空白縮成一個）含有 " for update" 或 " for no key update" 或 " for share"
+4. 第一個語彙是 with（CTE）：
+     先把整句的 '...' 字串字面值與 "..." 引號識別字換成空白、去掉所有 /* */ 與 -- 註解，
+     再以「非字母數字底線」切成語彙、轉小寫；
+     只要任何一個語彙屬於 {insert, update, delete, merge} → 記為寫入
+     （PostgreSQL 允許 WITH ... UPDATE／INSERT／DELETE ... 以及資料修改 CTE
+       WITH x AS (UPDATE ... RETURNING ...) SELECT ...，第一個語彙看不出來，理由見 §13.9）
+5. 或者：整句（轉小寫、把連續空白縮成一個）含有 " for update" 或 " for no key update" 或 " for share"
      → 記為寫入（取行鎖的 select 不是唯讀操作，理由見 §13.6）
-5. 其餘（select / with / show / explain / values / set / commit / rollback / SELECT 1 之類的
-   連線檢查）→ 不記錄
+6. 其餘（select / 不含 DML 語彙的 with ... select / show / explain / values / set / commit /
+   rollback / SELECT 1 之類的連線檢查）→ 不記錄
 ```
 
-**為什麼第 4 步不會誤報試算：** `DiscountService.resolve`（`:144`）的 `for update` 是靠 `lock` 參數串接上去的（`:150`），試算走 `quote` → `lock=false` → **送出去的字串裡沒有 `for update`**。偵測器攔的是字串，所以它看到的是真相，不是程式碼長相。這正是 §1.3 要的那個差別。
+**分類要寫成純函式** `static boolean isWrite(String sql)`，代理只呼叫它。理由：H2 的 PostgreSQL 相容模式**不保證支援資料修改 CTE**，所以 writable CTE 的案例**不能靠送進 H2 執行來驗**（送不出去就測不到），必須直接對分類函式下斷言（驗收 18）。
+
+**為什麼第 5 步不會誤報試算：** `DiscountService.resolve`（`:144`）的 `for update` 是靠 `lock` 參數串接上去的（`:150`），試算走 `quote` → `lock=false` → **送出去的字串裡沒有 `for update`**。偵測器攔的是字串，所以它看到的是真相，不是程式碼長相。這正是 §1.3 要的那個差別。
 
 ### 5.4 S2：把偵測器裝上去
 
@@ -340,7 +348,7 @@ backend/coffee-app/src/test/java/com/coffee/app/readonly/WriteDetectingDataSourc
 backend/coffee-app/src/test/java/com/coffee/app/PreviewWriteGuardTest.java
 ```
 
-**驗收子集：** 驗收 6–10、12–17
+**驗收子集：** 驗收 6–10、12–18
 **預估：** 約 240 行。`Connection`／`Statement` 的動態代理是本階段唯一有技巧的部分（§5.3）。
 
 ### 階段切分的理由
@@ -371,6 +379,10 @@ S1 是靜態分析、S2 是執行期攔截，兩者**沒有共用程式碼**（`
 - [ ] **8.** 偵測器未武裝時不記錄任何東西（context 啟動、Flyway、seed 都不會進清單）
 - [ ] **9.** `for update` 的偵測有測試釘住：透過注入的 `JdbcTemplate` 跑一句 `select ... for update`，武裝期間**必須**被記錄
 - [ ] **10.** **反向對照：** `orders.create(...)` 期間記錄到的寫入語句**非空**，且至少有一句以 `insert` 開頭並含 `orders`。這一條是用來證明偵測器真的裝上去了 —— 它紅了就代表包裝沒生效、整組 S2 的綠燈都不算數
+- [ ] **18.** **SQL 分類函式的單元案例**（直接呼叫 `WriteDetectingDataSource.isWrite`，不經 H2）：
+  - **必須記為寫入**：`with t as (select 1) update discounts set redeemed_count = 0`、`with t as (select 1) insert into orders ...`、`with t as (select 1) delete from orders`、`with x as (update discounts set redeemed_count = redeemed_count + 1 returning id) select * from x`（資料修改 CTE）、開頭帶註解與左括號的 `/* c */ (with ... update ...)`
+  - **必須不記錄**：`with t as (select id from orders) select * from t`、`with t as (select 'update' as s) select * from t`（字串字面值裡的關鍵字）、`with t as (select 1 as "delete") select * from t`（引號識別字）、`with t as (select 1) /* insert */ select * from t`（註解裡的關鍵字）、`select 1`
+  - 這一條是 §5.3 第 4 步的紅線；它與驗收 6 互補 —— 驗收 6 證明今天的試算路徑沒有寫入，驗收 18 證明日後若有人用 CTE 寫法把寫入加進試算路徑，偵測器看得見
 - [ ] **12.** `PreviewWriteGuardTest` 不呼叫無參數的 `now()`（G27 的防線會擋，但不要寫出來讓它擋）
 - [ ] **13.** 不修改 `RateLimiter` 的額度常數、不修改 `OrderPreviewTest`
 
@@ -421,6 +433,7 @@ assertThat(violations).noneSatisfy(v -> assertThat(v).contains("CleanReader"));
 | `nothingIsRecordedWhileTheDetectorIsNotArmed` | 驗收 8 |
 | `selectForUpdateIsRecordedAsAWrite` | 驗收 9 |
 | `creatingAnOrderIsRecordedSoTheDetectorIsProvenToWork` | 驗收 10（反向對照） |
+| `writableCteIsClassifiedAsAWrite`／`readOnlyCteIsNotClassifiedAsAWrite` | 驗收 18。**直接呼叫 `isWrite`，不經 H2**（§5.3）；可以放在 `PreviewWriteGuardTest` 裡，也可以另開一個不需要 Spring context 的純單元測試類別 —— 後者要在 S2 的「動到的檔案」補上，仍算 S2 |
 
 ### 11.3 不要做的事
 
@@ -473,7 +486,7 @@ assertThat(violations).noneSatisfy(v -> assertThat(v).contains("CleanReader"));
 
 **理由：** 兩邊面對的集合性質不同。`JdbcTemplate` 的方法是**封閉可列舉**的 API，允許清單能自動擋住日後新增的寫入方法（也擋住 `execute`，那是最容易被忽略的一個）。S2 看到的 SQL 則包含**連線池與驅動的雜訊**（`SELECT 1` 之類的連線檢查、H2 的 session 設定），允許清單在那裡只會製造誤報，而誤報會讓人去放寬紅線 —— 比沒有紅線更糟。
 
-**推翻的代價：** S2 的禁止清單漏了某個寫入關鍵字就會漏抓。清單寫在 §5.3，新增 DDL／DML 動詞時要同步。驗收 9、10 是它的紅線。
+**推翻的代價：** S2 的禁止清單漏了某個寫入關鍵字就會漏抓。清單寫在 §5.3，新增 DDL／DML 動詞時要同步。驗收 9、10、18 是它的紅線。v1.0 就漏過一次：只看第一個語彙，把 `with` 整類放行，writable CTE 因此會假綠（Codex 於 PR #81 指出，v1.1 以 §5.3 第 4 步與 §13.9 修正）。
 
 ### 13.4 不重構 `OrderService.price` 的 `redeem` 旗標 —— **不動金額路徑**
 
@@ -497,7 +510,7 @@ assertThat(violations).noneSatisfy(v -> assertThat(v).contains("CleanReader"));
 
 **理由：** 行鎖會阻擋別人。一個「唯讀」的試算端點在熱門商品的優惠碼上取行鎖，顧客在購物車按加減就能讓結帳排隊 —— 那是沒有寫入任何資料的阻斷。`AGENTS.md` 把 `select ... for update` 列在「訂單狀態更新與收款」那條規則裡，正是因為它是收款路徑的工具，不是查詢的工具。
 
-**推翻的代價：** 若日後真的需要在唯讀路徑取共享鎖（想不出場景），要改 §5.3 第 4 步並寫明理由。
+**推翻的代價：** 若日後真的需要在唯讀路徑取共享鎖（想不出場景），要改 §5.3 第 5 步並寫明理由。
 
 ### 13.7 偵測器只記錄、不丟例外 —— **斷言留給測試**
 
@@ -512,6 +525,14 @@ assertThat(violations).noneSatisfy(v -> assertThat(v).contains("CleanReader"));
 **決定：** G22 §13.7 已裁決不設覆蓋率門檻，理由未變。`verify.yml` 不動（`./mvnw verify` 已經會跑新測試）。
 
 **推翻的代價：** 無新增代價。
+
+### 13.9 `with` 開頭的語句掃全句 DML 語彙 —— **保守判定，不寫 SQL 解析器**
+
+**決定：** 第一個語彙是 `with` 時，去掉字串字面值、引號識別字與註解後，全句只要出現 `insert`／`update`／`delete`／`merge` 任一語彙就記為寫入；都沒出現才放行（`with ... select` 純讀取照常不記錄）。
+
+**理由：** PostgreSQL 的 writable CTE 有兩種形狀：頂層是 DML（`WITH ... UPDATE ...`），或 DML 藏在 CTE 本體裡、頂層是 `SELECT`（`WITH x AS (UPDATE ... RETURNING ...) SELECT ...`）。第二種形狀讓「解析出頂層 statement」也不夠，要真正判斷就得寫一個處理巢狀括號、字串、註解的 SQL 解析器 —— 在測試輔助類別裡寫解析器，複雜度與它守的東西不成比例。掃語彙的做法**不會放過 DML**（DML 一定要寫出那個動詞），代價只有誤報。而誤報的觸發條件是「`with` 開頭、且字串與引號之外出現這四個字當作未加引號的表名／欄位名／別名」。PostgreSQL 把它們列為非保留字、技術上允許這樣命名，但**本 repo 的 migration（`V1`–`V14`）沒有任何表或欄位叫這幾個名字**（2026-10-09 以 `grep -wiE` 掃過）；而且誤報不會靜默 —— 它會讓驗收 6／7 紅，並在失敗訊息裡印出那一句，修法是把名稱加引號或改名，不是放寬紅線。`for update` 由第 5 步另外處理，兩步記錄的是同一個結論（寫入），重疊無害。
+
+**推翻的代價：** 若日後真的出現誤報（例如某個 `with` 查詢合法地含有這幾個字作為未加引號的名稱），改成解析 CTE 結構時，**驗收 18 的「必須記為寫入」案例要一條不少地保留**，特別是資料修改 CTE 那一條 —— 那是只看頂層 statement 也會漏的形狀。
 
 ---
 
@@ -556,4 +577,5 @@ assertThat(violations).noneSatisfy(v -> assertThat(v).contains("CleanReader"));
 
 | 日期 | 版本 | 變更 |
 | --- | --- | --- |
+| 2026-10-09 | v1.1 | 依 Codex 在 PR #81 的 `REQUEST_CHANGES`：v1.0 的 §5.3 只看第一個語彙，把 `with` 整類列為「不記錄」，**PostgreSQL 的 writable CTE（`WITH ... UPDATE/INSERT/DELETE ...` 與資料修改 CTE）會假綠**，§1.5 的承諾不成立。**退件成立。** 新增 §5.3 第 4 步（`with` 開頭時去掉字串、引號識別字與註解後掃全句 DML 語彙）、要求分類寫成純函式 `isWrite`、新增驗收 18（writable CTE 必須記錄、純讀取 CTE 與字串／識別字／註解裡的關鍵字必須不記錄，直接對函式斷言、不經 H2）、§11.2 補案例、新增設計決策 §13.9。原第 4、5 步順延為第 5、6 步。施工階段、檔案清單上限、其餘驗收不變 |
 | 2026-10-09 | v1.0 | 初版。依 G20h §13.4／§14 與 G20j §14 的 G20k 登記產出。**與登記時的設想最大的差異是不引入 Testcontainers**（§13.1），改成「靜態規則守整個模組 + 執行期攔截守分支路徑」，因此生產程式碼零變更、零新依賴。§1.3 說明為什麼試算路徑**結構上**無法用靜態規則覆蓋（`price` 的 `redeem` 旗標與 `resolve` 的 `lock` 旗標都是執行期分流），這是本規格切成兩個互補階段的根本理由 |
