@@ -167,6 +167,82 @@ class OrderPreviewTest {
     assertThat(preview).hasMessage(create.getMessage());
   }
 
+  @Test
+  void sameAccountCanPreviewSixtyTimesAndTheNextAttemptIsRateLimited() {
+    Actor customer = customer("rate-limited");
+
+    for (int i = 0; i < 60; i++) orders.preview(customer, request(null, 1));
+
+    assertThatThrownBy(() -> orders.preview(customer, request(null, 1)))
+        .isInstanceOfSatisfying(
+            Problem.class,
+            problem -> {
+              assertThat(problem.status).isEqualTo(429);
+              assertThat(problem).hasMessage("試算過於頻繁，請稍後再試");
+            });
+  }
+
+  @Test
+  void previewLimitsAreIndependentForDifferentAccounts() {
+    Actor first = customer("first");
+    Actor second = customer("second");
+
+    for (int i = 0; i < 60; i++) orders.preview(first, request(null, 1));
+
+    assertThatThrownBy(() -> orders.preview(first, request(null, 1)))
+        .isInstanceOf(Problem.class);
+    assertThat(orders.preview(second, request(null, 1)).total()).isEqualTo(140);
+  }
+
+  @Test
+  void forbiddenCrossBranchPreviewsDoNotConsumeTheLimit() {
+    Actor cashier = identity.find("cashier");
+    var forbidden = new Orders.PreviewRequest("banqiao", null, List.of(line(1)));
+
+    for (int i = 0; i < 100; i++) {
+      assertThatThrownBy(() -> orders.preview(cashier, forbidden))
+          .isInstanceOfSatisfying(
+              Problem.class, problem -> assertThat(problem.status).isEqualTo(403));
+    }
+
+    assertThat(orders.preview(cashier, request(null, 1)).total()).isEqualTo(140);
+  }
+
+  @Test
+  void malformedPreviewsDoNotConsumeTheLimit() {
+    Actor customer = customer("malformed");
+    var empty = new Orders.PreviewRequest("taipei", null, List.of());
+
+    for (int i = 0; i < 100; i++) {
+      assertThatThrownBy(() -> orders.preview(customer, empty))
+          .isInstanceOfSatisfying(
+              Problem.class, problem -> assertThat(problem.status).isEqualTo(400));
+    }
+
+    assertThat(orders.preview(customer, request(null, 1)).total()).isEqualTo(140);
+  }
+
+  @Test
+  void creatingOrdersIsNotAffectedByAConsumedPreviewLimit() {
+    Actor cashier = identity.find("cashier");
+    for (int i = 0; i < 60; i++) orders.preview(cashier, request(null, 1));
+    assertThatThrownBy(() -> orders.preview(cashier, request(null, 1)))
+        .isInstanceOf(Problem.class);
+
+    for (int i = 0; i < 3; i++) {
+      Orders.Order created = orders.create(
+          cashier,
+          new Orders.Create(
+              "taipei", "TAKEAWAY", "CASH", "", null, List.of(line(1))),
+          UUID.randomUUID().toString());
+      assertThat(created.total()).isEqualTo(140);
+    }
+  }
+
+  private Actor customer(String id) {
+    return new Actor(id, id, id, "CUSTOMER", "SELF", null, Set.of("ORDER_CREATE"));
+  }
+
   private Orders.PreviewRequest request(String code, int quantity) {
     return new Orders.PreviewRequest("taipei", code, List.of(line(quantity)));
   }
