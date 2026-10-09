@@ -1,5 +1,6 @@
 package com.coffee.app.readonly;
 
+import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.domain.JavaMethodCall;
@@ -67,7 +68,7 @@ public final class ReadOnlyWalker {
               .flatMap(candidate -> candidate.getMethods().stream())
               .filter(
                   method ->
-                      matches(method, target.getName(), target.getRawParameterTypes().getNames()))
+                      matches(method, target.getName(), typeNames(target.getRawParameterTypes())))
               .forEach(
                   method ->
                       queue.add(new Path(method, append(path.chain(), method.getFullName()))));
@@ -81,7 +82,11 @@ public final class ReadOnlyWalker {
 
   private static boolean matches(JavaMethod method, String name, List<String> parameterTypes) {
     return method.getName().equals(name)
-        && method.getRawParameterTypes().getNames().equals(parameterTypes);
+        && typeNames(method.getRawParameterTypes()).equals(parameterTypes);
+  }
+
+  private static List<String> typeNames(List<JavaClass> types) {
+    return types.stream().map(JavaClass::getName).toList();
   }
 
   private static List<String> append(List<String> chain, String element) {
