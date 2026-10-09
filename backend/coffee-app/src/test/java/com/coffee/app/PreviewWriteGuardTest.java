@@ -57,7 +57,7 @@ class PreviewWriteGuardTest {
   void monthlyReportIssuesNoWrites() {
     String month = YearMonth.now(ZoneId.of("Asia/Taipei")).toString();
 
-    assertThat(writes(() -> reports.report(identity.find("cashier"), month, "taipei"))).isEmpty();
+    assertThat(writes(() -> reports.report(identity.find("manager"), month, "taipei"))).isEmpty();
   }
 
   @Test
