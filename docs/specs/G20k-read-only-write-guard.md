@@ -4,7 +4,7 @@
 | --- | --- |
 | 缺口編號 | G20k（由 [`G20h-order-preview.md`](G20h-order-preview.md) §13.4／§14 登記，[`G20j-rate-limit.md`](G20j-rate-limit.md) §14 重列） |
 | 優先順序 | P1（本輪由 P2 的登記項升排，理由見 §1.4） |
-| 版本 | v1.0（2026-10-09） |
+| 版本 | v1.1（2026-10-09） |
 | 實作者 | Codex（`codex/g20k-read-only-guard`） |
 | Flyway | **零 migration。`V15` 仍然空著**，下一份需要 migration 的規格自 `V15` 起算 |
 | 新依賴 | **零**（ArchUnit 1.4.1 已在 `coffee-app` 的 test scope，其餘用 JDK 與 spring-jdbc 既有類別） |
