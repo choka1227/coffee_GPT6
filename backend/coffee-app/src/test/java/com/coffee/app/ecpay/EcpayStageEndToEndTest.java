@@ -24,10 +24,14 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
@@ -54,6 +58,7 @@ import org.springframework.transaction.PlatformTransactionManager;
     })
 @ActiveProfiles("dev")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@ExtendWith(OutputCaptureExtension.class)
 class EcpayStageEndToEndTest {
   private static final String KEY = "test-key-g01b";
   private static final String IV = "test-iv-g01b";
@@ -82,6 +87,11 @@ class EcpayStageEndToEndTest {
     db.update("delete from order_items");
     db.update("delete from orders");
     FAKE.respond(FakeEcpayServer.Scenario.NOT_FOUND);
+  }
+
+  @AfterEach
+  void logsNeverContainSecrets(CapturedOutput output) {
+    assertThat(output.getAll()).doesNotContain(KEY, IV);
   }
 
   @AfterAll

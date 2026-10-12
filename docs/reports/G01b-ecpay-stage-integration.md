@@ -44,6 +44,9 @@ MerchantID、20 碼訂單號、180 秒內時間戳與 CheckMac，再依情境回
 驗證七種回呼；`lostCallbackIsRecoveredThenLateCallbackIsIdempotent` 驗證排程補救、同交易遲到回呼
 與不同交易編號拒絕。`EcpayNoEgressGuardTest` 掃描所有後端測試，並用內建不安全樣本證明規則有效。
 
+`EcpayStageEndToEndTest` 以 `OutputCaptureExtension` 擷取每個端到端情境的完整輸出，
+並在 `@AfterEach` 斷言不得出現測試 HashKey／HashIV，涵蓋查單、回呼與錯誤路徑。
+
 ## S3 完成內容
 
 - 新增獨立 `ecpay-stage` profile，使用綠界官方公開測試特店、預設啟用金流與對帳；未污染 `dev` profile。
@@ -78,4 +81,4 @@ MerchantID、20 碼訂單號、180 秒內時間戳與 CheckMac，再依情境回
 
 ## 下一步
 
-等待最新 head 遠端 CI；全綠後依流程將 PR 轉 ready for review。
+Claude 審查提出的端到端 log 衛生缺口已補齊；等待修正 head 的遠端 CI 與複審。
