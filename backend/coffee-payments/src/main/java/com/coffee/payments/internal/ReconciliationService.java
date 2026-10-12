@@ -211,6 +211,67 @@ public class ReconciliationService implements Reconciliation {
     return perform(actor, id);
   }
 
+  public AnomalyPage anomalies(Actor actor) {
+    authorize(actor);
+    String sql =
+        "select id,order_id,branch_id,order_total,trade_amount,provider_trade_no,source,detected_at"
+            + " from payment_anomalies where resolved_at is null";
+    List<Anomaly> rows;
+    if (actor.global()) {
+      rows = db.query(sql + " order by detected_at desc,id desc limit 201", this::anomaly);
+    } else {
+      rows =
+          db.query(
+              sql + " and branch_id=? order by detected_at desc,id desc limit 201",
+              this::anomaly,
+              actor.branchId());
+    }
+    return new AnomalyPage(rows.stream().limit(200).toList(), rows.size() > 200);
+  }
+
+  public Anomaly resolveAnomaly(Actor actor, String id, String note) {
+    authorize(actor);
+    String trimmed = note == null ? "" : note.trim();
+    if (trimmed.isEmpty() || trimmed.length() > 200)
+      throw new Problem(400, "請填寫處理說明（200 字以內）");
+    var rows =
+        db.query(
+            "select id,order_id,branch_id,order_total,trade_amount,provider_trade_no,source,detected_at,resolved_at"
+                + " from payment_anomalies where id=?",
+            (row, number) ->
+                new AnomalyState(anomaly(row, number), row.getObject("resolved_at", Long.class)),
+            id);
+    if (rows.isEmpty()) throw new Problem(404, "找不到這筆異常");
+    var state = rows.get(0);
+    if (!actor.global() && !Objects.equals(actor.branchId(), state.value().branchId()))
+      throw new Problem(403, "沒有處理其他分店異常的權限");
+    if (state.resolvedAt() != null) throw new Problem(409, "這筆異常已處理");
+    int updated =
+        db.update(
+            "update payment_anomalies set resolved_at=?,resolved_by=?,resolution_note=?"
+                + " where id=? and resolved_at is null",
+            System.currentTimeMillis(),
+            actor.id(),
+            trimmed,
+            id);
+    if (updated == 0) throw new Problem(409, "這筆異常已處理");
+    return state.value();
+  }
+
+  private record AnomalyState(Anomaly value, Long resolvedAt) {}
+
+  private Anomaly anomaly(java.sql.ResultSet row, int number) throws java.sql.SQLException {
+    return new Anomaly(
+        row.getString("id"),
+        row.getString("order_id"),
+        row.getString("branch_id"),
+        row.getInt("order_total"),
+        row.getObject("trade_amount", Integer.class),
+        row.getString("provider_trade_no"),
+        row.getString("source"),
+        row.getLong("detected_at"));
+  }
+
   @Scheduled(
       fixedDelayString = "${ecpay.reconcile.interval-ms:300000}",
       initialDelayString = "${ecpay.reconcile.interval-ms:300000}")

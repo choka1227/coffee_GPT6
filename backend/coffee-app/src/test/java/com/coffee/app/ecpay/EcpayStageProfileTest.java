@@ -46,6 +46,14 @@ class EcpayStageProfileTest {
         .isEqualTo(3);
     assertThat(environment.getProperty("ecpay.reconcile.interval-ms", Long.class))
         .isEqualTo(86_400_000L);
+    assertThat(environment.getProperty("ecpay.expire.enabled", Boolean.class)).isTrue();
+    assertThat(environment.getProperty("ecpay.expire.checkout-window-minutes", Integer.class))
+        .isEqualTo(10);
+    assertThat(environment.getProperty("ecpay.expire.after-minutes", Integer.class)).isEqualTo(40);
+    assertThat(environment.getProperty("ecpay.expire.recheck-after-minutes", Integer.class))
+        .isEqualTo(10);
+    assertThat(environment.getProperty("ecpay.expire.interval-ms", Long.class))
+        .isEqualTo(120_000L);
 
     String profile;
     try (InputStream input =
@@ -58,6 +66,11 @@ class EcpayStageProfileTest {
         .contains("綠界官方公開測試特店，不是正式憑證")
         .contains("merchant-id: ${ECPAY_MERCHANT_ID:3002607}")
         .contains("hash-key: ${ECPAY_HASH_KEY:pwFHCqoQZGmho4w6}")
-        .contains("hash-iv: ${ECPAY_HASH_IV:EkRm7iFT261dpevs}");
+        .contains("hash-iv: ${ECPAY_HASH_IV:EkRm7iFT261dpevs}")
+        .contains("enabled: ${ECPAY_EXPIRE_ENABLED:true}")
+        .contains("checkout-window-minutes: ${ECPAY_EXPIRE_CHECKOUT_WINDOW_MINUTES:10}")
+        .contains("after-minutes: ${ECPAY_EXPIRE_AFTER_MINUTES:40}")
+        .contains("recheck-after-minutes: ${ECPAY_EXPIRE_RECHECK_AFTER_MINUTES:10}")
+        .contains("interval-ms: ${ECPAY_EXPIRE_INTERVAL_MS:120000}");
   }
 }

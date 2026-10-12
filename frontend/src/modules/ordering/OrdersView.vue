@@ -9,7 +9,7 @@ import {
   Check,
 } from "lucide-vue-next";
 import { api, send } from "../../shared/api";
-import type { Order, OrderPage } from "../../shared/types";
+import type { Order, OrderPage, PaymentConfig } from "../../shared/types";
 import { useAuth } from "../identity/store";
 import { money, dateTime, statuses } from "../../shared/format";
 import { notify } from "../../shared/notice";
@@ -27,7 +27,8 @@ const auth = useAuth(),
   selected = ref<Order | null>(null),
   cashOrder = ref<Order | null>(null),
   tendered = ref(0),
-  busy = ref(false);
+  busy = ref(false),
+  paymentConfig = ref<PaymentConfig | null>(null);
 let queryTimer: ReturnType<typeof setTimeout> | undefined;
 let requestSequence = 0;
 const nextStatus: Record<string, string> = {
@@ -73,7 +74,11 @@ async function load(reset = true) {
     }
   }
 }
-onMounted(load);
+async function loadPaymentConfig() {
+  try { paymentConfig.value = await api<PaymentConfig>("/payments/config"); }
+  catch { paymentConfig.value = null; }
+}
+onMounted(() => { load(); loadPaymentConfig(); });
 watch(status, () => load());
 watch(query, () => {
   clearTimeout(queryTimer);
@@ -327,7 +332,9 @@ async function pay(o: Order) {
         {{
           selected.paymentMethod === "CASH"
             ? "請至櫃台付款，付款後門市將開始準備。"
-            : "若已完成付款，請稍候重新整理，等待金流通知。"
+            : paymentConfig?.expire.enabled
+              ? `請在 ${paymentConfig.expire.checkoutWindowMinutes} 分鐘內開啟付款；建立後 ${paymentConfig.expire.afterMinutes} 分鐘仍未付款將自動作廢。`
+              : "若已完成付款，請稍候重新整理，等待金流通知。"
         }}
       </p>
       <button
