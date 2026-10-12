@@ -6,6 +6,7 @@ import com.coffee.identity.api.Identity;
 import com.coffee.orders.api.Orders;
 import com.coffee.shared.Problem;
 import java.time.*;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,7 +30,9 @@ class OrderExpiryTest {
 
   @Test
   void expireOnlineCancelsOnceAndRestoresReservedStock() {
-    int today = (int) LocalDate.now(ZoneId.of("Asia/Taipei")).toEpochDay();
+    int today =
+        Integer.parseInt(
+            LocalDate.now(ZoneId.of("Asia/Taipei")).format(DateTimeFormatter.BASIC_ISO_DATE));
     db.update(
         "insert into branch_product_stock"
             + "(branch_id,product_id,on_date,quantity,remaining,updated_at,updated_by)"
