@@ -40,6 +40,7 @@ ecpay:
   merchant-id: ${ECPAY_MERCHANT_ID:}
   hash-key: ${ECPAY_HASH_KEY:}
   hash-iv: ${ECPAY_HASH_IV:}
+  query-url: ${ECPAY_QUERY_URL:https://payment-stage.ecpay.com.tw/Cashier/QueryTradeInfo/V5}
   query-timeout-ms: ${ECPAY_QUERY_TIMEOUT_MS:10000}
   reconcile:
     enabled: ${ECPAY_RECONCILE_ENABLED:false}

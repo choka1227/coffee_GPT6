@@ -5,10 +5,7 @@ export async function openEcpay(orderId: string) {
     { method: "POST" },
   );
   if (
-    ![
-      "https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5",
-      "https://payment.ecpay.com.tw/Cashier/AioCheckOut/V5",
-    ].includes(p.action)
+    p.action !== "https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5"
   )
     throw new Error("付款網址不正確");
   const form = document.createElement("form");

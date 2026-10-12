@@ -6,6 +6,8 @@ import com.coffee.shared.*;
 import java.time.*;
 import java.time.format.*;
 import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -15,6 +17,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class ReconciliationService implements Reconciliation {
+  private static final Logger log = LoggerFactory.getLogger(ReconciliationService.class);
   private final Orders orders;
   private final TradeQuery query;
   private final JdbcTemplate db;
@@ -172,13 +175,26 @@ public class ReconciliationService implements Reconciliation {
         orders.reconciliationCandidates(null, now - maxAge, now - minAge, batch, cursor);
     // Rotate through the whole window; old unpaid orders must not starve newer ones.
     cursor = candidates.size() < batch ? 0 : cursor + candidates.size();
+    Map<String, Integer> outcomes = new HashMap<>();
+    int skipped = 0;
     for (var o : candidates) {
       try {
-        perform(null, o.id());
+        var result = perform(null, o.id());
+        outcomes.merge(result.outcome(), 1, Integer::sum);
       } catch (RuntimeException e) {
-        /* Isolate failures; never log payment payloads. */
+        skipped++;
+        log.warn("綠界排程對帳單筆失敗：訂單 {}，{}", o.id(), e.getClass().getSimpleName());
       }
     }
+    log.info(
+        "綠界排程對帳完成：候選 {} 筆，CONFIRMED {}、STILL_UNPAID {}、SIMULATED {}、AMOUNT_MISMATCH {}、QUERY_FAILED {}、略過 {}",
+        candidates.size(),
+        outcomes.getOrDefault("CONFIRMED", 0),
+        outcomes.getOrDefault("STILL_UNPAID", 0),
+        outcomes.getOrDefault("SIMULATED", 0),
+        outcomes.getOrDefault("AMOUNT_MISMATCH", 0),
+        outcomes.getOrDefault("QUERY_FAILED", 0),
+        skipped);
   }
 
   private Result perform(Actor actor, String id) {
