@@ -1,6 +1,6 @@
 # G01b — 綠界測試環境（stage）串接可運作
 
-版本：v1.0（2026-10-11）
+版本：v1.1（2026-10-12）
 作者：Claude（PM / SA）
 前置：G01（PR #9）、G01a（PR #15）皆已合併。本規格以「補齊讓它能跑」為主，**不重寫** `EcpayService`／`ReconciliationService`／`EcpayTradeQuery`。
 後續：G04（線上付款訂單的逾時作廢，與對帳互斥）為下一份規格，**不在本規格範圍**。
@@ -39,7 +39,7 @@ PO 於 2026-10-11 解除 2026-09-17 的「金流整批延後」決策：**綠界
 - **新 profile `ecpay-stage`**：放綠界官方公開測試特店參數、開啟金流與排程對帳；`start-demo.sh` 預設帶上
 - **排程對帳的可觀測性**：每輪結束一行 INFO 摘要、每筆失敗一行 WARN（只含訂單編號與例外類別）
 - **憑證衛生**：HashKey／HashIV 不得出現在 log、例外訊息、API 回應；以測試釘住
-- **本機假綠界伺服器**與一組端到端測試（查單 6 種情境 + 回呼 7 種情境 + 「回呼遺失 → 對帳補救 → 遲到回呼」串接）
+- **本機假綠界伺服器**與一組端到端測試（查單 8 種情境 + 回呼 7 種情境 + 「回呼遺失 → 對帳補救 → 遲到回呼」串接）
 - **文件**：改寫 `docs/ECPAY.md`；stage 實機驗證步驟
 
 ### 2.2 不在範圍內
@@ -224,11 +224,12 @@ final class FakeEcpayServer implements AutoCloseable {
   void respond(Scenario scenario);   // 設定下一次（以及之後每次）查單的回應情境
   List<Map<String, String>> receivedQueries();  // 收到的查單請求（已解析的表單欄位）
   Map<String, String> signedCallback(Map<String, String> checkoutFields, Map<String, String> overrides);
-  void close();                      // server.stop(0)
+  void close();                      // server.stop(0)，再 executor.shutdownNow() + awaitTermination(5s)
 }
 ```
 
-- 用 `com.sun.net.httpserver.HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)`，**只綁 loopback、隨機埠**；`setExecutor(Executors.newCachedThreadPool())`，避免 `TIMEOUT` 情境的 sleep 卡住後續請求
+- 用 `com.sun.net.httpserver.HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)`，**明確綁 IPv4 loopback、隨機埠**。**不要**用 `InetAddress.getLoopbackAddress()`：JVM 偏好 IPv6（`java.net.preferIPv6Addresses=true`）時它會回 `::1`，伺服器綁 IPv6、`queryUrl()` 卻是 `127.0.0.1`，所有查單情境都會 connection refused。`queryUrl()` 的埠一律取自 `server.getAddress().getPort()`
+- `FakeEcpayServer` **自己持有** `ExecutorService`（`Executors.newCachedThreadPool` 搭配把 thread 設為 daemon、名稱前綴 `fake-ecpay-` 的 `ThreadFactory`），交給 `setExecutor`，避免 `TIMEOUT` 情境的 sleep 卡住後續請求。`HttpServer.stop()` **不會**關閉呼叫者傳入的 executor，所以 `close()` 必須依序 `server.stop(0)` → `executor.shutdownNow()`（中斷 `TIMEOUT` 情境 sleep 中的 worker）→ `awaitTermination(5, SECONDS)`。測試類別以 `@AfterEach`／try-with-resources 保證 `close()` 一定被呼叫
 - 收到查單請求時，**先驗證我方送出的請求**：`MerchantID` 等於設定值、`MerchantTradeNo` 為 20 碼英數、`TimeStamp` 與現在相差 ≤ 180 秒、`CheckMacValue` 以同一組 key／iv 驗得過。不成立就回 HTTP 400 並記下，讓測試斷言失敗 —— 這是**目前唯一能驗證我方「送出去」的簽章正確**的地方（既有測試全部 mock 掉 `TradeQuery`）
 - 回應以 `application/x-www-form-urlencoded` 字串回傳，格式與綠界 QueryTradeInfo 相同（`key=value&...`，含 `CheckMacValue`），用 `CheckMac.sign` 簽
 
@@ -344,6 +345,7 @@ CI 不可能驗到「綠界真的打到我們的回呼」，因為那需要一�
 **S2**
 
 - [ ] 9. §10.2 的 8 個查單情境逐一通過，訂單狀態與 `payment_reconciliations.outcome` 符合表格；`REDIRECT_TO_PRODUCTION` 情境下假伺服器的 302 沒有被跟隨（測試以「沒有任何對外連線」為前提：`Location` 指向的網域若被連線，測試在 CI 會因 DNS／egress 而變慢或失敗 —— 以 `outcome=QUERY_FAILED` 且耗時 < 2 秒斷言）
+- [ ] 9a. 假伺服器生命週期：跑完 `TIMEOUT` 情境並 `close()` 後，`Thread.getAllStackTraces()` 中沒有任何名稱以 `fake-ecpay-` 開頭且仍存活的 thread；`queryUrl()` 的 host 為 `127.0.0.1`、埠等於伺服器實際綁定的埠
 - [ ] 10. （S2 部分）跑完 §10.2 所有情境與 §13 驗收 14 所有回呼情境後，`OutputCaptureExtension` 擷取的完整輸出中**找不到** `test-key-g01b` 與 `test-iv-g01b`
 - [ ] 11. 所有情境下，API 回應本文（checkout、callback、reconcile、history、pending、config）都不含 `test-key-g01b`、`test-iv-g01b`
 - [ ] 12. 假伺服器記錄的每一筆查單請求都通過 §10.1 的四項檢查（我方簽章正確）
@@ -452,3 +454,4 @@ CI 不可能驗到「綠界真的打到我們的回呼」，因為那需要一�
 | 版本 | 日期 | 變更 |
 | --- | --- | --- |
 | v1.0 | 2026-10-11 | 初版。PO 於同日解除金流延後、只串 stage |
+| v1.1 | 2026-10-12 | 依 Codex 審查修正 §10.1：假伺服器明確綁 `127.0.0.1`（不用 `getLoopbackAddress()`，避免 IPv6 `::1` 不一致）；`close()` 必須關閉自持的 daemon executor；新增驗收 9a；§2 查單情境數統一為 8 種 |
