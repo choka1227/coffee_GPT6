@@ -24,6 +24,7 @@ public class EcpayService {
   private final boolean enabled;
   private final boolean expireEnabled;
   private final long checkoutWindowMs;
+  private final PaymentAnomalies anomalies;
   private final String merchant, key, iv, base, environment;
 
   @Autowired
@@ -48,6 +49,7 @@ public class EcpayService {
     this.environment = environment;
     this.expireEnabled = expireEnabled;
     this.checkoutWindowMs = checkoutWindowMinutes * 60_000L;
+    this.anomalies = new PaymentAnomalies(db);
     if (!"stage".equals(environment))
       throw new IllegalStateException("本系統只允許串接綠界測試環境（stage）");
     if (enabled) {
@@ -120,7 +122,10 @@ public class EcpayService {
     String trade = p.getOrDefault("TradeNo", "");
     Problem.check(!trade.isBlank() && trade.length() <= 64, "交易編號不正確");
     boolean simulated = "1".equals(p.get("SimulatePaid"));
-    if ("1".equals(p.get("RtnCode")) && !simulated) orders.confirmOnline(id, amount, trade);
+    if ("1".equals(p.get("RtnCode")) && !simulated) {
+      String settled = orders.settleOnline(id, amount, trade, System.currentTimeMillis());
+      if ("CANCELLED".equals(settled)) anomalies.record(order, "CALLBACK", trade, amount);
+    }
     // Never store credentials or complete payment payloads. Replayed valid notifications are
     // acknowledged.
     db.update(
