@@ -197,7 +197,7 @@ class PaymentAnomalyApiTest {
 
   @Test
   void paymentConfigAddsExpiryWithoutRemovingExistingKeys() throws Exception {
-    mvc.perform(get("/api/payments/config"))
+    mvc.perform(get("/api/payments/config").session(session("hq")))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.enabled").value(true))
         .andExpect(jsonPath("$.environment").value("stage"))
