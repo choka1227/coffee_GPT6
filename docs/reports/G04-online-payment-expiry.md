@@ -7,7 +7,7 @@
 - [x] S1 — `V15` schema、`Orders.expireOnline／settleOnline`、設定檢查與付款窗口
 - [x] S2 — 作廢排程、回呼異常、作廢後複查與端到端測試
 - [x] S3 — 異常清單／結案 API、前端、demo profile、文件與測試
-- [ ] 最新 head 的必要 GitHub Actions 全數成功
+- [x] 最新實作 head 的必要 GitHub Actions 全數成功（Actions #628）
 - [ ] PO 依 `docs/ECPAY.md` 步驟 7–10 完成 stage 實機驗收（不擋合併）
 
 ## 驗收與測試對照
@@ -44,4 +44,5 @@
 
 - 本機借用同 repository 既有、與 lockfile 相符的 `node_modules` 驗證：`npm test` 通過（14 個檔案、143 個測試），`npm run build` 通過。
 - 本機 Maven 解析 Maven Central DNS 失敗，未取得可用的完整 backend verify；同樣以最新 head 的 Actions 為主要證據。
+- 遠端 Actions #628（實作 head `a8453687`）完成成功：frontend test／build 與 Maven verify 全數通過，backend 共 294 項測試。
 - 實作中未發現需要變更規格的矛盾。異常清單只查 `payment_anomalies` 快照，不跨模組 join；結案不呼叫綠界、不改訂單，也不寫 `audit_log`，符合規格的模組邊界。
