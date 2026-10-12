@@ -6,7 +6,10 @@ import static org.mockito.Mockito.*;
 
 import com.coffee.orders.api.Orders;
 import com.coffee.payments.api.TradeQuery;
+import com.coffee.payments.internal.EcpayTradeQuery;
 import com.coffee.payments.internal.ReconciliationService;
+import com.coffee.shared.Problem;
+import java.net.ServerSocket;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -17,6 +20,27 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 @ExtendWith(OutputCaptureExtension.class)
 class EcpayLogHygieneTest {
+  @Test
+  void realTransportFailureMessageDoesNotExposeSecrets() throws Exception {
+    int closedPort;
+    try (var socket = new ServerSocket(0)) {
+      closedPort = socket.getLocalPort();
+    }
+    var query =
+        new EcpayTradeQuery(
+            "3002607",
+            "test-key-g01b",
+            "test-iv-g01b",
+            "stage",
+            "http://127.0.0.1:" + closedPort + "/query",
+            100);
+
+    assertThatThrownBy(() -> query.query("ORDER000000000000001"))
+        .isInstanceOf(Problem.class)
+        .hasMessageNotContaining("test-key-g01b")
+        .hasMessageNotContaining("test-iv-g01b");
+  }
+
   @Test
   void scheduledLogsZeroCandidateSummaryWithoutSecrets(CapturedOutput output) {
     Orders orders = mock(Orders.class);

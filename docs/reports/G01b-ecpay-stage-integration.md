@@ -6,7 +6,7 @@
 ## 階段狀態
 
 - [x] S1 — stage 防線與查單端點覆寫
-- [ ] S2 — 本機假綠界伺服器與端到端測試
+- [x] S2 — 本機假綠界伺服器與端到端測試
 - [ ] S3 — demo profile、啟動腳本與文件
 
 ## S1 完成內容
@@ -22,18 +22,27 @@
 
 ## S2 情境對應
 
-尚未施工；完成 S2 時在此補上 §10.2 八個情境與實際測試方法名：
+S2 新增綁定 `127.0.0.1:0` 的 JDK `HttpServer` 假站。假站會先驗證我方送出的
+MerchantID、20 碼訂單號、180 秒內時間戳與 CheckMac，再依情境回傳簽章表單；
+`close()` 會停止伺服器、中斷自持的 daemon executor 並等待 worker 結束。
+
+§10.2 八個情境與實際測試方法名：
 
 | 情境 | 測試方法 |
 | --- | --- |
-| `PAID` | 待補 |
-| `NOT_FOUND` | 待補 |
-| `AMOUNT_MISMATCH` | 待補 |
-| `BAD_MAC` | 待補 |
-| `TIMEOUT` | 待補 |
-| `CONNECTION_REFUSED` | 待補 |
-| `HTTP_500` | 待補 |
-| `REDIRECT_TO_PRODUCTION` | 待補 |
+| `PAID` | `paidQueryIsConfirmedOverRealHttp` |
+| `NOT_FOUND` | `notFoundQueryRemainsUnpaidOverRealHttp` |
+| `AMOUNT_MISMATCH` | `amountMismatchQueryIsRejectedOverRealHttp` |
+| `BAD_MAC` | `badMacQueryIsRejectedOverRealHttp` |
+| `TIMEOUT` | `timeoutQueryIsRejectedOverRealHttp` |
+| `CONNECTION_REFUSED` | `connectionRefusedQueryIsRejected` |
+| `HTTP_500` | `http500QueryIsRejectedOverRealHttp` |
+| `REDIRECT_TO_PRODUCTION` | `redirectToProductionIsNotFollowed` |
+
+另由 `checkoutUsesDatabaseTotalAndManualReconcileUsesRealLoginAndCsrf` 驗證 DB 金額、
+真實登入／CSRF 與跨店權限；`callbacksCoverSuccessReplayMismatchMacSimulationFailureAndDuplicateParameter`
+驗證七種回呼；`lostCallbackIsRecoveredThenLateCallbackIsIdempotent` 驗證排程補救、同交易遲到回呼
+與不同交易編號拒絕。`EcpayNoEgressGuardTest` 掃描所有後端測試，並用內建不安全樣本證明規則有效。
 
 ## 既有測試完整性
 
@@ -50,7 +59,7 @@
 
 - `npm test -- --run src/modules/payments/ecpay.dom.test.ts`：通過，1 個檔案、3 個測試。
 - `npm run build`：通過。
-- Maven S1 指定測試：未執行完成；`repo.maven.apache.org` 暫時無法解析，Spring Boot parent POM 無法下載。
+- Maven S1／S2 指定測試：未執行完成；`repo.maven.apache.org` 暫時無法解析，Spring Boot parent POM 無法下載。
 - `git diff --check`：通過。
 
 ## 實作中發現的規格問題
@@ -60,4 +69,4 @@
 
 ## 下一步
 
-施工 S2：新增 JDK `HttpServer` 假綠界、八個查單情境、回呼與遺失回呼補救端到端測試，以及 no-egress guard。
+施工 S3：新增 demo 專用 `ecpay-stage` profile、更新啟動腳本與操作文件，並補 profile 驗收測試。
