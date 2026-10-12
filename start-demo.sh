@@ -9,4 +9,4 @@ if [[ ! -f "$coffee_jar" ]]; then
   echo '請先執行 ./scripts/build.sh 建置專案。' >&2
   exit 1
 fi
-exec java -jar "$coffee_jar" --spring.profiles.active=dev --server.address=127.0.0.1
+exec java -jar "$coffee_jar" --spring.profiles.active=dev,ecpay-stage --server.address=127.0.0.1

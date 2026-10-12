@@ -1,19 +1,60 @@
-# 綠界付款整合
+# 綠界測試環境付款整合
+
+本系統目前**只允許綠界 stage 測試環境**。後端啟動時會拒絕任何非 `stage` 的環境值與綠界正式查單網址；前端與 CSP 也只接受 stage 付款頁。正式商店憑證不得放進 repository。
 
 ## 已實作
 
-- 全方位金流 AioCheckOut V5，信用卡一次付清。
-- 後端以訂單快照建立 POST form 欄位，總額不取自客戶端；商店交易編號為 20 個英數字且唯一。
-- 使用 SHA-256 CheckMacValue，參數依不分大小寫 A–Z 排序，整串 URL encode，轉小寫、對齊 .NET URL encode 字元規則、雜湊後轉大寫。
-- 只有 `POST /api/payments/ecpay/callback` 免 CSRF（必須驗證金流簽章）；登入、現金收款、管理操作均需要 CSRF。
-- 回呼驗證 CheckMacValue、MerchantID、MerchantTradeNo、TradeAmt、支付方式及 TradeNo。拒絕重複參數。簽章採固定時間位元組比較。
-- `RtnCode=1` 且 `SimulatePaid != 1` 才更新付款成功。`SimulatePaid=1` 僅記錄並回覆，不計業績；有效重複通知回覆 `1|OK` 且不重複入帳。
-- ClientBackURL 只回到訂單畫面，不能以瀏覽器返回網址或查詢參數認定付款成功。
-- 支付事件僅記錄交易編號、結果碼、模擬旗標與時間，不保存卡號、CVV 或整份原始回呼。
+- AioCheckOut V5 信用卡一次付清；表單金額取自後端訂單快照，不採信客戶端金額。
+- SHA-256 CheckMacValue；參數依不分大小寫 A–Z 排序，使用相容 .NET 的 URL encode 規則。
+- 只有 `POST /api/payments/ecpay/callback` 免登入與 CSRF，並驗證簽章、特店、訂單、金額及 TradeNo。
+- `RtnCode=1` 且 `SimulatePaid != 1` 才入帳；有效重送保持冪等。
+- 主動查單、店長手動對帳與排程對帳；回呼遺失時可由對帳補救。
+- 支付事件只保存交易編號、結果碼、模擬旗標與時間，不保存卡號、CVV、金鑰或完整回呼。
 
-## 啟用測試環境
+## Demo 預設啟用
 
-在主機環境變數或 `.env` 設定：
+`./start-demo.sh` 會啟用 `dev,ecpay-stage` profiles，使用綠界官方公開測試特店資料（不是正式憑證）：
+
+- MerchantID：`3002607`
+- HashKey：`pwFHCqoQZGmho4w6`
+- HashIV：`EkRm7iFT261dpevs`
+- 排程每 2 分鐘執行，查核建立至少 3 分鐘的待付款訂單
+
+先執行 `./scripts/build.sh`，再執行 `./start-demo.sh`。若只是開發其他功能而不想啟用金流：
+
+```bash
+ECPAY_ENABLED=false ECPAY_RECONCILE_ENABLED=false ./start-demo.sh
+```
+
+本機預設 `APP_PUBLIC_URL=http://localhost:8080`，綠界無法把回呼送到本機；啟動時會記錄 WARN，付款狀態可由排程對帳補上。要驗證回呼，需自行準備公開 HTTPS 通道；本專案不指定通道工具，也不新增相關依賴或設定檔。
+
+## Stage 實機驗證
+
+### 準備
+
+1. 執行 `./scripts/build.sh`。
+2. 準備「公開 HTTPS 網址 → 本機 `127.0.0.1:8080`」通道。
+3. 執行 `APP_PUBLIC_URL=https://<通道網址> ./start-demo.sh`。
+4. 測試卡號、有效年月、安全碼與 3D 驗證碼以[綠界官方測試資料](https://developers.ecpay.com.tw/2856/)為準。
+
+### 驗證步驟
+
+1. **回呼主路徑**：以 demo 顧客登入、建立線上付款訂單並在 stage 完成付款。預期數秒內變成「已付款」，`payment_events` 新增 `result_code=1`、`simulated=false`。
+2. **對帳補救**：不設 `APP_PUBLIC_URL` 直接啟動並完成付款。預期先維持待付款，3–5 分鐘內排程 log 出現 `CONFIRMED 1`，訂單轉已付款，`payment_reconciliations` 新增 `trigger_source=SCHEDULED`、`outcome=CONFIRMED`。也可由店長在對帳頁按「查核」立即觸發。
+3. **非 HTTPS ReturnURL**：若步驟 2 在付款頁即被拒，記錄錯誤碼／訊息；改用步驟 1 的通道網址並關閉通道，重做對帳補救。
+4. **查無交易**：建立線上付款訂單後關閉付款頁。3–5 分鐘後應為 `STILL_UNPAID`；記錄綠界實際 `TradeStatus`（自動化假站採 `10200047`）。
+5. **同訂單再次付款**：第一次進付款頁後不付款返回，再按一次付款；記錄是否出現訂單編號重複。此結果是 G04 的設計輸入，本規格不處理。
+6. **遲到回呼**：訂單已由對帳轉為 `PAID` 後，在綠界後台重送同一交易通知（若後台支援）。預期回覆 `1|OK`、狀態與 `paid_at` 不變、不重複入帳。
+
+驗收紀錄：
+
+| 步驟 | 日期 | 結果（通過／不通過／不適用） | 觀察（錯誤碼、TradeStatus 實際值等） |
+| --- | --- | --- | --- |
+| 1–6 |  |  |  |
+
+## 環境變數
+
+正式設定預設不含任何特店資料。若不使用 demo profile，可明確提供：
 
 ```dotenv
 ECPAY_ENABLED=true
@@ -21,22 +62,15 @@ ECPAY_ENVIRONMENT=stage
 ECPAY_MERCHANT_ID=3002607
 ECPAY_HASH_KEY=pwFHCqoQZGmho4w6
 ECPAY_HASH_IV=EkRm7iFT261dpevs
+ECPAY_RECONCILE_ENABLED=true
 APP_PUBLIC_URL=https://你的公開測試網域
 COOKIE_SECURE=true
 ```
 
-上面是綠界官方公開測試商店資料，並非正式商店憑證。網站需對外可達，TLS 終結於反向代理；綠界回呼使用公開 443 埠。不能使用 localhost、內網網址或僅本人可登入的私有網站作為付款回呼入口。
-
-測試卡號、有效年月及 3D 驗證請以官方頁面為準。在此開發環境已驗證官方簽章向量、金額核對、偽造/模擬通知與冪等回呼；**尚未經公開網域實際完成綠界測試卡端到端付款**。
-
-## 正式環境
-
-切換 `ECPAY_ENVIRONMENT=production` 並以正式 MerchantID / HashKey / HashIV 取代測試值。系統拒絕在 production 使用已知測試商店 ID。金鑰只在後端環境變數中，前端建置與 Git 均不包含正式金鑰。
-
-正式營運前需完成商店申請、HTTPS、綠界驗收及帳務對帳流程。本版沒有退款 API、主動查單或排程對帳，對於付款通知遺失須由營運人員依綠界交易紀錄查核；未實作自動對帳前不應把這套初版視為無人值守的正式收款平台。
+`ECPAY_QUERY_URL` 僅供測試覆寫：只接受精確綠界 stage 查單 URL，或具明確連接埠的 `http://127.0.0.1`／`http://localhost`。任何正式網域、非 loopback 或重新導向都不會被跟隨。
 
 ## 官方來源
 
 - [全方位付款建立訂單](https://developers.ecpay.com.tw/2862/)
-- [檢查碼機制（含本專案採用的測試向量）](https://developers.ecpay.com.tw/2902/)
-- [測試商店、測試卡與模擬通知說明](https://developers.ecpay.com.tw/2856/)
+- [檢查碼機制](https://developers.ecpay.com.tw/2902/)
+- [測試商店、測試卡與模擬通知](https://developers.ecpay.com.tw/2856/)

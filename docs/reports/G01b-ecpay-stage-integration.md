@@ -7,7 +7,7 @@
 
 - [x] S1 — stage 防線與查單端點覆寫
 - [x] S2 — 本機假綠界伺服器與端到端測試
-- [ ] S3 — demo profile、啟動腳本與文件
+- [x] S3 — demo profile、啟動腳本與文件
 
 ## S1 完成內容
 
@@ -44,6 +44,13 @@ MerchantID、20 碼訂單號、180 秒內時間戳與 CheckMac，再依情境回
 驗證七種回呼；`lostCallbackIsRecoveredThenLateCallbackIsIdempotent` 驗證排程補救、同交易遲到回呼
 與不同交易編號拒絕。`EcpayNoEgressGuardTest` 掃描所有後端測試，並用內建不安全樣本證明規則有效。
 
+## S3 完成內容
+
+- 新增獨立 `ecpay-stage` profile，使用綠界官方公開測試特店、預設啟用金流與對帳；未污染 `dev` profile。
+- `start-demo.sh` 預設啟用 `dev,ecpay-stage`，並維持 `100755`。
+- 重寫 `docs/ECPAY.md`，移除 production 切換與過期的「沒有主動查單」敘述，補齊 demo 開關與六步 stage 實機驗證。
+- `EcpayStageProfileTest` 以 loopback 假站啟動完整 context，驗證 profile 有效值及 yml 的 120000ms 預設值。
+
 ## 既有測試完整性
 
 驗收 17 指定的既有測試均未修改：
@@ -59,8 +66,10 @@ MerchantID、20 碼訂單號、180 秒內時間戳與 CheckMac，再依情境回
 
 - `npm test -- --run src/modules/payments/ecpay.dom.test.ts`：通過，1 個檔案、3 個測試。
 - `npm run build`：通過。
-- Maven S1／S2 指定測試：未執行完成；`repo.maven.apache.org` 暫時無法解析，Spring Boot parent POM 無法下載。
+- Maven S1–S3 指定測試：未執行完成；`repo.maven.apache.org` 暫時無法解析，Spring Boot parent POM 無法下載。
 - `git diff --check`：通過。
+- `start-demo.sh`：`100755`。
+- S2 head `57a29052314187a4a53f57f352c580eff0c9b88d`：GitHub Actions run #608 completed / success；frontend test、frontend build、backend Maven verify 全部通過。
 
 ## 實作中發現的規格問題
 
@@ -69,4 +78,4 @@ MerchantID、20 碼訂單號、180 秒內時間戳與 CheckMac，再依情境回
 
 ## 下一步
 
-施工 S3：新增 demo 專用 `ecpay-stage` profile、更新啟動腳本與操作文件，並補 profile 驗收測試。
+等待最新 head 遠端 CI；全綠後依流程將 PR 轉 ready for review。
