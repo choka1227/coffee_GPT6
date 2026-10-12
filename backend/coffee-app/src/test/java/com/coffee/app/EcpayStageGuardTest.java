@@ -133,7 +133,9 @@ class EcpayStageGuardTest {
             "http://localhost:8080",
             "stage");
 
-    assertThat(service.checkout(mock(Actor.class), "ORDER000000000000001"))
+    Actor customer =
+        new Actor("customer", "customer", "顧客", "CUSTOMER", "SELF", null, Set.of());
+    assertThat(service.checkout(customer, "ORDER000000000000001"))
         .containsEntry("action", STAGE_CHECKOUT);
     assertThat(output).contains("綠界付款通知（ReturnURL）需要可從外網連線的 HTTPS 網址");
     assertThat(output).doesNotContain("test-key-g01b", "test-iv-g01b");
