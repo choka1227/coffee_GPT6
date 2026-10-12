@@ -9,6 +9,7 @@ import java.util.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -29,6 +30,7 @@ public class ReconciliationService implements Reconciliation {
   private int cursor;
   private final Object[] locks = new Object[64];
 
+  @Autowired
   public ReconciliationService(
       Orders orders,
       TradeQuery query,
@@ -41,7 +43,12 @@ public class ReconciliationService implements Reconciliation {
       @Value("${ecpay.hash-iv:}") String iv,
       @Value("${ecpay.reconcile.min-age-minutes:15}") long minMinutes,
       @Value("${ecpay.reconcile.max-age-days:7}") long maxDays,
-      @Value("${ecpay.reconcile.batch-size:50}") int batch) {
+      @Value("${ecpay.reconcile.batch-size:50}") int batch,
+      @Value("${ecpay.expire.enabled:false}") boolean expireEnabled,
+      @Value("${ecpay.expire.checkout-window-minutes:20}") long checkoutWindowMinutes,
+      @Value("${ecpay.expire.after-minutes:60}") long expireAfterMinutes,
+      @Value("${ecpay.expire.recheck-after-minutes:30}") long recheckAfterMinutes,
+      @Value("${ecpay.expire.interval-ms:300000}") long expireIntervalMs) {
     Problem.check(!enabled || paymentEnabled, "啟用對帳前必須先啟用綠界金流");
     Problem.check(
         minMinutes >= 0
@@ -52,6 +59,19 @@ public class ReconciliationService implements Reconciliation {
             && batch >= 1
             && batch <= 1000,
         "對帳排程設定不正確");
+    if (expireEnabled && !enabled)
+      throw new IllegalStateException("啟用逾時作廢前必須先啟用金流對帳");
+    if (expireEnabled
+        && !(checkoutWindowMinutes >= 5
+            && checkoutWindowMinutes <= 1440
+            && expireAfterMinutes >= checkoutWindowMinutes + 30
+            && expireAfterMinutes > minMinutes
+            && expireAfterMinutes <= 10080
+            && recheckAfterMinutes >= 5
+            && recheckAfterMinutes <= 1440
+            && expireIntervalMs >= 60000
+            && expireIntervalMs <= 86400000))
+      throw new IllegalStateException("逾時作廢設定不正確");
     this.orders = orders;
     this.query = query;
     this.db = db;
@@ -64,6 +84,24 @@ public class ReconciliationService implements Reconciliation {
     this.maxAge = maxDays * 86400000;
     this.batch = batch;
     Arrays.setAll(locks, i -> new Object());
+  }
+
+  public ReconciliationService(
+      Orders orders,
+      TradeQuery query,
+      JdbcTemplate db,
+      PlatformTransactionManager transactions,
+      boolean enabled,
+      boolean paymentEnabled,
+      String merchant,
+      String key,
+      String iv,
+      long minMinutes,
+      long maxDays,
+      int batch) {
+    this(
+        orders, query, db, transactions, enabled, paymentEnabled, merchant, key, iv, minMinutes,
+        maxDays, batch, false, 20, 60, 30, 300000);
   }
 
   private void authorize(Actor actor) {
