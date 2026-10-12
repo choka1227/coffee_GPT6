@@ -16,6 +16,8 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class EcpayTradeQuery implements TradeQuery {
+  static final String STAGE_QUERY_URL =
+      "https://payment-stage.ecpay.com.tw/Cashier/QueryTradeInfo/V5";
   private final String merchant, key, iv;
   private final URI endpoint;
   private final Duration timeout;
@@ -26,24 +28,39 @@ public class EcpayTradeQuery implements TradeQuery {
       @Value("${ecpay.hash-key:}") String key,
       @Value("${ecpay.hash-iv:}") String iv,
       @Value("${ecpay.environment:stage}") String environment,
+      @Value("${ecpay.query-url:" + STAGE_QUERY_URL + "}") String queryUrl,
       @Value("${ecpay.query-timeout-ms:10000}") long timeoutMs) {
+    if (!"stage".equals(environment))
+      throw new IllegalStateException("本系統只允許串接綠界測試環境（stage）");
     Problem.check(timeoutMs > 0 && timeoutMs <= 60000, "查單逾時設定需為 1–60000 毫秒");
     this.merchant = merchant;
     this.key = key;
     this.iv = iv;
     this.timeout = Duration.ofMillis(timeoutMs);
-    endpoint =
-        URI.create(
-            "https://"
-                + ("production".equals(environment)
-                    ? "payment.ecpay.com.tw"
-                    : "payment-stage.ecpay.com.tw")
-                + "/Cashier/QueryTradeInfo/V5");
+    endpoint = validateEndpoint(queryUrl);
     client =
         HttpClient.newBuilder()
             .connectTimeout(timeout)
             .followRedirects(HttpClient.Redirect.NEVER)
             .build();
+  }
+
+  private static URI validateEndpoint(String queryUrl) {
+    try {
+      URI uri = URI.create(queryUrl);
+      boolean stage = STAGE_QUERY_URL.equals(queryUrl);
+      boolean loopback =
+          "http".equals(uri.getScheme())
+              && ("127.0.0.1".equals(uri.getHost()) || "localhost".equals(uri.getHost()))
+              && uri.getPort() > 0
+              && uri.getUserInfo() == null
+              && uri.getQuery() == null
+              && uri.getFragment() == null;
+      if (!stage && !loopback) throw new IllegalArgumentException();
+      return uri;
+    } catch (RuntimeException e) {
+      throw new IllegalStateException("綠界查單網址只允許測試環境或本機測試伺服器");
+    }
   }
 
   public Map<String, String> query(String orderId) {

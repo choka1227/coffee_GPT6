@@ -6,6 +6,8 @@ import com.coffee.shared.*;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -13,6 +15,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class EcpayService {
+  static final String STAGE_CHECKOUT_URL =
+      "https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5";
+  private static final Logger log = LoggerFactory.getLogger(EcpayService.class);
   private final Orders orders;
   private final JdbcTemplate db;
   private final boolean enabled;
@@ -35,12 +40,13 @@ public class EcpayService {
     this.iv = iv;
     this.base = base.replaceAll("/+$", "");
     this.environment = environment;
+    if (!"stage".equals(environment))
+      throw new IllegalStateException("本系統只允許串接綠界測試環境（stage）");
     if (enabled) {
-      Problem.check(Set.of("stage", "production").contains(environment), "金流環境設定錯誤");
       Problem.check(!merchant.isBlank() && !key.isBlank() && !iv.isBlank(), "啟用綠界時必須設定商店憑證");
-      Problem.check(base.startsWith("https://"), "綠界回呼需可公開連線的 HTTPS 網域");
-      if (environment.equals("production"))
-        Problem.check(!Set.of("3002607", "3002599", "3365120").contains(merchant), "正式環境不能使用測試商店");
+      if (!base.startsWith("https://"))
+        log.warn(
+            "綠界付款通知（ReturnURL）需要可從外網連線的 HTTPS 網址；目前設定無法收到通知，付款狀態將由排程對帳補救");
     }
   }
 
@@ -71,9 +77,7 @@ public class EcpayService {
     p.put("CheckMacValue", CheckMac.sign(p, key, iv));
     return Map.of(
         "action",
-        environment.equals("production")
-            ? "https://payment.ecpay.com.tw/Cashier/AioCheckOut/V5"
-            : "https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5",
+        STAGE_CHECKOUT_URL,
         "fields",
         p);
   }

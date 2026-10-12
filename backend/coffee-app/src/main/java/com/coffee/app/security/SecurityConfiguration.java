@@ -66,8 +66,7 @@ public class SecurityConfiguration {
                             "default-src 'self'; script-src 'self'; style-src 'self'"
                                 + " 'unsafe-inline'; img-src 'self' data:; font-src 'self';"
                                 + " connect-src 'self'; form-action 'self'"
-                                + " https://payment-stage.ecpay.com.tw"
-                                + " https://payment.ecpay.com.tw; frame-ancestors 'none';"
+                                + " https://payment-stage.ecpay.com.tw; frame-ancestors 'none';"
                                 + " object-src 'none'; base-uri 'self'")))
         .addFilterBefore(new SessionActorFilter(identity), AnonymousAuthenticationFilter.class)
         .build();
