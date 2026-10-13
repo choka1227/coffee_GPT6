@@ -100,6 +100,10 @@ public interface Orders {
 
   void confirmOnline(String id, int amount, String providerTradeNo, long paidAt);
 
+  boolean expireOnline(String id);
+
+  String settleOnline(String id, int amount, String providerTradeNo, long paidAt);
+
   /** 只回表頭欄位，items() 固定為空 List、itemPromotion() 固定為 null（避免 N+1）。 */
   List<Order> reconciliationCandidates(Actor actor, long since, long until, int limit, int offset);
 

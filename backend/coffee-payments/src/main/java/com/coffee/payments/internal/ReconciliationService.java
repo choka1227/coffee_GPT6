@@ -9,6 +9,7 @@ import java.util.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -25,10 +26,15 @@ public class ReconciliationService implements Reconciliation {
   private final boolean enabled;
   private final String merchant, key, iv;
   private final long minAge, maxAge;
+  private final long expireAfter, recheckAfter;
   private final int batch;
+  private final boolean expireEnabled;
+  private final PaymentAnomalies anomalies;
   private int cursor;
+  private int expireCursor;
   private final Object[] locks = new Object[64];
 
+  @Autowired
   public ReconciliationService(
       Orders orders,
       TradeQuery query,
@@ -41,7 +47,12 @@ public class ReconciliationService implements Reconciliation {
       @Value("${ecpay.hash-iv:}") String iv,
       @Value("${ecpay.reconcile.min-age-minutes:15}") long minMinutes,
       @Value("${ecpay.reconcile.max-age-days:7}") long maxDays,
-      @Value("${ecpay.reconcile.batch-size:50}") int batch) {
+      @Value("${ecpay.reconcile.batch-size:50}") int batch,
+      @Value("${ecpay.expire.enabled:false}") boolean expireEnabled,
+      @Value("${ecpay.expire.checkout-window-minutes:20}") long checkoutWindowMinutes,
+      @Value("${ecpay.expire.after-minutes:60}") long expireAfterMinutes,
+      @Value("${ecpay.expire.recheck-after-minutes:30}") long recheckAfterMinutes,
+      @Value("${ecpay.expire.interval-ms:300000}") long expireIntervalMs) {
     Problem.check(!enabled || paymentEnabled, "啟用對帳前必須先啟用綠界金流");
     Problem.check(
         minMinutes >= 0
@@ -52,6 +63,19 @@ public class ReconciliationService implements Reconciliation {
             && batch >= 1
             && batch <= 1000,
         "對帳排程設定不正確");
+    if (expireEnabled && !enabled)
+      throw new IllegalStateException("啟用逾時作廢前必須先啟用金流對帳");
+    if (expireEnabled
+        && !(checkoutWindowMinutes >= 5
+            && checkoutWindowMinutes <= 1440
+            && expireAfterMinutes >= checkoutWindowMinutes + 30
+            && expireAfterMinutes > minMinutes
+            && expireAfterMinutes <= 10080
+            && recheckAfterMinutes >= 5
+            && recheckAfterMinutes <= 1440
+            && expireIntervalMs >= 60000
+            && expireIntervalMs <= 86400000))
+      throw new IllegalStateException("逾時作廢設定不正確");
     this.orders = orders;
     this.query = query;
     this.db = db;
@@ -63,7 +87,29 @@ public class ReconciliationService implements Reconciliation {
     this.minAge = minMinutes * 60000;
     this.maxAge = maxDays * 86400000;
     this.batch = batch;
+    this.expireEnabled = expireEnabled;
+    this.expireAfter = expireAfterMinutes * 60000;
+    this.recheckAfter = recheckAfterMinutes * 60000;
+    this.anomalies = new PaymentAnomalies(db);
     Arrays.setAll(locks, i -> new Object());
+  }
+
+  public ReconciliationService(
+      Orders orders,
+      TradeQuery query,
+      JdbcTemplate db,
+      PlatformTransactionManager transactions,
+      boolean enabled,
+      boolean paymentEnabled,
+      String merchant,
+      String key,
+      String iv,
+      long minMinutes,
+      long maxDays,
+      int batch) {
+    this(
+        orders, query, db, transactions, enabled, paymentEnabled, merchant, key, iv, minMinutes,
+        maxDays, batch, false, 20, 60, 30, 300000);
   }
 
   private void authorize(Actor actor) {
@@ -165,6 +211,67 @@ public class ReconciliationService implements Reconciliation {
     return perform(actor, id);
   }
 
+  public AnomalyPage anomalies(Actor actor) {
+    authorize(actor);
+    String sql =
+        "select id,order_id,branch_id,order_total,trade_amount,provider_trade_no,source,detected_at"
+            + " from payment_anomalies where resolved_at is null";
+    List<Anomaly> rows;
+    if (actor.global()) {
+      rows = db.query(sql + " order by detected_at desc,id desc limit 201", this::anomaly);
+    } else {
+      rows =
+          db.query(
+              sql + " and branch_id=? order by detected_at desc,id desc limit 201",
+              this::anomaly,
+              actor.branchId());
+    }
+    return new AnomalyPage(rows.stream().limit(200).toList(), rows.size() > 200);
+  }
+
+  public Anomaly resolveAnomaly(Actor actor, String id, String note) {
+    authorize(actor);
+    String trimmed = note == null ? "" : note.trim();
+    if (trimmed.isEmpty() || trimmed.length() > 200)
+      throw new Problem(400, "請填寫處理說明（200 字以內）");
+    var rows =
+        db.query(
+            "select id,order_id,branch_id,order_total,trade_amount,provider_trade_no,source,detected_at,resolved_at"
+                + " from payment_anomalies where id=?",
+            (row, number) ->
+                new AnomalyState(anomaly(row, number), row.getObject("resolved_at", Long.class)),
+            id);
+    if (rows.isEmpty()) throw new Problem(404, "找不到這筆異常");
+    var state = rows.get(0);
+    if (!actor.global() && !Objects.equals(actor.branchId(), state.value().branchId()))
+      throw new Problem(403, "沒有處理其他分店異常的權限");
+    if (state.resolvedAt() != null) throw new Problem(409, "這筆異常已處理");
+    int updated =
+        db.update(
+            "update payment_anomalies set resolved_at=?,resolved_by=?,resolution_note=?"
+                + " where id=? and resolved_at is null",
+            System.currentTimeMillis(),
+            actor.id(),
+            trimmed,
+            id);
+    if (updated == 0) throw new Problem(409, "這筆異常已處理");
+    return state.value();
+  }
+
+  private record AnomalyState(Anomaly value, Long resolvedAt) {}
+
+  private Anomaly anomaly(java.sql.ResultSet row, int number) throws java.sql.SQLException {
+    return new Anomaly(
+        row.getString("id"),
+        row.getString("order_id"),
+        row.getString("branch_id"),
+        row.getInt("order_total"),
+        row.getObject("trade_amount", Integer.class),
+        row.getString("provider_trade_no"),
+        row.getString("source"),
+        row.getLong("detected_at"));
+  }
+
   @Scheduled(
       fixedDelayString = "${ecpay.reconcile.interval-ms:300000}",
       initialDelayString = "${ecpay.reconcile.interval-ms:300000}")
@@ -197,6 +304,204 @@ public class ReconciliationService implements Reconciliation {
         skipped);
   }
 
+  @Scheduled(
+      fixedDelayString = "${ecpay.expire.interval-ms:300000}",
+      initialDelayString = "${ecpay.expire.interval-ms:300000}")
+  public synchronized void expireScheduled() {
+    if (!expireEnabled) return;
+    long now = System.currentTimeMillis();
+    var candidates =
+        orders.reconciliationCandidates(null, 0, now - expireAfter, batch, expireCursor);
+    expireCursor = candidates.size() < batch ? 0 : expireCursor + candidates.size();
+    Map<String, Integer> outcomes = new HashMap<>();
+    int skipped = 0;
+    for (var order : candidates) {
+      try {
+        outcomes.merge(expireOne(order.id()), 1, Integer::sum);
+      } catch (RuntimeException e) {
+        skipped++;
+        log.warn("綠界逾時作廢單筆失敗：訂單 {}，{}", order.id(), e.getClass().getSimpleName());
+      }
+    }
+    log.info(
+        "綠界逾時作廢完成：候選 {} 筆，作廢 {}、已付款 {}、保留 {}、略過 {}",
+        candidates.size(),
+        outcomes.getOrDefault("EXPIRED", 0),
+        outcomes.getOrDefault("PAID", 0),
+        outcomes.getOrDefault("KEPT", 0),
+        skipped);
+    recheck(now);
+  }
+
+  private String expireOne(String id) {
+    synchronized (locks[Math.floorMod(id.hashCode(), locks.length)]) {
+      Result result = perform(null, id);
+      if (result.outcome().equals("CONFIRMED")) return "PAID";
+      if (!Set.of("STILL_UNPAID", "SIMULATED").contains(result.outcome())) return "KEPT";
+      boolean expired =
+          Boolean.TRUE.equals(
+              tx.execute(
+                  status -> {
+                    if (!orders.expireOnline(id)) return false;
+                    db.update(
+                        "insert into payment_expiries(order_id,expired_at) values(?,?)",
+                        id,
+                        System.currentTimeMillis());
+                    return true;
+                  }));
+      return expired ? "EXPIRED" : "KEPT";
+    }
+  }
+
+  private record Expired(String orderId, long expiredAt) {}
+
+  private void recheck(long now) {
+    var candidates =
+        db.query(
+            "select order_id,expired_at from payment_expiries"
+                + " where rechecked_at is null and expired_at<=?"
+                + " order by expired_at,order_id limit ?",
+            (row, number) -> new Expired(row.getString("order_id"), row.getLong("expired_at")),
+            now - recheckAfter,
+            batch);
+    Map<String, Integer> outcomes = new HashMap<>();
+    for (var expired : candidates) {
+      try {
+        String outcome = recheckOne(expired, now);
+        outcomes.merge(outcome, 1, Integer::sum);
+      } catch (RuntimeException e) {
+        outcomes.merge("QUERY_FAILED", 1, Integer::sum);
+        log.warn(
+            "綠界作廢後複查單筆失敗：訂單 {}，{}", expired.orderId(), e.getClass().getSimpleName());
+      }
+    }
+    log.info(
+        "綠界作廢後複查完成：候選 {} 筆，未付款 {}、已付款 {}、模擬 {}、查單失敗 {}、放棄 {}",
+        candidates.size(),
+        outcomes.getOrDefault("UNPAID", 0),
+        outcomes.getOrDefault("PAID", 0),
+        outcomes.getOrDefault("SIMULATED", 0),
+        outcomes.getOrDefault("QUERY_FAILED", 0),
+        outcomes.getOrDefault("GAVE_UP", 0));
+  }
+
+  private String recheckOne(Expired expired, long now) {
+    synchronized (locks[Math.floorMod(expired.orderId().hashCode(), locks.length)]) {
+      var order = orders.paymentSnapshot(expired.orderId());
+      Verification result = verify(order.id(), order.total());
+      return switch (result.outcome()) {
+        case "STILL_UNPAID" -> {
+          finishRecheck(order.id(), "UNPAID", now);
+          yield "UNPAID";
+        }
+        case "SIMULATED" -> {
+          finishRecheck(order.id(), "SIMULATED", now);
+          yield "SIMULATED";
+        }
+        case "CONFIRMED", "AMOUNT_MISMATCH" -> {
+          tx.executeWithoutResult(
+              status -> {
+                anomalies.record(order, "RECHECK", result.tradeNo(), result.amount());
+                finishRecheck(order.id(), "PAID", now);
+              });
+          yield "PAID";
+        }
+        default -> {
+          db.update(
+              "update payment_expiries set recheck_attempts=recheck_attempts+1 where order_id=?",
+              order.id());
+          if (expired.expiredAt() < now - maxAge) {
+            finishRecheck(order.id(), "GAVE_UP", now);
+            log.warn("綠界作廢後複查放棄：訂單 {}", order.id());
+            yield "GAVE_UP";
+          }
+          yield "QUERY_FAILED";
+        }
+      };
+    }
+  }
+
+  private void finishRecheck(String id, String outcome, long now) {
+    db.update(
+        "update payment_expiries set rechecked_at=?,recheck_outcome=? where order_id=?",
+        now,
+        outcome,
+        id);
+  }
+
+  private record Verification(
+      String outcome,
+      String tradeStatus,
+      Integer amount,
+      String tradeNo,
+      long paidAt,
+      String detail) {}
+
+  private Verification verify(String id, int expectedTotal) {
+    long now = System.currentTimeMillis();
+    String outcome = "QUERY_FAILED", status = "unknown", trade = "";
+    String detail = "綠界查單失敗，請稍後再試";
+    Integer amount = null;
+    long paidAt = now;
+    try {
+      var response = query.query(id);
+      if (!CheckMac.valid(response, key, iv)
+          || !merchant.equals(response.get("MerchantID"))
+          || !id.equals(response.get("MerchantTradeNo"))) throw new IllegalArgumentException();
+      status = response.get("TradeStatus");
+      if (status == null || !status.matches("[0-9]{1,20}")) throw new IllegalArgumentException();
+      try {
+        amount = Integer.valueOf(response.get("TradeAmt"));
+      } catch (NumberFormatException e) {
+        // Non-credit outcomes can legitimately omit an amount.
+        amount = null;
+      }
+      trade = response.getOrDefault("TradeNo", "");
+      if (!trade.isEmpty() && !trade.matches("[A-Za-z0-9]{1,64}"))
+        throw new IllegalArgumentException();
+      if (!"1".equals(status)) {
+        outcome = "STILL_UNPAID";
+        detail = "綠界尚未確認付款";
+      } else if ("1".equals(response.get("SimulatePaid"))) {
+        outcome = "SIMULATED";
+        detail = "綠界模擬付款，不予入帳";
+      } else if (amount == null) {
+        throw new IllegalArgumentException();
+      } else if (amount != expectedTotal) {
+        outcome = "AMOUNT_MISMATCH";
+        detail = "綠界金額 " + amount + " 元與訂單 " + expectedTotal + " 元不符";
+      } else {
+        if (trade.isEmpty()) throw new IllegalArgumentException();
+        outcome = "CONFIRMED";
+        detail = "綠界回報已付款，訂單已更新為已付款";
+        try {
+          paidAt =
+              LocalDateTime.parse(
+                      response.getOrDefault("PaymentDate", ""),
+                      DateTimeFormatter.ofPattern("uuuu/MM/dd HH:mm:ss")
+                          .withResolverStyle(ResolverStyle.STRICT))
+                  .atZone(ZoneId.of("Asia/Taipei"))
+                  .toInstant()
+                  .toEpochMilli();
+          if (paidAt <= 0 || paidAt > now) {
+            paidAt = now;
+            detail = "綠界付款時間超出有效範圍，以查核時間入帳";
+          }
+        } catch (DateTimeParseException e) {
+          paidAt = now;
+          detail = "綠界未提供付款時間，以查核時間入帳";
+        }
+      }
+    } catch (RuntimeException e) {
+      outcome = "QUERY_FAILED";
+      status = "unknown";
+      amount = null;
+      trade = "";
+      detail = "綠界查單驗證或連線失敗，訂單未變更";
+    }
+    return new Verification(outcome, status, amount, trade, paidAt, detail);
+  }
+
   private Result perform(Actor actor, String id) {
     synchronized (locks[Math.floorMod(id.hashCode(), locks.length)]) {
       var o = actor == null ? orders.paymentSnapshot(id) : order(actor, id);
@@ -212,68 +517,13 @@ public class ReconciliationService implements Reconciliation {
                 id);
         if (last != null && now - last < 60000) throw new Problem(429, "查核過於頻繁，請稍後再試");
       }
-      String outcome = "QUERY_FAILED", status = "unknown", trade = "", detail = "綠界查單失敗，請稍後再試";
-      Integer amount = null;
-      long paidAt = now;
-      try {
-        var p = query.query(id);
-        if (!CheckMac.valid(p, key, iv)
-            || !merchant.equals(p.get("MerchantID"))
-            || !id.equals(p.get("MerchantTradeNo"))) throw new IllegalArgumentException();
-        status = p.get("TradeStatus");
-        if (status == null || !status.matches("[0-9]{1,20}")) throw new IllegalArgumentException();
-        try {
-          amount = Integer.valueOf(p.get("TradeAmt"));
-        } catch (NumberFormatException e) {
-          // Non-credit outcomes can legitimately omit an amount.
-          amount = null;
-        }
-        trade = p.getOrDefault("TradeNo", "");
-        if (!trade.isEmpty() && !trade.matches("[A-Za-z0-9]{1,64}"))
-          throw new IllegalArgumentException();
-        if (!"1".equals(status)) {
-          outcome = "STILL_UNPAID";
-          detail = "綠界尚未確認付款";
-        } else if ("1".equals(p.get("SimulatePaid"))) {
-          outcome = "SIMULATED";
-          detail = "綠界模擬付款，不予入帳";
-        } else if (amount == null) {
-          throw new IllegalArgumentException();
-        } else if (amount != o.total()) {
-          outcome = "AMOUNT_MISMATCH";
-          detail = "綠界金額 " + amount + " 元與訂單 " + o.total() + " 元不符";
-        } else {
-          if (trade.isEmpty()) throw new IllegalArgumentException();
-          outcome = "CONFIRMED";
-          detail = "綠界回報已付款，訂單已更新為已付款";
-          try {
-            paidAt =
-                LocalDateTime.parse(
-                        p.getOrDefault("PaymentDate", ""),
-                        DateTimeFormatter.ofPattern("uuuu/MM/dd HH:mm:ss")
-                            .withResolverStyle(ResolverStyle.STRICT))
-                    .atZone(ZoneId.of("Asia/Taipei"))
-                    .toInstant()
-                    .toEpochMilli();
-            if (paidAt <= 0 || paidAt > now) {
-              paidAt = now;
-              detail = "綠界付款時間超出有效範圍，以查核時間入帳";
-            }
-          } catch (DateTimeParseException e) {
-            paidAt = now;
-            detail = "綠界未提供付款時間，以查核時間入帳";
-          }
-        }
-      } catch (RuntimeException e) {
-        outcome = "QUERY_FAILED";
-        status = "unknown";
-        amount = null;
-        trade = "";
-        detail = "綠界查單驗證或連線失敗，訂單未變更";
-      }
-      final String result = outcome, tradeStatus = status, tradeNo = trade, message = detail;
-      final Integer tradeAmount = amount;
-      final long paymentTime = paidAt;
+      Verification verification = verify(id, o.total());
+      final String result = verification.outcome();
+      final String tradeStatus = verification.tradeStatus();
+      final String tradeNo = verification.tradeNo();
+      final String message = verification.detail();
+      final Integer tradeAmount = verification.amount();
+      final long paymentTime = verification.paidAt();
       try {
         tx.executeWithoutResult(
             t -> {

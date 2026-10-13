@@ -9,6 +9,7 @@ import java.util.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,8 +22,12 @@ public class EcpayService {
   private final Orders orders;
   private final JdbcTemplate db;
   private final boolean enabled;
+  private final boolean expireEnabled;
+  private final long checkoutWindowMinutes, expireAfterMinutes;
+  private final PaymentAnomalies anomalies;
   private final String merchant, key, iv, base, environment;
 
+  @Autowired
   public EcpayService(
       Orders orders,
       JdbcTemplate db,
@@ -31,7 +36,10 @@ public class EcpayService {
       @Value("${ecpay.hash-key:}") String key,
       @Value("${ecpay.hash-iv:}") String iv,
       @Value("${app.public-url:http://localhost:8080}") String base,
-      @Value("${ecpay.environment:stage}") String environment) {
+      @Value("${ecpay.environment:stage}") String environment,
+      @Value("${ecpay.expire.enabled:false}") boolean expireEnabled,
+      @Value("${ecpay.expire.checkout-window-minutes:20}") long checkoutWindowMinutes,
+      @Value("${ecpay.expire.after-minutes:60}") long expireAfterMinutes) {
     this.orders = orders;
     this.db = db;
     this.enabled = enabled;
@@ -40,6 +48,10 @@ public class EcpayService {
     this.iv = iv;
     this.base = base.replaceAll("/+$", "");
     this.environment = environment;
+    this.expireEnabled = expireEnabled;
+    this.checkoutWindowMinutes = checkoutWindowMinutes;
+    this.expireAfterMinutes = expireAfterMinutes;
+    this.anomalies = new PaymentAnomalies(db);
     if (!"stage".equals(environment))
       throw new IllegalStateException("本系統只允許串接綠界測試環境（stage）");
     if (enabled) {
@@ -50,14 +62,52 @@ public class EcpayService {
     }
   }
 
+  public EcpayService(
+      Orders orders,
+      JdbcTemplate db,
+      boolean enabled,
+      String merchant,
+      String key,
+      String iv,
+      String base,
+      String environment) {
+    this(orders, db, enabled, merchant, key, iv, base, environment, false, 20, 60);
+  }
+
+  public EcpayService(
+      Orders orders,
+      JdbcTemplate db,
+      boolean enabled,
+      String merchant,
+      String key,
+      String iv,
+      String base,
+      String environment,
+      boolean expireEnabled,
+      long checkoutWindowMinutes) {
+    this(
+        orders, db, enabled, merchant, key, iv, base, environment, expireEnabled,
+        checkoutWindowMinutes, 60);
+  }
+
   public Map<String, Object> config() {
-    return Map.of("enabled", enabled, "environment", environment);
+    return Map.of(
+        "enabled", enabled,
+        "environment", environment,
+        "expire",
+            Map.of(
+                "enabled", expireEnabled,
+                "checkoutWindowMinutes", checkoutWindowMinutes,
+                "afterMinutes", expireAfterMinutes));
   }
 
   @Transactional
   public Map<String, Object> checkout(Actor a, String id) {
     if (!enabled) throw new Problem(503, "此門市尚未啟用線上付款，請改選櫃台付款");
     Orders.Order o = orders.payable(a, id);
+    if (expireEnabled
+        && System.currentTimeMillis() - o.createdAt() > checkoutWindowMinutes * 60_000L)
+      throw new Problem(409, "此訂單已超過線上付款期限，請重新下單");
     Map<String, String> p = new TreeMap<>();
     p.put("MerchantID", merchant);
     p.put("MerchantTradeNo", o.id());
@@ -98,7 +148,10 @@ public class EcpayService {
     String trade = p.getOrDefault("TradeNo", "");
     Problem.check(!trade.isBlank() && trade.length() <= 64, "交易編號不正確");
     boolean simulated = "1".equals(p.get("SimulatePaid"));
-    if ("1".equals(p.get("RtnCode")) && !simulated) orders.confirmOnline(id, amount, trade);
+    if ("1".equals(p.get("RtnCode")) && !simulated) {
+      String settled = orders.settleOnline(id, amount, trade, System.currentTimeMillis());
+      if ("CANCELLED".equals(settled)) anomalies.record(order, "CALLBACK", trade, amount);
+    }
     // Never store credentials or complete payment payloads. Replayed valid notifications are
     // acknowledged.
     db.update(

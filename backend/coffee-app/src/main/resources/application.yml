@@ -48,3 +48,9 @@ ecpay:
     min-age-minutes: ${ECPAY_RECONCILE_MIN_AGE_MINUTES:15}
     max-age-days: ${ECPAY_RECONCILE_MAX_AGE_DAYS:7}
     batch-size: ${ECPAY_RECONCILE_BATCH_SIZE:50}
+  expire:
+    enabled: ${ECPAY_EXPIRE_ENABLED:false}
+    checkout-window-minutes: ${ECPAY_EXPIRE_CHECKOUT_WINDOW_MINUTES:20}
+    after-minutes: ${ECPAY_EXPIRE_AFTER_MINUTES:60}
+    recheck-after-minutes: ${ECPAY_EXPIRE_RECHECK_AFTER_MINUTES:30}
+    interval-ms: ${ECPAY_EXPIRE_INTERVAL_MS:300000}

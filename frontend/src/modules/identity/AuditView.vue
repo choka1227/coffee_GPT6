@@ -53,6 +53,7 @@ onMounted(() => load());
             <option value="CASH_OPEN">開班</option>
             <option value="CASH_CLOSE">交班</option>
             <option value="ORDER_STATUS">訂單狀態</option>
+            <option value="ORDER_EXPIRED">逾時作廢</option>
             <option value="MENU_SAVE">菜單儲存</option>
             <option value="BRANCH_SAVE">分店儲存</option>
             <option value="ROLE_SAVE">角色儲存</option>

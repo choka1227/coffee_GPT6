@@ -26,9 +26,25 @@ public interface Reconciliation {
 
   record Result(String orderId, String outcome, String detail, long queriedAt) {}
 
+  record Anomaly(
+      String id,
+      String orderId,
+      String branchId,
+      int orderTotal,
+      Integer tradeAmount,
+      String providerTradeNo,
+      String source,
+      long detectedAt) {}
+
+  record AnomalyPage(List<Anomaly> items, boolean truncated) {}
+
   PendingPage pending(Actor actor);
 
   List<Attempt> history(Actor actor, String orderId);
 
   Result reconcile(Actor actor, String orderId);
+
+  AnomalyPage anomalies(Actor actor);
+
+  Anomaly resolveAnomaly(Actor actor, String anomalyId, String note);
 }

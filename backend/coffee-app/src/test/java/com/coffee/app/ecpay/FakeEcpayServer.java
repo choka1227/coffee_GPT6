@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 final class FakeEcpayServer implements AutoCloseable {
   enum Scenario {
     PAID,
+    SIMULATED,
     NOT_FOUND,
     AMOUNT_MISMATCH,
     BAD_MAC,
@@ -157,7 +158,7 @@ final class FakeEcpayServer implements AutoCloseable {
       response.put("TradeStatus", "1");
       response.put("TradeAmt", scenario == Scenario.AMOUNT_MISMATCH ? "281" : "280");
       response.put("TradeNo", tradeNo(orderId));
-      response.put("SimulatePaid", "0");
+      response.put("SimulatePaid", scenario == Scenario.SIMULATED ? "1" : "0");
       response.put(
           "PaymentDate",
           LocalDateTime.now(ZoneId.of("Asia/Taipei"))

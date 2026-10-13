@@ -742,6 +742,46 @@ public class OrderService implements Orders {
         id);
   }
 
+  @Transactional
+  public boolean expireOnline(String id) {
+    lock(id);
+    Order o = snapshot(id);
+    if (!o.paymentMethod().equals("ECPAY")
+        || !o.status().equals("PENDING_PAYMENT")
+        || o.paidAt() != null) return false;
+    db.update("update orders set status='CANCELLED' where id=?", id);
+    catalog.releaseStock(o.branchId(), id);
+    audit.record(
+        null,
+        "ORDER_EXPIRED",
+        id,
+        o.branchId(),
+        "線上付款逾時未付款，系統作廢（作廢前已向綠界查單確認未付款）");
+    return true;
+  }
+
+  @Transactional
+  public String settleOnline(String id, int amount, String trade, long paidAt) {
+    Problem.check(paidAt > 0 && paidAt <= System.currentTimeMillis(), "付款時間不正確");
+    lock(id);
+    Order o = snapshot(id);
+    Problem.check(o.paymentMethod().equals("ECPAY") && o.total() == amount, "付款金額或方式不符");
+    if (o.status().equals("CANCELLED")) return "CANCELLED";
+    if (o.paidAt() != null) {
+      String old =
+          db.queryForObject("select provider_trade_no from orders where id=?", String.class, id);
+      Problem.check(Objects.equals(old, trade), "付款交易編號不符");
+      return "ALREADY_PAID";
+    }
+    Problem.check(o.status().equals("PENDING_PAYMENT"), "訂單狀態無法收款");
+    db.update(
+        "update orders set status='PAID',paid_at=?,provider_trade_no=? where id=?",
+        paidAt,
+        trade,
+        id);
+    return "CONFIRMED";
+  }
+
   private void lock(String id) {
     if (db.queryForList("select id from orders where id=? for update", String.class, id).isEmpty())
       throw new Problem(404, "找不到訂單");

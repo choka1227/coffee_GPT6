@@ -333,3 +333,22 @@ export interface ReconciliationAttempt {
   detail: string;
   queriedAt: number;
 }
+export interface PaymentAnomaly {
+  id: string;
+  orderId: string;
+  branchId: string;
+  orderTotal: number;
+  tradeAmount: number | null;
+  providerTradeNo: string;
+  source: "CALLBACK" | "RECHECK";
+  detectedAt: number;
+}
+export interface PaymentConfig {
+  enabled: boolean;
+  environment: string;
+  expire: {
+    enabled: boolean;
+    checkoutWindowMinutes: number;
+    afterMinutes: number;
+  };
+}
