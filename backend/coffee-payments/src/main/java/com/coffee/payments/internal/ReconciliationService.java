@@ -453,6 +453,7 @@ public class ReconciliationService implements Reconciliation {
       try {
         amount = Integer.valueOf(response.get("TradeAmt"));
       } catch (NumberFormatException e) {
+        // Non-credit outcomes can legitimately omit an amount.
         amount = null;
       }
       trade = response.getOrDefault("TradeNo", "");
@@ -496,7 +497,7 @@ public class ReconciliationService implements Reconciliation {
       status = "unknown";
       amount = null;
       trade = "";
-      detail = "綠界查單失敗，請稍後再試";
+      detail = "綠界查單驗證或連線失敗，訂單未變更";
     }
     return new Verification(outcome, status, amount, trade, paidAt, detail);
   }
