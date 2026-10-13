@@ -113,23 +113,25 @@ class EcpayExpiryEndToEndTest {
     assertThat(status(unpaid)).isEqualTo("CANCELLED");
     assertThat(count("payment_expiries", unpaid)).isOne();
     assertThat(lastOutcome(unpaid)).isEqualTo("STILL_UNPAID");
+    assertThat(output.getAll()).contains("候選 1 筆，作廢 1、已付款 0、保留 0、略過 0");
 
     String simulated = oldOrder("ECPAY");
     FAKE.respond(FakeEcpayServer.Scenario.SIMULATED);
     service.expireScheduled();
     assertThat(status(simulated)).isEqualTo("CANCELLED");
     assertThat(lastOutcome(simulated)).isEqualTo("SIMULATED");
+    assertThat(output.getAll()).contains("候選 1 筆，作廢 1、已付款 0、保留 0、略過 0");
 
     String paid = oldOrder("ECPAY");
     FAKE.respond(FakeEcpayServer.Scenario.PAID);
     service.expireScheduled();
     assertThat(status(paid)).isEqualTo("PAID");
     assertThat(count("payment_expiries", paid)).isZero();
-    assertThat(output.getAll()).contains("綠界逾時作廢完成");
+    assertThat(output.getAll()).contains("候選 1 筆，作廢 0、已付款 1、保留 0、略過 0");
   }
 
   @Test
-  void uncertainQueryKeepsPendingThenLaterNotFoundExpires() {
+  void uncertainQueryKeepsPendingThenLaterNotFoundExpires(CapturedOutput output) {
     for (var scenario :
         List.of(
             FakeEcpayServer.Scenario.TIMEOUT,
@@ -141,6 +143,9 @@ class EcpayExpiryEndToEndTest {
       service.expireScheduled();
       assertThat(status(id)).isEqualTo("PENDING_PAYMENT");
       assertThat(count("payment_expiries", id)).isZero();
+      assertThat(output.getAll()).contains("候選 1 筆，作廢 0、已付款 0、保留 1、略過 0");
+      if (scenario == FakeEcpayServer.Scenario.BAD_MAC)
+        assertThat(lastDetail(id)).isEqualTo("綠界查單驗證或連線失敗，訂單未變更");
       FAKE.respond(FakeEcpayServer.Scenario.NOT_FOUND);
       service.expireScheduled();
       assertThat(status(id)).isEqualTo("CANCELLED");
@@ -230,12 +235,15 @@ class EcpayExpiryEndToEndTest {
   }
 
   @Test
-  void recheckRecordsUnpaidPaidMismatchAndGiveUpOutcomes() {
+  void recheckRecordsUnpaidPaidMismatchAndGiveUpOutcomes(CapturedOutput output) {
     String unpaid = expireOrder();
     makeRecheckable(unpaid, 6);
     FAKE.respond(FakeEcpayServer.Scenario.NOT_FOUND);
     service.expireScheduled();
     assertThat(expiryOutcome(unpaid)).isEqualTo("UNPAID");
+    int afterUnpaid = FAKE.receivedQueries().size();
+    service.expireScheduled();
+    assertThat(FAKE.receivedQueries()).hasSize(afterUnpaid);
 
     String paid = expireOrder();
     makeRecheckable(paid, 6);
@@ -266,6 +274,7 @@ class EcpayExpiryEndToEndTest {
     makeRecheckable(failed, 1500);
     service.expireScheduled();
     assertThat(expiryOutcome(failed)).isEqualTo("GAVE_UP");
+    assertThat(output.getAll()).contains("綠界作廢後複查放棄：訂單 " + failed);
   }
 
   private String expireOrder() {
@@ -349,6 +358,13 @@ class EcpayExpiryEndToEndTest {
   private String lastOutcome(String id) {
     return db.queryForObject(
         "select outcome from payment_reconciliations where order_id=? order by queried_at desc,id desc limit 1",
+        String.class,
+        id);
+  }
+
+  private String lastDetail(String id) {
+    return db.queryForObject(
+        "select detail from payment_reconciliations where order_id=? order by queried_at desc,id desc limit 1",
         String.class,
         id);
   }
