@@ -143,6 +143,8 @@ ecpay:
     interval-ms: ${ECPAY_INVOICE_INTERVAL_MS:60000}
 ```
 
+**為什麼可以提交預設值：** 這三個值是綠界公開的測試特店參數，不是機密；`AGENTS.md`「安全」一節明列這個例外（只限 demo／開發 profile，`application.yml` 一律留空），先例是 G01b 已合併的金流測試特店 `3002607`。正式特店憑證仍走環境變數、不得進 Git。
+
 **憑證來源（必讀）：** `2000132`／`ejCk326UnaZWKisg`／`q9jcZX8Ib9LM8wYk` 取自綠界官方 GitHub `ECPay/ECPay-API-Skill` 的 SDK 範例 `scripts/SDK_PHP/example/Invoice/B2C/Issue.php`，官方頁面是「測試介接資訊」（developers.ecpay.com.tw/7849/）。**撰寫本規格的環境連不上 developers.ecpay.com.tw**，MerchantID 已由該頁的搜尋摘要對上，HashKey／HashIV 只由官方 SDK 範例確認。實作端若能連上官方頁面，開工時再核對一次；不一致以官方頁面為準，並寫進實作回報。**注意：同一個 `2000132` 在物流 API 用的是另一組 key（`5294y06JbISpM5x9`／`v77hoKGq4kWxNNIS`），不要拿錯。**
 
 ### 5.3 啟動檢查（`InvoiceService` 建構子）
