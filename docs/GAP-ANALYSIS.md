@@ -14,7 +14,21 @@
 
 仍須 PO 決定的只剩 `CLAUDE.md` 列的那幾項：repo 設定、帳號與憑證、不可逆操作、`main` 分支。
 
+## PO 決策：電子發票與退款解除延後，接續金流線（2026-10-14）
+
+**PO 於 2026-10-14 決定：G02 電子發票、G03 退款與退單解除延後，接續金流線開始寫規格。** 這一則決策**取代**下方 2026-10-11 決策中「G02、G03 仍延後」那一句，其餘（只串 stage、測試環境硬規則 1–5）**全部沿用**，並延伸到電子發票：
+
+- 電子發票只串綠界**電子發票 stage**（`einvoice-stage.ecpay.com.tw`），`ecpay.invoice.environment` 不是 `stage` 就拒絕啟動
+- 電子發票的測試特店（`2000132`）與金流測試特店（`3002607`）是**不同的兩組**，同樣只放在 `ecpay-stage` profile
+- 綠界信用卡退刷 API（`DoAction`）**官方明寫在測試環境無法使用**，所以 G03 的線上退款是「綠界後台人工退刷 + 系統登記」，不呼叫 `DoAction`（G03 §14.1）。自動退刷留到正式環境上線那一輪（G03a，未登記規格）
+
+排程：**G02 → G03** 依序，兩份規格同批產出（工作順序第 29、30 項）。G03 的 `V17` 必須排在 G02 的 `V16` 之後，而且 G03 S2 直接擴充 G02 S2 的發票用戶端，所以 **G03 要等 G02 整份合併才開工**。
+
+**為什麼兩份規格放在同一支 PR：** 兩份是同一次設計（退款的發票處理就是 G02 資料模型的延伸），而且兩支 Claude PR 同時改本檔一定衝突，依規則要序列化合併，會讓 G03 晚一輪以上才進主線。實作端仍是一份規格一支 PR。
+
 ## PO 決策：金流解除延後，只串測試環境（2026-10-11）
+
+> **其中「G02 電子發票、G03 退款與退單仍延後」一句已被上方 2026-10-14 的決策取代。** 其餘條文仍然有效。
 
 **PO 於 2026-10-11 解除下方 2026-09-17 的「金流整批延後」決策。** 目標：**綠界線上付款與對帳要做到能實際運作，但只串綠界測試環境（stage），不接正式環境。**
 
@@ -68,17 +82,17 @@
 
 **排程注意（已結案，保留為紀錄）：G06 與 G13 都會修改 `Catalog.sellable()` 的簽章與 `OrderService.create()` 的品項迴圈，不要同時開工。** G06 已於 2026-09-18 隨 PR #14 合併解除閘門，**G13 的實作已於 2026-09-20 隨 PR #20 合併進主線**（S1/S2/S3 三階段，Flyway 實際占用 `V4__branch_menu_availability.sql`，進度報告見 [`reports/G13-branch-menu-availability.md`](reports/G13-branch-menu-availability.md)）。
 
-### 金流（2026-10-11 PO 解除延後，升為最優先；只串 stage；G02／G03 仍延後）
+### 金流（2026-10-11 PO 解除延後，升為最優先；只串 stage；G02／G03 於 2026-10-14 解除延後）
 
-> 本節原標題為「P3 — 金流（PO 決定延後，最後才串接）」。位置不動，排序以「排定的工作順序」第 27、28 項為準。
+> 本節原標題為「P3 — 金流（PO 決定延後，最後才串接）」。位置不動，排序以「排定的工作順序」第 27–30 項為準。
 
 | 編號 | 缺口 | 狀態 | 規格書 |
 | --- | --- | --- | --- |
 | G01 | 金流對帳與付款狀態修復 | 實作已合併（PR #9） | [`specs/G01-payment-reconciliation.md`](specs/G01-payment-reconciliation.md) |
 | G01a | 對帳實作的缺陷修正 | 實作已合併（PR #15，2026-09-18） | [`specs/G01a-reconciliation-fixes.md`](specs/G01a-reconciliation-fixes.md) |
 | G01b | **綠界測試環境（stage）串接可運作**：stage 防線（非 stage 拒絕啟動、刪除所有正式網域）、查單端點可指向本機假伺服器、demo profile `ecpay-stage` 預設啟用金流與排程對帳、本機假綠界伺服器端到端測試（查單 8 情境、回呼 7 情境）、stage 實機驗證步驟 | **實作已合併（[PR #87](https://github.com/choka1227/coffee_GPT6/pull/87)，2026-10-13，主線合併提交 `5387983`）**；規格書 v1.1。S1–S3 三階段全數完成，Claude 於 head `f69c73c` 送出 `REQUEST_CHANGES`（驗收 10 的端到端 log 擷取）、於修正後的 head `5cdb730` 送出 `APPROVE`。**零 migration、零新依賴**，報告見 [`reports/G01b-ecpay-stage-integration.md`](reports/G01b-ecpay-stage-integration.md)。**`codex/g01b-ecpay-stage` 分支已完成任務，不要再從它續作或開新分支。** 審查留下一項非阻斷觀察，見下方「G01b／G04 審查登記備查的兩項」 | [`specs/G01b-ecpay-stage-integration.md`](specs/G01b-ecpay-stage-integration.md) |
-| G02 | 電子發票 | 延後（2026-10-11 決策仍不含） | — |
-| G03 | 退款與退單 | 延後（2026-10-11 決策仍不含） | — |
+| G02 | **綠界 B2C 電子發票（只串 stage）**：結帳收集開立方式（雲端／手機條碼／捐贈）、已付款訂單非同步開立、不明結果先查詢再重開、開立失敗清單與重試、AES 信封、本機假伺服器 | **規格書 v1.0（2026-10-14），尚未開工**（工作順序第 29 項）。Flyway `V16`、零新依賴、三階段 | [`specs/G02-ecpay-einvoice.md`](specs/G02-ecpay-einvoice.md) |
+| G03 | **訂單整筆退款與發票作廢／折讓（只串 stage）**：店長／總部退款、現金班別扣除、線上退款為後台退刷 + 系統登記、發票自動作廢或折讓、報表退款列 | **規格書 v1.0（2026-10-14），尚未開工**（工作順序第 30 項，**等 G02 整份合併**）。Flyway `V17`、新權限 `ORDER_REFUND`、零新依賴、三階段 | [`specs/G03-order-refunds.md`](specs/G03-order-refunds.md) |
 | G04 | 線上付款訂單的逾時作廢（與對帳互斥） | **實作已合併（[PR #90](https://github.com/choka1227/coffee_GPT6/pull/90)，2026-10-14，主線合併提交 `060c5b5`，Flyway 實際占用 `V15`）**；規格書 v1.0。S1–S3 三階段全數完成，Claude 於 head `10c89f7` 送出 `REQUEST_CHANGES`（查單失敗訊息被改寫、驗收 8／9／10／16／18 缺斷言）、於修正後的 head `11a9e07` 送出 `APPROVE`。零新依賴、不新增模組依賴，報告見 [`reports/G04-online-payment-expiry.md`](reports/G04-online-payment-expiry.md)。**`codex/g04-payment-expiry` 分支已完成任務，不要再從它續作或開新分支。** 審查留下一項非阻斷觀察，見下方「G01b／G04 審查登記備查的兩項」 | [`specs/G04-online-payment-expiry.md`](specs/G04-online-payment-expiry.md) |
 
 #### G01 的兩項缺陷已由 G01a 修正（PR #15，2026-09-18 合併）
@@ -111,9 +125,9 @@ PR #9 於 2026-09-17 08:32 由 PO 合併。Claude 在同一個 head SHA（`88452
 
 這是唯一一個「已經在收真錢、但缺乏補救路徑」的缺口，所以排第一。
 
-**G02 電子發票** —— 台灣營業人開立統一發票有法規義務。目前完全未實作，也沒有發票號碼、字軌、作廢或折讓的資料模型。正式營業前必須補上，但它高度依賴 PO 選定的加值中心（綠界電子發票 / 其他），技術選型未定前寫規格書意義不大。
+**G02 電子發票** —— 台灣營業人開立統一發票有法規義務。目前完全未實作，也沒有發票號碼、字軌、作廢或折讓的資料模型。正式營業前必須補上，但它高度依賴 PO 選定的加值中心（綠界電子發票 / 其他），技術選型未定前寫規格書意義不大。**（2026-10-14 更新：加值中心定為綠界，規格書見 [`specs/G02-ecpay-einvoice.md`](specs/G02-ecpay-einvoice.md)。）**
 
-**G03 退款與退單** —— `ARCHITECTURE.md` 明載「付款後退款與退單不在本版範圍」。訂單狀態機 `PAID → PREPARING → READY → COMPLETED` 是單向的，已付款訂單沒有任何回退路徑；`orders` 表也沒有記錄退款金額的欄位。做錯餐、顧客反悔、店家無法供餐時，現場只能在系統外處理現金，帳就對不起來。
+**G03 退款與退單** —— `ARCHITECTURE.md` 明載「付款後退款與退單不在本版範圍」。訂單狀態機 `PAID → PREPARING → READY → COMPLETED` 是單向的，已付款訂單沒有任何回退路徑；`orders` 表也沒有記錄退款金額的欄位。做錯餐、顧客反悔、店家無法供餐時，現場只能在系統外處理現金，帳就對不起來。**（2026-10-14 更新：規格書見 [`specs/G03-order-refunds.md`](specs/G03-order-refunds.md)。）**
 
 **G04 線上付款訂單的取消與逾時處理** —— `OrderService.transition()` 只允許取消 `PENDING_PAYMENT` 且 `paymentMethod='CASH'` 的訂單。ECPAY 訂單一旦建立就無法取消（這是刻意的，避免與異步付款競爭），但也因此沒有出口：顧客放棄付款後訂單永遠掛在未付款清單裡。需要逾時自動作廢的規則，且必須與 G01 的對帳邏輯互斥，不能作廢掉一筆其實已經付款成功的訂單。**與 G01 是同一個設計，必須一起做。**
 
@@ -362,7 +376,9 @@ ArchUnit 已經在專案裡、已經是 `verify` 的一部分、看的是 byteco
 26. ~~**Codex 依 [`specs/G20k-read-only-write-guard.md`](specs/G20k-read-only-write-guard.md) 建立唯讀路徑的寫入紅線**~~ —— **已完成，[PR #83](https://github.com/choka1227/coffee_GPT6/pull/83) 於 2026-10-10 合併**（Claude 於 head `ebec412` 送出 `APPROVE`，主線合併提交 `d4907de`，S1／S2 兩階段全數完成、CI 綠、僅新增 8 個測試檔、生產程式碼零變更）。以下為當時的施工摘要，保留為紀錄：規格書 v1.1 於 2026-10-09 產出，隨 PR #81 進主線（v1.1 補上 writable CTE 的分類，規格 §5.3 第 4 步、驗收 18、§13.9：**`with` 開頭的語句不可只看第一個語彙放行**）。**零 migration（`V15` 仍然空著）**、**零新依賴**、**生產程式碼零變更（一行 Java 都不改）**、**前端零變更** —— 兩個階段都只新增測試與測試輔助類別。兩個互補階段：**S1** `ReadOnlyPathsTest` + `ReadOnlyWalker`（ArchUnit 呼叫圖走訪器，對 `JdbcTemplate` 用允許清單、能解析介面呼叫，守整個 `coffee-reporting` 模組；約 180 行、不需要 Spring context）、**S2** `WriteDetectingDataSource` + `PreviewWriteGuardTest`（JDK 動態代理包 `Connection`／`Statement`，記錄武裝期間送出的寫入語句，守 `orders.preview` 與 `reports.report`；約 240 行）。**最重要的一件事是規格 §1.3：試算路徑結構上無法用靜態規則覆蓋** —— `OrderService.price` 的 `redeem` 旗標（`:195`、`:218-220`）與 `DiscountService.resolve` 的 `lock` 旗標（`:144`、`:150`）都是**執行期分流**，兩個分支在同一個方法體裡，所以從 `preview` 出發的靜態呼叫圖必然會走到 `discounts.apply` → `db.update`。那就是 S1 只守報表模組、S2 才守試算路徑的理由。**第二重要的是驗收 10（反向對照）**：`orders.create` 期間偵測器必須記錄到寫入。它紅了代表 `BeanPostProcessor` 的包裝沒生效、整組 S2 的綠燈都不算數 —— 所以要**先寫驗收 10、看它紅，再寫其餘 S2 測試**。分支用 `codex/g20k-read-only-guard`。升排理由見規格 §1.4（它原本被擋在 P2 的唯一理由是「要 Testcontainers」，規格 §13.1 推翻了那個前提）
 27. ~~**Codex 依 [`specs/G01b-ecpay-stage-integration.md`](specs/G01b-ecpay-stage-integration.md) 讓綠界測試環境串接可運作**~~ —— **已完成，[PR #87](https://github.com/choka1227/coffee_GPT6/pull/87) 於 2026-10-13 合併**（主線合併提交 `5387983`，S1–S3 全數完成、CI 綠、零 migration、零新依賴；Claude 於 head `5cdb730` 送出 `APPROVE`）。**`codex/g01b-ecpay-stage` 分支已完成任務，不要再從它續作或開新分支。**
 28. ~~**Codex 依 [`specs/G04-online-payment-expiry.md`](specs/G04-online-payment-expiry.md) 實作線上付款訂單的逾時作廢（與對帳互斥）**~~ —— **已完成，[PR #90](https://github.com/choka1227/coffee_GPT6/pull/90) 於 2026-10-14 合併**（主線合併提交 `060c5b5`，S1–S3 全數完成、CI 綠，Flyway 實際占用 `V15`；Claude 於 head `11a9e07` 送出 `APPROVE`）。**`codex/g04-payment-expiry` 分支已完成任務，不要再從它續作或開新分支。** 2026-10-11 PO 決策範圍內的自動化部分到此全數完成，剩下的是下方「待 PO 驗收」的 stage 實機驗證
-29. G02 電子發票、G03 退款與退單 —— 仍延後（2026-10-11 決策不含）
+29. **🔴 ← 目前這一項：Codex 依 [`specs/G02-ecpay-einvoice.md`](specs/G02-ecpay-einvoice.md) 串接綠界 B2C 電子發票（只串 stage）** —— 規格書 v1.0。**Flyway `V16`**、零新依賴、三階段：**S1** schema 與訂單的發票資訊（`orders.invoice-required` 預設 false，既有行為不變）、**S2** AES 信封、用戶端、開立排程、`FakeEinvoiceServer`（最重，切點寫在規格 §12）、**S3** 端點、前端、demo profile、文件。分支用 `codex/g02-ecpay-einvoice`。**三件會咬人的事：**(a) AES 前的 URL encode 是 **PHP `urlencode`** 規則，**不是** `CheckMac` 的小寫 .NET 編碼，不要重用（§6.3）；(b) 重開之前一定先 `GetIssue` 查（`uncertain` 旗標，§6.5、§14.10）——驗收 16 要斷言 `Issue` 只被呼叫一次；(c) 發票測試特店 `2000132` 與金流 `3002607` 是不同的兩組，同一個 `2000132` 的物流 key 又是另一組，不要拿錯（§5.2）
+30. **Codex 依 [`specs/G03-order-refunds.md`](specs/G03-order-refunds.md) 實作訂單整筆退款與發票作廢／折讓** —— 規格書 v1.0。**等第 29 項整份合併才開工**（`V17` 要排在 `V16` 之後；S2 擴充 G02 的發票用戶端）。**Flyway `V17`**、新權限 `ORDER_REFUND`（只給店長與總部，**收銀不能退款**，§14.7）。**系統不呼叫綠界 `DoAction`**（stage 不支援），線上退款是店長先到綠界後台退刷、再回系統登記（§14.1）。不新增 `REFUNDED` 狀態，用 `refunded_at`（§14.3）。分支用 `codex/g03-order-refunds`
+31. 綠界正式環境上線（含 G03a 自動退刷）—— **屬 PO 的「帳號與憑證」，Claude 不排程**
 
 > **與 [PR #70](https://github.com/choka1227/coffee_GPT6/pull/70)（G20g）的編號協調已結案。** #70 已於 2026-10-07 合併進主線（`b2fc82a`），本 PR 於本輪把最新 `feature/init-project` **merge 進** `claude/spec-g20h`（**不 rebase、不 force push**）解掉本檔的五處衝突，依當初約定的順序定案為：**第 23 項 = G20g、第 24 項 = G20h、第 25 項 = 金流**。
 > **當初承諾的三件事都已執行**：(1) 第 23 項改用 #70 帶進主線的完整敘述，不是本 PR 預留的那一行佔位；(2) 沒有重複補第二列 G20g；(3) P1 表的 G20g 與 G20h 兩列都保留，P2 表的 G20g 與 G20h 都已改為「已升為 P1」。
@@ -382,6 +398,8 @@ ArchUnit 已經在專案裡、已經是 `verify` 的一部分、看的是 byteco
 | --- | --- | --- | --- |
 | G01b stage 實機驗證 | [`specs/G01b-ecpay-stage-integration.md`](specs/G01b-ecpay-stage-integration.md) §11 | 6 個步驟：回呼路徑（需公開 HTTPS 通道）、對帳補救路徑（不需通道）、綠界是否接受非 HTTPS 的 ReturnURL、查無交易的 `TradeStatus` 實際值、同一訂單第二次付款、遲到回呼的冪等 | **現在可以做**（G01b 已於 2026-10-13 合併）；步驟 3、5 的結果是 G01b §15.2 與 G04 的設計輸入 |
 | G04 stage 實機驗證 | [`specs/G04-online-payment-expiry.md`](specs/G04-online-payment-expiry.md) §11 | 4 個步驟（接續 G01b 的編號 7–10）：綠界付款頁可停留多久、正常逾時作廢與複查、付款窗口、作廢後付款的異常與結案 | **現在可以做**（G04 已於 2026-10-14 合併）；步驟 7 的結果決定 G04 §14.7 的門檻是否要加大 |
+| G02 stage 實機驗證 | [`specs/G02-ecpay-einvoice.md`](specs/G02-ecpay-einvoice.md) §11 | 7 個步驟：三種開立方式、`GetIssue` 欄位名稱、線上付款也開立、失敗與重試、字軌、email 是否必填。**不需要公開網址**（電子發票沒有回呼） | **G02 實作合併後才能驗**；步驟 3 是 G03 S2 的輸入，步驟 7 決定 G02 §14.2 能否放寬 |
+| G03 stage 實機驗證 | [`specs/G03-order-refunds.md`](specs/G03-order-refunds.md) §11 | 6 個步驟：現金退款與作廢、線上退款（含 stage 後台能否人工退刷）、`InvoiceDate` 格式、折讓欄位、開立前退款、報表 | **G03 實作合併後才能驗** |
 
 **兩列都已可以驗**（G01b、G04 分別於 2026-10-13、2026-10-14 合併）。操作步驟見 [`ECPAY.md`](ECPAY.md) 的「準備」與「驗證步驟」1–10；驗證步驟 2（主動查單對帳）不需要公開通道，可以最先單獨做。實機結果若與規格假設不同（尤其步驟 4 的 `TradeStatus` 實際值、步驟 7 的付款頁停留時間），寫回這裡，由下一輪規格修補。以下為舊紀錄：
 
@@ -401,7 +419,9 @@ PR #9（G01 對帳）已於 2026-09-17 08:32 合併，`OrderService` 的衝突�
 
 G01 留在主線的缺陷已寫成獨立規格 [`specs/G01a-reconciliation-fixes.md`](specs/G01a-reconciliation-fixes.md)，用分支 `codex/g01-fixes`，**不要**夾在 G06 的 PR 裡 —— 兩件事、兩支分支。兩者動的是不同模組（`coffee-payments` vs `coffee-orders` / `coffee-catalog`），可以並行。**兩者皆已合併（#14、#15），此段保留為紀錄。**
 
-**目前（2026-10-14）規格庫存 0 份。** G01b（[PR #87](https://github.com/choka1227/coffee_GPT6/pull/87)）與 G04（[PR #90](https://github.com/choka1227/coffee_GPT6/pull/90)）的實作都已合併，金流線（2026-10-11 PO 決策範圍）的規格與自動化實作全部完成。**庫存低於上限，但本輪不產出新規格**，理由見下方「為什麼 2026-10-14 這一輪沒有產出新規格」。**Flyway：主線最高 `V15`，下一份需要 migration 的規格從 `V16` 起算。**
+**目前（2026-10-14 第二輪）規格庫存 2 份（已達上限）：G02（第 29 項）與 G03（第 30 項，等 G02 合併），規格書皆 v1.0、尚未開工。** PO 於同日解除 G02／G03 延後（見檔首「PO 決策：電子發票與退款解除延後」）。**下一輪起不再產出新規格，直到 G02 合併。Flyway：G02 佔 `V16`、G03 佔 `V17`，下一份需要 migration 的規格從 `V18` 起算。**
+
+~~2026-10-14 第一輪的庫存敘述（已過期，保留為紀錄）~~：規格庫存 0 份。G01b（[PR #87](https://github.com/choka1227/coffee_GPT6/pull/87)）與 G04（[PR #90](https://github.com/choka1227/coffee_GPT6/pull/90)）的實作都已合併，金流線（2026-10-11 PO 決策範圍）的規格與自動化實作全部完成。**庫存低於上限，但本輪不產出新規格**，理由見下方「為什麼 2026-10-14 這一輪沒有產出新規格」。**Flyway：主線最高 `V15`，下一份需要 migration 的規格從 `V16` 起算。**
 
 ~~2026-10-12 的庫存敘述（已過期，保留為紀錄）~~：目前（2026-10-12）規格庫存 2 份（已達上限）：G01b（第 27 項，實作 PR #87 送審中）與 G04（第 28 項，規格書 v1.0，尚未開工）。金流線兩份規格都已產出，下一輪起**不再產新規格**，直到 G01b 合併。**Flyway：G04 佔用 `V15`，下一份需要 migration 的規格從 `V16` 起算。**
 
@@ -571,6 +591,8 @@ PO 於 2026-10-11 解除金流延後並指定金流線升到最前面，所以�
 
 ## 為什麼 2026-10-14 這一輪沒有產出新規格
 
+> **（已過時，保留為紀錄）** 同日第二輪 PO 解除 G02／G03 延後，兩份規格已產出。下文第 2 點「不搶先替 G02／G03 寫規格」的前提（PO 決策明文排除）已不存在。
+
 庫存 0 份；登記當時沒有 open 的 Codex 實作 PR（本狀態同步 PR #91 除外）。金流線（2026-10-11 PO 決策）的兩份規格 G01b、G04 都已實作合併，**決策範圍內沒有尚未寫規格的項目**：G02 電子發票、G03 退款與退單由同一則決策明文「仍延後」，正式環境上線屬「帳號與憑證」。工作順序到第 28 項用完了。
 
 回到 2026-10-09 的排除表（上方「為什麼 2026-10-09 這一輪挑 G20k」）與 2026-10-10 的 G20m 表逐項重看：**金流合併沒有解開任何一項的閘門** —— 那些閘門是真實資料（G17／G20b／G20d／G28）、PO 的產品與法遵決策（G16／G21）、採購決策（G12）、可部署環境（G20m）或「單一實例下沒有收益」（G05／G20l），沒有一項跟金流有關。G20f 的拒絕理由（G20c §13.2）也沒有新證據推翻。
@@ -588,6 +610,7 @@ PO 於 2026-10-11 解除金流延後並指定金流線升到最前面，所以�
 
 | 日期 | 變更 |
 | --- | --- |
+| 2026-10-14 | **（第二輪）PO 解除 G02／G03 延後，產出兩份規格。** (1) 檔首新增「PO 決策：電子發票與退款解除延後，接續金流線（2026-10-14）」，2026-10-11 決策中「G02、G03 仍延後」一句標註已被取代；(2) 金流表 G02、G03 兩列改為規格 v1.0；(3) 工作順序第 29 項改為 G02、新增第 30 項 G03、第 31 項正式環境（PO 事項）；(4)「待 PO 驗收」新增 G02、G03 兩列；(5) 庫存 2 份（已達上限），`V16`／`V17` 分別由 G02／G03 佔用。**撰寫時連不上 developers.ecpay.com.tw**，綠界 API 細節取自官方 GitHub `ECPay/ECPay-API-Skill` 的指南與 SDK 範例，未經實機確認的欄位都在規格裡標明以 §11 實機結果為準。**最大的發現：`DoAction`（信用卡退刷）官方明寫 stage 不能用**，G03 因此不做自動退刷 |
 | 2026-10-14 | **金流線實作完成，狀態同步，本輪不產出新規格。** (1) G01b（PR #87）與 G04（PR #90）兩列改為已合併、工作順序第 27、28 項劃掉；(2)「待 PO 驗收」兩列改為現在可以做；(3) 庫存改為 0 份，2026-10-12 的敘述留作紀錄；(4) 新增「G01b／G04 審查登記備查的兩項」與「為什麼 2026-10-14 這一輪沒有產出新規格」；日期一律以 Asia/Taipei 計（PR #90 `merged_at` 2026-10-13T19:01Z ＝ 台北 10-14 03:01；PR #87 `merged_at` 2026-10-12T18:18Z ＝ 台北 10-13） |
 | 2026-10-12 | **產出 G04 規格書（[`specs/G04-online-payment-expiry.md`](specs/G04-online-payment-expiry.md)，v1.0），金流線兩份規格到齊。** (1) 金流表 G04 列改為規格 v1.0、工作順序第 28 項改寫為施工指示；(2) G01b 列登記實作 PR #87 的狀態（S1–S3 完成、CI 綠，Claude 於 head `f69c73c` 送 `REQUEST_CHANGES` 一項：驗收 10 的端到端 log 擷取）；(3) 重新核對 G01a 三項觀察，第 1、2 項已由 G10（PR #26）結清，第 3 項不由 G04 夾帶；(4)「待 PO 驗收」新增 G04 列；(5) 庫存 2 份（已達上限），`V15` 由 G04 佔用 |
 | 2026-10-11 | **PO 解除金流延後（只串 stage），產出 G01b 規格書。** (1) 新增「PO 決策：金流解除延後，只串測試環境（2026-10-11）」一節，舊的 2026-09-17 延後決策保留並標註已被取代；(2) 金流表改標題、新增 G01b 列、G02／G03 標註仍延後、G04 改為「規格待產（第 28 項）」；(3) 工作順序第 27 項改為 G01b、新增第 28 項 G04、第 29 項 G02／G03；(4) 「待 PO 驗收」加回表格，登記 G01b §11 的 stage 實機驗證；(5) 庫存改為 1 份；(6) G01a 三項非阻斷觀察排定由 G04 夾帶；(7) 登記 Codex 未寫 G20k 實作回報、決定不追補。G20k 的狀態同步已由 PR #84 完成，本次不重複 |
