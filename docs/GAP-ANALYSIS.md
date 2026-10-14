@@ -76,10 +76,10 @@
 | --- | --- | --- | --- |
 | G01 | 金流對帳與付款狀態修復 | 實作已合併（PR #9） | [`specs/G01-payment-reconciliation.md`](specs/G01-payment-reconciliation.md) |
 | G01a | 對帳實作的缺陷修正 | 實作已合併（PR #15，2026-09-18） | [`specs/G01a-reconciliation-fixes.md`](specs/G01a-reconciliation-fixes.md) |
-| G01b | **綠界測試環境（stage）串接可運作**：stage 防線（非 stage 拒絕啟動、刪除所有正式網域）、查單端點可指向本機假伺服器、demo profile `ecpay-stage` 預設啟用金流與排程對帳、本機假綠界伺服器端到端測試（查單 8 情境、回呼 7 情境）、stage 實機驗證步驟 | **規格書 v1.1（2026-10-11 產出 v1.0，2026-10-12 依 Codex 審查修為 v1.1）。實作 [PR #87](https://github.com/choka1227/coffee_GPT6/pull/87)（`codex/g01b-ecpay-stage`，S1–S3 全數完成、CI 綠）送審中**：Claude 於 head `f69c73c` 送出 `REQUEST_CHANGES`，只有一項 —— 驗收 10（S2 部分）的 log 擷取沒有涵蓋端到端情境（`EcpayStageEndToEndTest` 未掛 `OutputCaptureExtension`）。三階段（S1 防線／S2 假伺服器測試／S3 demo profile 與文件），**零 migration（`V15` 仍空著）、零新依賴** | [`specs/G01b-ecpay-stage-integration.md`](specs/G01b-ecpay-stage-integration.md) |
+| G01b | **綠界測試環境（stage）串接可運作**：stage 防線（非 stage 拒絕啟動、刪除所有正式網域）、查單端點可指向本機假伺服器、demo profile `ecpay-stage` 預設啟用金流與排程對帳、本機假綠界伺服器端到端測試（查單 8 情境、回呼 7 情境）、stage 實機驗證步驟 | **實作已合併（[PR #87](https://github.com/choka1227/coffee_GPT6/pull/87)，2026-10-13，主線合併提交 `5387983`）**；規格書 v1.1。S1–S3 三階段全數完成，Claude 於 head `f69c73c` 送出 `REQUEST_CHANGES`（驗收 10 的端到端 log 擷取）、於修正後的 head `5cdb730` 送出 `APPROVE`。**零 migration、零新依賴**，報告見 [`reports/G01b-ecpay-stage-integration.md`](reports/G01b-ecpay-stage-integration.md)。**`codex/g01b-ecpay-stage` 分支已完成任務，不要再從它續作或開新分支。** 審查留下一項非阻斷觀察，見下方「G01b／G04 審查登記備查的兩項」 | [`specs/G01b-ecpay-stage-integration.md`](specs/G01b-ecpay-stage-integration.md) |
 | G02 | 電子發票 | 延後（2026-10-11 決策仍不含） | — |
 | G03 | 退款與退單 | 延後（2026-10-11 決策仍不含） | — |
-| G04 | 線上付款訂單的逾時作廢（與對帳互斥） | **規格書 v1.0（2026-10-12），實作未開工（金流線第二份，工作順序第 28 項）。** 三階段：**S1** `V15__payment_expiry.sql`（兩張表）、`Orders.expireOnline／settleOnline`、設定檢查與付款窗口（不依賴 G01b，可先做）；**S2** 逾時作廢排程、回呼遇已作廢訂單記異常、作廢後複查（**需 G01b 已合併**，用它的假伺服器）；**S3** 異常清單／結案端點、前端、demo profile、文件。**佔用 Flyway `V15`**、零新依賴、不新增模組依賴。G01a 三項觀察中第 1、2 項已由 G10 結清，第 3 項不夾帶（見下方） | [`specs/G04-online-payment-expiry.md`](specs/G04-online-payment-expiry.md) |
+| G04 | 線上付款訂單的逾時作廢（與對帳互斥） | **實作已合併（[PR #90](https://github.com/choka1227/coffee_GPT6/pull/90)，2026-10-14，主線合併提交 `060c5b5`，Flyway 實際占用 `V15`）**；規格書 v1.0。S1–S3 三階段全數完成，Claude 於 head `10c89f7` 送出 `REQUEST_CHANGES`（查單失敗訊息被改寫、驗收 8／9／10／16／18 缺斷言）、於修正後的 head `11a9e07` 送出 `APPROVE`。零新依賴、不新增模組依賴，報告見 [`reports/G04-online-payment-expiry.md`](reports/G04-online-payment-expiry.md)。**`codex/g04-payment-expiry` 分支已完成任務，不要再從它續作或開新分支。** 審查留下一項非阻斷觀察，見下方「G01b／G04 審查登記備查的兩項」 | [`specs/G04-online-payment-expiry.md`](specs/G04-online-payment-expiry.md) |
 
 #### G01 的兩項缺陷已由 G01a 修正（PR #15，2026-09-18 合併）
 
@@ -360,8 +360,8 @@ ArchUnit 已經在專案裡、已經是 `verify` 的一部分、看的是 byteco
 24. ~~**Codex 依 [`specs/G20h-order-preview.md`](specs/G20h-order-preview.md) 實作後端購物車試算端點**~~ —— **已完成，[PR #77](https://github.com/choka1227/coffee_GPT6/pull/77) 於 2026-10-08 合併**（主線合併提交 `0d8f5dd`，S1–S3 三階段全部完成、CI 綠，Claude 於 head `6b89d35` 送出 `APPROVE` 後由 auto-merge 合入，報告見 [`reports/G20h-order-preview.md`](reports/G20h-order-preview.md)）。**`codex/g20h-order-preview` 分支已完成任務，不要再從它續作或開新分支。** 以下為當時的施工指示，保留給日後判斷用： —— 規格書 v1.2 於 2026-10-07 隨 [PR #73](https://github.com/choka1227/coffee_GPT6/pull/73) 進主線。**零 migration（`V15` 仍然空著）**、**零新依賴**、**不改建立訂單的任何請求／回應欄位**。三個施工階段：**S1** 把 `Discounts.apply` 拆出不消耗兌換次數的 `quote`、**S2** 抽出 `OrderService` 的共用計價方法 `price()` 並新增 `POST /api/orders/preview`、**S3** 前端 debounce／競態處理與購物車金額顯示（**順道做掉 G20i 的樣式**）。分支用 `codex/g20h-order-preview`。**最重要的一件事是規格 §5.1：`DiscountService.apply` 會 `redeemed_count+1` 並取行鎖**，試算若直接重用它，顧客光是在購物車加加減減就會把優惠碼額度用光，而且 `maxRedemptions` 為 null 時完全看不出異狀 —— 所以 S1 必須先把 `quote` 與 `apply` 分家。**「試算不可寫入」的實際防線是 §5.2 的 `price()` 純抽取與驗收 7 的列數／`redeemed_count` 斷言**；§5.3 的 `@Transactional(readOnly = true)` 只標示唯讀意圖、並在生產（PostgreSQL）可能多擋一層，**不是資料庫級的強制** —— 主線沒有 `setEnforceReadOnly(true)`，CI 跑的 H2 會忽略它（§13.4）。所以**不要因為有這個 annotation 就省掉驗收 7**；而驗收 7 只驗得了當下列出的寫入，驗不了日後新增的那一行 —— 把這條補成可驗證的 DB 級紅線登記為 **G20k**。**驗收 6（先 preview 再 create，比對 `total` 相等）是本規格存在的理由** —— 它如果紅了不要調期望值，要去找為什麼兩條路徑算出不同的數字
 25. ~~**Codex 依 [`specs/G20j-rate-limit.md`](specs/G20j-rate-limit.md) 建立共用限流設施並守住試算端點**~~ —— **已完成，[PR #80](https://github.com/choka1227/coffee_GPT6/pull/80) 於 2026-10-09T03:06Z 合併**（主線合併提交 `650a0e4`，S1–S3 三階段全數完成、CI 綠，Claude 於 head `1c57199` 送出 `APPROVE` 後由 auto-merge 合入，報告見 [`reports/G20j-rate-limit.md`](reports/G20j-rate-limit.md)）。**`codex/g20j-rate-limit` 分支已完成任務，不要再從它續作或開新分支。** 以下為當時的施工重點，保留給日後判斷用：**零 migration（`V15` 仍然空著）**、**零新依賴**、**前端零變更**。三階段為 **S1** `coffee-shared` 新增 `RateLimiter`（程序內固定視窗、時間由呼叫端傳入、純單元測試）、**S2** `OrderService.preview` 依帳號限流 60 次／60 秒（插在授權與格式驗證之後、`price()` 之前，所以 403／400 不吃額度）、**S3** 把 `AuthController` 手寫的那份收斂到同一個設施並補上它從來沒有過的測試（**先在舊實作上把測試推綠、再替換**，commit 證據是 `33ef94e` → `bb32225`）。審查登記了三項**不擋合併**的小事，一併寫在下方「G20j 審查登記備查的三項」—— 它們不值得單獨推 commit，但也不等於不該修。
 26. ~~**Codex 依 [`specs/G20k-read-only-write-guard.md`](specs/G20k-read-only-write-guard.md) 建立唯讀路徑的寫入紅線**~~ —— **已完成，[PR #83](https://github.com/choka1227/coffee_GPT6/pull/83) 於 2026-10-10 合併**（Claude 於 head `ebec412` 送出 `APPROVE`，主線合併提交 `d4907de`，S1／S2 兩階段全數完成、CI 綠、僅新增 8 個測試檔、生產程式碼零變更）。以下為當時的施工摘要，保留為紀錄：規格書 v1.1 於 2026-10-09 產出，隨 PR #81 進主線（v1.1 補上 writable CTE 的分類，規格 §5.3 第 4 步、驗收 18、§13.9：**`with` 開頭的語句不可只看第一個語彙放行**）。**零 migration（`V15` 仍然空著）**、**零新依賴**、**生產程式碼零變更（一行 Java 都不改）**、**前端零變更** —— 兩個階段都只新增測試與測試輔助類別。兩個互補階段：**S1** `ReadOnlyPathsTest` + `ReadOnlyWalker`（ArchUnit 呼叫圖走訪器，對 `JdbcTemplate` 用允許清單、能解析介面呼叫，守整個 `coffee-reporting` 模組；約 180 行、不需要 Spring context）、**S2** `WriteDetectingDataSource` + `PreviewWriteGuardTest`（JDK 動態代理包 `Connection`／`Statement`，記錄武裝期間送出的寫入語句，守 `orders.preview` 與 `reports.report`；約 240 行）。**最重要的一件事是規格 §1.3：試算路徑結構上無法用靜態規則覆蓋** —— `OrderService.price` 的 `redeem` 旗標（`:195`、`:218-220`）與 `DiscountService.resolve` 的 `lock` 旗標（`:144`、`:150`）都是**執行期分流**，兩個分支在同一個方法體裡，所以從 `preview` 出發的靜態呼叫圖必然會走到 `discounts.apply` → `db.update`。那就是 S1 只守報表模組、S2 才守試算路徑的理由。**第二重要的是驗收 10（反向對照）**：`orders.create` 期間偵測器必須記錄到寫入。它紅了代表 `BeanPostProcessor` 的包裝沒生效、整組 S2 的綠燈都不算數 —— 所以要**先寫驗收 10、看它紅，再寫其餘 S2 測試**。分支用 `codex/g20k-read-only-guard`。升排理由見規格 §1.4（它原本被擋在 P2 的唯一理由是「要 Testcontainers」，規格 §13.1 推翻了那個前提）
-27. **Codex 依 [`specs/G01b-ecpay-stage-integration.md`](specs/G01b-ecpay-stage-integration.md) 讓綠界測試環境串接可運作** —— 規格書 v1.1（v1.0 於 2026-10-11 產出，PO 同日解除金流延後；2026-10-12 依 Codex 審查修為 v1.1）。**分支 `codex/g01b-ecpay-stage`。** 三階段：**S1** stage 防線與查單端點覆寫（後端兩個服務的建構子、前端允許清單、CSP）、**S2** 本機假綠界伺服器與端到端測試（只加測試）、**S3** `ecpay-stage` profile、`start-demo.sh`、`docs/ECPAY.md`。**零 migration、零新依賴、無新端點。** 最容易踩的坑：**不要把金流設定寫進 `application-dev.yml`** —— 至少 5 支測試用 `@ActiveProfiles("dev")`，會讓 CI 帶著連外的排程（規格 §5.4、§15.3）
-28. **Codex 依 [`specs/G04-online-payment-expiry.md`](specs/G04-online-payment-expiry.md) 實作線上付款訂單的逾時作廢（與對帳互斥）** —— 規格書 v1.0（2026-10-12）。**分支 `codex/g04-online-payment-expiry`。** S1 不依賴 G01b，可與 G01b 的收尾並行；**S2 起必須等 G01b（PR #87）合併**。佔用 `V15`。G01a 觀察第 1、2 項已由 G10 結清、第 3 項不夾帶（G04 §14.12）
+27. ~~**Codex 依 [`specs/G01b-ecpay-stage-integration.md`](specs/G01b-ecpay-stage-integration.md) 讓綠界測試環境串接可運作**~~ —— **已完成，[PR #87](https://github.com/choka1227/coffee_GPT6/pull/87) 於 2026-10-13 合併**（主線合併提交 `5387983`，S1–S3 全數完成、CI 綠、零 migration、零新依賴；Claude 於 head `5cdb730` 送出 `APPROVE`）。**`codex/g01b-ecpay-stage` 分支已完成任務，不要再從它續作或開新分支。**
+28. ~~**Codex 依 [`specs/G04-online-payment-expiry.md`](specs/G04-online-payment-expiry.md) 實作線上付款訂單的逾時作廢（與對帳互斥）**~~ —— **已完成，[PR #90](https://github.com/choka1227/coffee_GPT6/pull/90) 於 2026-10-14 合併**（主線合併提交 `060c5b5`，S1–S3 全數完成、CI 綠，Flyway 實際占用 `V15`；Claude 於 head `11a9e07` 送出 `APPROVE`）。**`codex/g04-payment-expiry` 分支已完成任務，不要再從它續作或開新分支。** 2026-10-11 PO 決策範圍內的自動化部分到此全數完成，剩下的是下方「待 PO 驗收」的 stage 實機驗證
 29. G02 電子發票、G03 退款與退單 —— 仍延後（2026-10-11 決策不含）
 
 > **與 [PR #70](https://github.com/choka1227/coffee_GPT6/pull/70)（G20g）的編號協調已結案。** #70 已於 2026-10-07 合併進主線（`b2fc82a`），本 PR 於本輪把最新 `feature/init-project` **merge 進** `claude/spec-g20h`（**不 rebase、不 force push**）解掉本檔的五處衝突，依當初約定的順序定案為：**第 23 項 = G20g、第 24 項 = G20h、第 25 項 = 金流**。
@@ -380,10 +380,12 @@ ArchUnit 已經在專案裡、已經是 `verify` 的一部分、看的是 byteco
 
 | 項目 | 來源 | 內容 | 對照資料 |
 | --- | --- | --- | --- |
-| G01b stage 實機驗證 | [`specs/G01b-ecpay-stage-integration.md`](specs/G01b-ecpay-stage-integration.md) §11 | 6 個步驟：回呼路徑（需公開 HTTPS 通道）、對帳補救路徑（不需通道）、綠界是否接受非 HTTPS 的 ReturnURL、查無交易的 `TradeStatus` 實際值、同一訂單第二次付款、遲到回呼的冪等 | G01b 實作合併後才能做；步驟 3、5 的結果是 G01b §15.2 與 G04 的設計輸入 |
-| G04 stage 實機驗證 | [`specs/G04-online-payment-expiry.md`](specs/G04-online-payment-expiry.md) §11 | 4 個步驟（接續 G01b 的編號 7–10）：綠界付款頁可停留多久、正常逾時作廢與複查、付款窗口、作廢後付款的異常與結案 | G04 S3 合併後才能做；步驟 7 的結果決定 G04 §14.7 的門檻是否要加大 |
+| G01b stage 實機驗證 | [`specs/G01b-ecpay-stage-integration.md`](specs/G01b-ecpay-stage-integration.md) §11 | 6 個步驟：回呼路徑（需公開 HTTPS 通道）、對帳補救路徑（不需通道）、綠界是否接受非 HTTPS 的 ReturnURL、查無交易的 `TradeStatus` 實際值、同一訂單第二次付款、遲到回呼的冪等 | **現在可以做**（G01b 已於 2026-10-13 合併）；步驟 3、5 的結果是 G01b §15.2 與 G04 的設計輸入 |
+| G04 stage 實機驗證 | [`specs/G04-online-payment-expiry.md`](specs/G04-online-payment-expiry.md) §11 | 4 個步驟（接續 G01b 的編號 7–10）：綠界付款頁可停留多久、正常逾時作廢與複查、付款窗口、作廢後付款的異常與結案 | **現在可以做**（G04 已於 2026-10-14 合併）；步驟 7 的結果決定 G04 §14.7 的門檻是否要加大 |
 
-**G01b 的實作合併前，這一列還不能驗。** 以下為舊紀錄：
+**兩列都已可以驗**（G01b、G04 分別於 2026-10-13、2026-10-14 合併）。操作步驟見 [`ECPAY.md`](ECPAY.md) 的「準備」與「驗證步驟」1–10；驗證步驟 2（主動查單對帳）不需要公開通道，可以最先單獨做。實機結果若與規格假設不同（尤其步驟 4 的 `TradeStatus` 實際值、步驟 7 的付款頁停留時間），寫回這裡，由下一輪規格修補。以下為舊紀錄：
+
+~~**G01b 的實作合併前，這一列還不能驗。**~~（2026-10-13 已解除）
 
 ~~目前沒有待 PO 實機驗收的項目。~~（2026-10-11 由 G01b 那一列取代）
 
@@ -399,7 +401,9 @@ PR #9（G01 對帳）已於 2026-09-17 08:32 合併，`OrderService` 的衝突�
 
 G01 留在主線的缺陷已寫成獨立規格 [`specs/G01a-reconciliation-fixes.md`](specs/G01a-reconciliation-fixes.md)，用分支 `codex/g01-fixes`，**不要**夾在 G06 的 PR 裡 —— 兩件事、兩支分支。兩者動的是不同模組（`coffee-payments` vs `coffee-orders` / `coffee-catalog`），可以並行。**兩者皆已合併（#14、#15），此段保留為紀錄。**
 
-**目前（2026-10-12）規格庫存 2 份（已達上限）：G01b（第 27 項，實作 PR #87 送審中）與 G04（第 28 項，規格書 v1.0，尚未開工）。** 金流線兩份規格都已產出，下一輪起**不再產新規格**，直到 G01b 合併。**Flyway：G04 佔用 `V15`，下一份需要 migration 的規格從 `V16` 起算。**
+**目前（2026-10-14）規格庫存 0 份。** G01b（[PR #87](https://github.com/choka1227/coffee_GPT6/pull/87)）與 G04（[PR #90](https://github.com/choka1227/coffee_GPT6/pull/90)）的實作都已合併，金流線（2026-10-11 PO 決策範圍）的規格與自動化實作全部完成。**庫存低於上限，但本輪不產出新規格**，理由見下方「為什麼 2026-10-14 這一輪沒有產出新規格」。**Flyway：主線最高 `V15`，下一份需要 migration 的規格從 `V16` 起算。**
+
+~~2026-10-12 的庫存敘述（已過期，保留為紀錄）~~：目前（2026-10-12）規格庫存 2 份（已達上限）：G01b（第 27 項，實作 PR #87 送審中）與 G04（第 28 項，規格書 v1.0，尚未開工）。金流線兩份規格都已產出，下一輪起**不再產新規格**，直到 G01b 合併。**Flyway：G04 佔用 `V15`，下一份需要 migration 的規格從 `V16` 起算。**
 
 ~~2026-10-11 的庫存敘述（已過期，保留為紀錄）~~：**規格庫存 1 份：G01b（第 27 項，本 PR，規格書 v1.1，尚未開工）。** PO 於 2026-10-11 解除金流延後，金流線升為最優先；下一份是 G04（第 28 項），庫存未滿 2 份，下一輪可產出。**Flyway：G01b 零 migration，下一份需要 migration 的規格仍從 `V15` 起算**（G04 若需要付款嘗試表，就是 `V15`，見 G01b §15.6）。
 
@@ -558,10 +562,33 @@ PO 於 2026-10-11 解除金流延後並指定金流線升到最前面，所以�
 
 **下一輪的判斷依據：** 先做工作順序第 19 項（G08a）。它合併之後，若上表仍然沒有任何一項解除擋住它的東西，就**照常空跑**，不要從上表挑一項硬排。真正會解除的事件是：PO 解除金流的延後、PO 決定加相依或做採購／法遵決策、或 G08 累積了一段真實備量資料（那會同時解開 G28 與 G08 §13.8 的報表庫存維度）。
 
+## G01b／G04 審查登記備查的兩項（2026-10-14 登記，不計入規格庫存）
+
+兩項都是**測試強度**的問題，生產程式碼沒有缺陷，也都不值得單獨推一個 PR。**下一份會動到 `backend/coffee-app/src/test/java/com/coffee/app/ecpay/` 的規格，把它們寫進去一併修。**
+
+1. **`FakeEcpayServer` 的查單金額寫死**（PR #87 審查，G04 實作時未順手修）—— `FakeEcpayServer.java:159` 的 `TradeAmt` 回 `"280"`／`"281"`，規格（G01b §10）寫的是「`<訂單金額>`／`<訂單金額 + 1>`」。今天測試訂單恰好都是 280，所以結果正確；但只要 seed 價格一改，`PAID` 情境會變成假的 `AMOUNT_MISMATCH`，而且紅燈會看起來像對帳邏輯迴歸。**修法：** 讓測試透過 `respond(...)` 傳入訂單金額（`AMOUNT_MISMATCH` 用金額 + 1）；回呼那條路（`:91`）已經是取 `TotalAmount`，照它的作法即可
+2. **`EcpayExpiryEndToEndTest` 的計數斷言比看起來弱**（PR #90 複審）—— `CapturedOutput.getAll()` 會累積整個測試方法的輸出，所以 `SIMULATED` 那一段的 `作廢 1`、以及迴圈裡第二次以後的 `保留 1`，其實會被**前一輪**的輸出滿足。**修法：** 每輪之前記下 `output.getAll().length()`，只對新增的那一段斷言
+
+## 為什麼 2026-10-14 這一輪沒有產出新規格
+
+庫存 0 份；登記當時沒有 open 的 Codex 實作 PR（本狀態同步 PR #91 除外）。金流線（2026-10-11 PO 決策）的兩份規格 G01b、G04 都已實作合併，**決策範圍內沒有尚未寫規格的項目**：G02 電子發票、G03 退款與退單由同一則決策明文「仍延後」，正式環境上線屬「帳號與憑證」。工作順序到第 28 項用完了。
+
+回到 2026-10-09 的排除表（上方「為什麼 2026-10-09 這一輪挑 G20k」）與 2026-10-10 的 G20m 表逐項重看：**金流合併沒有解開任何一項的閘門** —— 那些閘門是真實資料（G17／G20b／G20d／G28）、PO 的產品與法遵決策（G16／G21）、採購決策（G12）、可部署環境（G20m）或「單一實例下沒有收益」（G05／G20l），沒有一項跟金流有關。G20f 的拒絕理由（G20c §13.2）也沒有新證據推翻。
+
+**刻意不做的事：**
+
+1. **不為了填滿這一輪，把上面兩項測試強度問題單獨寫成一份規格。** 兩項加起來是一支測試檔裡的十幾行，寫一份施工級規格書的成本高於實作本身；它們在等的是下一份會動到同一個目錄的規格
+2. **不搶先替 G02／G03 寫規格。** PO 2026-10-11 的決策明文把它們排除在外；在 stage 實機驗證（上方「待 PO 驗收」）做完之前，連 G01b／G04 的規格假設都還沒被實機確認，往上疊新的金流功能會把未驗證的假設放大
+
+**下一輪該看什麼：** (1) Codex 有沒有新的 PR；(2) PO 有沒有把 stage 實機驗證的結果寫回「待 PO 驗收」—— 若實機結果與規格假設不符，那就是下一份規格（金流線的修補），優先於任何 P2 項目；(3) 有沒有新的 PO 決策解開上表的閘門。
+
+---
+
 ## 修訂紀錄
 
 | 日期 | 變更 |
 | --- | --- |
+| 2026-10-14 | **金流線實作完成，狀態同步，本輪不產出新規格。** (1) G01b（PR #87）與 G04（PR #90）兩列改為已合併、工作順序第 27、28 項劃掉；(2)「待 PO 驗收」兩列改為現在可以做；(3) 庫存改為 0 份，2026-10-12 的敘述留作紀錄；(4) 新增「G01b／G04 審查登記備查的兩項」與「為什麼 2026-10-14 這一輪沒有產出新規格」；日期一律以 Asia/Taipei 計（PR #90 `merged_at` 2026-10-13T19:01Z ＝ 台北 10-14 03:01；PR #87 `merged_at` 2026-10-12T18:18Z ＝ 台北 10-13） |
 | 2026-10-12 | **產出 G04 規格書（[`specs/G04-online-payment-expiry.md`](specs/G04-online-payment-expiry.md)，v1.0），金流線兩份規格到齊。** (1) 金流表 G04 列改為規格 v1.0、工作順序第 28 項改寫為施工指示；(2) G01b 列登記實作 PR #87 的狀態（S1–S3 完成、CI 綠，Claude 於 head `f69c73c` 送 `REQUEST_CHANGES` 一項：驗收 10 的端到端 log 擷取）；(3) 重新核對 G01a 三項觀察，第 1、2 項已由 G10（PR #26）結清，第 3 項不由 G04 夾帶；(4)「待 PO 驗收」新增 G04 列；(5) 庫存 2 份（已達上限），`V15` 由 G04 佔用 |
 | 2026-10-11 | **PO 解除金流延後（只串 stage），產出 G01b 規格書。** (1) 新增「PO 決策：金流解除延後，只串測試環境（2026-10-11）」一節，舊的 2026-09-17 延後決策保留並標註已被取代；(2) 金流表改標題、新增 G01b 列、G02／G03 標註仍延後、G04 改為「規格待產（第 28 項）」；(3) 工作順序第 27 項改為 G01b、新增第 28 項 G04、第 29 項 G02／G03；(4) 「待 PO 驗收」加回表格，登記 G01b §11 的 stage 實機驗證；(5) 庫存改為 1 份；(6) G01a 三項非阻斷觀察排定由 G04 夾帶；(7) 登記 Codex 未寫 G20k 實作回報、決定不追補。G20k 的狀態同步已由 PR #84 完成，本次不重複 |
 | 2026-10-10 | **G20k 結案的狀態同步，不產新規格。** G20k 實作已隨 [PR #83](https://github.com/choka1227/coffee_GPT6/pull/83) 合併（`d4907de`），但本檔三個現行狀態入口（P1 表 G20k 列、工作順序第 26 項、庫存敘述）仍寫著「實作未開工／庫存 1 份」—— 與 2026-10-07 G20a 是同一類失誤，下一輪可能據此回頭續作 G20k。三處都已改為已合併；P2 表補登 G20m；新增「G20k 審查登記備查的兩項」與「為什麼 2026-10-10 這一輪沒有產出新規格」兩節。**沒有任何規格本文變動。** |
