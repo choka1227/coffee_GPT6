@@ -1,6 +1,6 @@
 # G02 — 綠界 B2C 電子發票（只串 stage）
 
-版本：v1.0（2026-10-14）
+版本：v1.1（2026-10-15）
 作者：Claude（PM / SA）
 前置：G01b（PR #87）、G04（PR #90）已合併。本規格**不依賴**任何尚未合併的工作，S1 可以立刻開工。
 決策依據：PO 2026-10-14 決策「G02 電子發票、G03 退款與退單解除延後，接續金流線」，沿用 2026-10-11 決策的 stage 硬規則（GAP-ANALYSIS「PO 決策：金流解除延後，只串測試環境」）。
@@ -39,7 +39,7 @@
 - **以 `CheckBarcode`／`CheckLoveCode` 向綠界即時驗證手機條碼與捐贈碼** —— 只做格式驗證，理由見 §14.5
 - **字軌設定 API**（`InvoiceWordSetting` 等）—— stage 的共用測試特店由綠界提供模擬字軌；若實機發現需要自行設定，記錄在 §11 步驟 6，由下一輪規格處理
 - **逐品項明細** —— 發票只開一行「餐飲費用」，理由見 §14.4
-- **補開歷史訂單** —— 游標從啟用當下開始，啟用前已付款的訂單不開立，理由見 §14.6
+- **補開歷史訂單** —— 游標從啟用時刻往前推 `lag-seconds` 開始：付款時間早於「啟用時刻 − lag」的訂單永遠不開立，精確邊界與理由見 §6.5 步驟 1、§14.6
 - 綠界正式環境、正式特店憑證（屬 PO 的「帳號與憑證」，**不得出現在 repo**）
 
 ## 3. 涉及模組與邊界
@@ -72,17 +72,20 @@ ALTER TABLE orders ADD CONSTRAINT ck_orders_invoice_type
 CREATE TABLE invoices(
   order_id VARCHAR(20) PRIMARY KEY REFERENCES orders(id),
   branch_id VARCHAR(36) NOT NULL REFERENCES branches(id),
-  amount INTEGER NOT NULL CHECK(amount>0),
+  amount INTEGER NOT NULL,
   status VARCHAR(12) NOT NULL,
-  invoice_no VARCHAR(10) UNIQUE,
+  invoice_no VARCHAR(10),
   invoice_date VARCHAR(19),
   random_number VARCHAR(4),
-  attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0),
+  attempts INTEGER NOT NULL DEFAULT 0,
   uncertain BOOLEAN NOT NULL DEFAULT FALSE,
   last_error VARCHAR(200),
   created_at BIGINT NOT NULL,
   updated_at BIGINT NOT NULL,
   issued_at BIGINT,
+  CONSTRAINT uq_invoices_invoice_no UNIQUE(invoice_no),
+  CONSTRAINT ck_invoices_amount CHECK(amount>0),
+  CONSTRAINT ck_invoices_attempts CHECK(attempts>=0),
   CONSTRAINT ck_invoices_status CHECK(status IN ('PENDING','ISSUED','FAILED','SKIPPED')),
   CONSTRAINT ck_invoices_issued CHECK(status<>'ISSUED' OR (invoice_no IS NOT NULL AND invoice_date IS NOT NULL))
 );
@@ -97,7 +100,8 @@ CREATE TABLE invoice_cursors(
 );
 ```
 
-- **CHECK 一律具名**（`ck_…`）。G04 §14.8 記錄過 V1／V2 的無名 CHECK 跨 H2／PostgreSQL 改不動；這次先具名，日後要擴充值域時可以 `DROP CONSTRAINT ck_… ` 再加
+- **CHECK 與 UNIQUE 一律具名，不得寫成欄位上的 inline 約束**。本表共四個 CHECK（`ck_invoices_amount`、`ck_invoices_attempts`、`ck_invoices_status`、`ck_invoices_issued`）與一個 UNIQUE（`uq_invoices_invoice_no`），加上 `orders` 的 `ck_orders_invoice_type`。G04 §14.8 記錄過 V1／V2 的無名 CHECK 跨 H2／PostgreSQL 改不動；這次先具名，日後要擴充值域時可以 `DROP CONSTRAINT ck_… ` 再加
+- **索引**：兩個 `CREATE INDEX`（`idx_invoices_status`、`idx_invoices_branch_status`）。`order_id` 與 `invoice_cursors.name` 的主鍵、`uq_invoices_invoice_no` 由資料庫自動建索引，不另建
 - `SKIPPED` 在 G02 **沒有任何程式會寫入**，保留給 G03（「發票還沒開就退款了，不用開」）。先放進 CHECK 是為了讓 G03 不必動這條約束
 - `invoice_carrier` 長度 8：手機條碼固定 8 碼（`/` + 7 碼）
 - 游標表**不預先 insert**：第一次排程執行時才建立（§6.4 步驟 1），所以啟用前的歷史訂單不會被開立
@@ -278,26 +282,39 @@ CallResult getIssueByRelateNumber(String orderId);
 
 `@Scheduled(fixedDelayString="${ecpay.invoice.interval-ms:300000}")`，`enabled=false` 時方法開頭直接 return。**一輪做三件事，依序：**
 
-**步驟 1 —— 入列。** 讀游標 `invoice_cursors` 的 `PAID` 列；不存在就 insert `(PAID, now - lag, '')` 並結束步驟 1（第一次執行只建立游標，§14.6）。存在就以 `until = now - lag-seconds*1000` 呼叫 `orders.invoiceCandidates(at, id, until, 200)`；對每一筆 `insert into invoices … where not exists`（`status=PENDING`、`amount=total`、`branch_id`）；最後把游標推進到這批的最後一筆。**同一個交易**完成 insert 與游標推進。一輪最多入列 200 筆，剩下的下一輪繼續。
+**步驟 1 —— 入列。** 讀游標 `invoice_cursors` 的 `PAID` 列；不存在就 insert `(PAID, T0 - lag-seconds*1000, '')`（`T0` 為這一輪的 `now`）並結束步驟 1（第一次執行只建立游標，§14.6）。存在就以 `until = now - lag-seconds*1000` 呼叫 `orders.invoiceCandidates(at, id, until, 200)`；對每一筆 `insert into invoices … where not exists`（`status=PENDING`、`amount=total`、`branch_id`）；最後把游標推進到這批的最後一筆。**同一個交易**完成 insert 與游標推進。一輪最多入列 200 筆，剩下的下一輪繼續。
+
+**游標的精確邊界（產品語意，實作不得另作解讀）：** 令初始化後的游標為 `(C, '')`，`C = T0 - lag`。因為訂單編號一定非空、`id > ''` 恆成立，`invoiceCandidates` 的條件化簡為 `paid_at >= C`：
+
+| 訂單的 `paid_at` | 結果 |
+| --- | --- |
+| `< C`（例：`C - 1` 毫秒） | **永遠不入列** |
+| `== C`（與截止點同毫秒） | 會入列 |
+| `C < paid_at < T0`（啟用前、落在 lag 窗內，例：`T0 - 1` 秒） | 會入列，在第一個 `until >= paid_at` 的輪次 |
+| `>= T0`（啟用後付款） | 會入列，在 `paid_at <= now - lag` 之後的第一輪 |
+
+一句話：**「啟用時刻往前 lag 秒」之後付款的都開立，之前的都不開。** 之所以不是「啟用時刻之後付款的才開」，理由見 §14.6。
 
 **步驟 2 —— 開立。** 取 `status='PENDING'` 依 `updated_at` 最舊的 `batch-size` 筆，逐筆 `issueOne(orderId)`。**每筆之間不共用交易**；HTTP 呼叫期間**不持任何鎖、不開交易**。
 
 `issueOne`：
 
-1. `orders.invoiceCandidate(orderId)` 重讀。訂單資料的 `invoice` 為 `null` → 標 `FAILED`、`last_error='訂單缺少發票資訊'`，結束
+1. `orders.invoiceCandidate(orderId)` 重讀。訂單資料的 `invoice` 為 `null` → 標 `FAILED`、`last_error='訂單缺少發票資訊'`、**`uncertain=false`**（沒有發票資訊就不可能呼叫過 `Issue`，所以結果是確定的；重試端點把它設回 `true` 也一樣在這一步被改回 `false`），結束
 2. 若 `uncertain=true`：先 `getIssueByRelateNumber`
    - `Ok` 且 `IIS_Sales_Amount == amount` → 標 `ISSUED`（號碼、日期、隨機碼取自查詢結果），結束
    - `Ok` 但金額不符 → 標 `FAILED`、`last_error='綠界已有同編號發票但金額不符'`，結束（**不重開**）
    - `Rejected` → 視為查無此發票，`uncertain=false`，繼續第 3 步
    - `Unknown` → `attempts+1`，結束（下一輪再查）
-3. 呼叫 `issue`
+3. **認領**：`update invoices set uncertain=true, updated_at=now where order_id=? and status='PENDING'`。**更新 0 列就結束、不呼叫綠界**（這一列已被別的實例或 G03 的退款掃描改走了）。認領成功才呼叫 `issue`：
    - `Ok` → 標 `ISSUED`、`uncertain=false`、`issued_at=now`
    - `Rejected` 且 `rtnCode == 10000009`（RelateNumber 重複）→ `uncertain=true`，**同一輪立刻回到第 2 步再查一次**（只回一次，避免迴圈）
-   - `Rejected` 其他 → 標 `FAILED`、`last_error='綠界拒絕開立（<RtnCode>）：<RtnMsg 截 100 字>'`
-   - `Unknown` → `uncertain=true`、`attempts+1`
+   - `Rejected` 其他 → 標 `FAILED`、`uncertain=false`、`last_error='綠界拒絕開立（<RtnCode>）：<RtnMsg 截 100 字>'`
+   - `Unknown` → `uncertain` 維持 `true`（認領時已設）、`attempts+1`
 4. 任何路徑結束時，若 `status` 仍為 `PENDING` 且 `attempts >= max-attempts` → 標 `FAILED`、`last_error='連續 <n> 次無法確認開立結果'`，並保留 `uncertain=true`（重試時一定先查詢）
 
 **寫回**以 `update invoices set … where order_id=? and status='PENDING'` 進行（條件更新取代行鎖；同時有兩個實例在跑時，晚到的那個更新 0 列、什麼都不做）。
+
+**`uncertain` 的不變式（G03 依賴這一條）：** `PENDING`／`FAILED` 且 `uncertain=false` 的列，代表「綠界確定沒有這張發票，而且沒有任何 `Issue` 呼叫在途」。認領（第 3 步）是唯一把 `uncertain` 從 `false` 改成 `true` 再呼叫綠界的路徑，所以任何人只要以 `where … and uncertain=false` 的條件更新搶到這一列，就保證不會有在途的開立 —— 認領與條件更新作用在同一列，資料庫的列鎖保證兩者只有一個先成立。行程在 HTTP 呼叫中途當掉時，這一列留在 `uncertain=true`，下一輪會先查詢，不會盲目重開。
 
 **步驟 3 —— INFO 摘要一行：** `綠界發票：入列 <n>、開立 <n>、失敗 <n>、待確認 <n>`。全為 0 時不印。
 
@@ -446,7 +463,7 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 
 **S1**
 
-- [ ] 1. `V16__einvoice.sql` 建立 §4 的欄位、兩張表、三個索引，CHECK 具名；Flyway 在 H2 與 CI 用的資料庫上都能套用；`V1`–`V15` 一字未改
+- [ ] 1. `V16__einvoice.sql` 建立 §4 的欄位、兩張表、兩個 `CREATE INDEX`；五個 CHECK（含 `ck_orders_invoice_type`）與 `uq_invoices_invoice_no` 皆以 §4 的名稱具名，**SQL 裡沒有任何 inline 的 `CHECK(...)` 或 `UNIQUE`**；Flyway 在 H2 與 CI 用的資料庫上都能套用；`V1`–`V15` 一字未改
 - [ ] 2. `orders.invoice-required=false`：不帶 `invoice` 建立訂單 → 201、四個欄位為 NULL、`Order.invoice == null`（**既有的建立訂單測試全部不修改即通過**，`new Create(...)` 補 `null` 不算修改測試邏輯）
 - [ ] 3. `orders.invoice-required=true`：不帶 `invoice` → 400 `請選擇發票開立方式`；§6.2 表格每一列各一條（`@ParameterizedTest`），訊息逐字相符
 - [ ] 4. 三種類型各一條成功案例，DB 只存相關欄位（`CLOUD` 的 `carrier`／`loveCode` 為 NULL 等）；`carrier` 小寫輸入存成大寫
@@ -460,7 +477,7 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 - [ ] 9. 假伺服器 `TIMEOUT`、`HTTP_500`、`TRANS_CODE_ERROR`、`BAD_CIPHER`、`REDIRECT_TO_PRODUCTION`、連線失敗 → `Unknown`；`REJECTED` → `Rejected(4000001, …)`
 - [ ] 10. 302 重新導向**沒有被跟隨**（假伺服器斷言沒有第二個請求，且測試不連外）
 - [ ] 11. §5.3 每一條不成立時啟動失敗，訊息不含任何設定值（`EinvoiceStageGuardTest`）；`enabled=false` 時任意值都能啟動
-- [ ] 12. 第一次執行排程：只建立 `PAID` 游標，不開立任何發票；游標建立前已付款的訂單**永遠不會**被開立
+- [ ] 12. 第一次執行排程：只建立 `PAID` 游標（`at_ms == T0 - lag`、`order_id == ''`），不開立任何發票。之後以 SQL 直接把四筆已付款訂單的 `paid_at` 設成 `C - 1`、`C`、`T0 - 1000`、`T0 + 1000`（`C` 取自游標的 `at_ms`，不靠系統時鐘），推進時間跑到入列完成：**只有 `C - 1` 那筆永遠不入列**，其餘三筆各入列一次（§6.5 步驟 1 的邊界表）
 - [ ] 13. 正常路徑：付款（現金與線上各一）→ 經過 `lag` 後執行一輪 → `invoices` 為 `ISSUED`、號碼／日期／隨機碼正確、`uncertain=false`
 - [ ] 14. `lag` 之內付款的訂單本輪不入列，下一輪才入列
 - [ ] 15. 入列冪等：同一批訂單被兩輪掃到（手動把游標往回調）→ `invoices` 仍各一列
@@ -470,6 +487,7 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 - [ ] 19. `REJECTED` → `FAILED`、`last_error` 含 `4000001`；`attempts` 達 `max-attempts`（測試設 3）→ `FAILED`、`uncertain=true`
 - [ ] 20. 訂單沒有發票資訊（`invoice-required` 關閉時建立、之後才付款）→ `FAILED`、`訂單缺少發票資訊`，不呼叫綠界
 - [ ] 21. 條件更新：在 `issueOne` 呼叫綠界期間把該列改成 `FAILED`（測試以假伺服器的回呼掛勾做），回來後的寫回更新 0 列、狀態維持 `FAILED`
+- [ ] 21a. 認領：假伺服器收到 `Issue` 的當下（掛勾內讀 DB），該列 `uncertain=true`；在認領之前把該列改成非 `PENDING`（掛勾在 `invoiceCandidate` 之後、認領之前無法掛，改以「入列後直接改 `FAILED` 再呼叫 `issueOne`」驗證）→ 不呼叫 `Issue`。`Rejected` 之後 `uncertain=false`；`訂單缺少發票資訊` 之後 `uncertain=false`
 - [ ] 22. **log 衛生**：`OutputCaptureExtension` 擷取的完整輸出不含測試 key、iv、任何測試 email、手機條碼、捐贈碼，也沒有 `\tat ` 開頭的行（`@AfterEach` 每個情境斷言一次，比照 G04 驗收 20）；`EcpayNoEgressGuardTest` 新增的三個方法與反向樣本全綠
 
 **S3**
@@ -521,9 +539,9 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 
 ### 14.6 游標從啟用當下開始，不補開歷史訂單
 
-**決定：** 第一次執行只建立游標，`at = now - lag`。
-**理由：** 啟用前的訂單沒有發票資訊（`invoice` 為 NULL），補開只會全部進「缺少發票資訊」的失敗清單；而且對 stage 測試沒有意義。
-**推翻的代價：** 手動把 `invoice_cursors` 的 `PAID` 列往回調即可補開（入列是冪等的），不需要改程式。
+**決定：** 第一次執行只建立游標 `(T0 - lag, '')`。付款時間 `>= T0 - lag` 的訂單開立，`< T0 - lag` 的永遠不開（§6.5 步驟 1 的邊界表）。
+**理由：** 不補開遠期歷史：啟用前的訂單大多沒有發票資訊（`invoice` 為 NULL），補開只會全部進「缺少發票資訊」的失敗清單，對 stage 測試也沒有意義。截止點取 `T0 - lag` 而不是 `T0`，是因為它就是「第一輪若早一輪跑會用的 `until`」——游標與 `until` 用同一個基準，初始化不需要特例，條件也只剩一個 `paid_at >= C`；lag 窗內那幾分鐘的訂單多開一張也是正確的發票（它們都已付款）。v1.0 寫「游標建立前付款的永遠不處理」與這個算法矛盾，v1.1 以本條為準。
+**推翻的代價：** 要改成「`T0` 之後付款才開」，把初始化改成 `(T0, '')`、邊界表與驗收 12 各改一列。要補開歷史，手動把 `PAID` 列往回調即可（入列是冪等的），不需要改程式。
 
 ### 14.7 `invoice-required` 屬於 `orders`，啟用發票時強制為 true
 
@@ -555,6 +573,12 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 **理由：** 綠界呼叫最長 10 秒，抱著列鎖等它會卡住重試端點；條件更新讓「晚到的寫回」自然失效（驗收 21）。多實例同時開立同一筆，最壞情況是兩個都呼叫 `Issue`，第二個會收到 `10000009`、轉查詢後得到同一張發票 —— 不會開出兩張。
 **推翻的代價：** 改成 `select … for update skip locked` 認領模式，需要分「認領」與「寫回」兩個交易。
 
+### 14.12 呼叫 `Issue` 之前先以條件更新「認領」並設 `uncertain=true`
+
+**決定：** §6.5 第 3 步。每次呼叫 `Issue` 前多一次 `update`，更新 0 列就不呼叫。
+**理由：** v1.0 只在 `Unknown` 之後才設 `uncertain=true`，所以「`PENDING` 且 `uncertain=false`」既可能是「確定沒開」，也可能是「另一個實例的 `Issue` 正在途中」。G03 的退款要把沒開過的發票標成 `SKIPPED`，必須能區分這兩種；區分不了，就會出現「綠界已開立、本地卻是 `SKIPPED`、永遠沒人作廢」（Codex 在 PR #92 review 5522929018 指出的缺口）。先認領讓 `uncertain=false` 成為可依賴的不變式，順帶解決行程在呼叫中途當掉後下一輪盲目重開的問題。代價是正常路徑每張發票多一次單列 `update`。
+**推翻的代價：** 拿掉認領，G03 的退款掃描就不能動任何 `PENDING` 列，只能等它開完再作廢 —— 等於每筆開立前退款的訂單都要先開一張再作廢一張。
+
 ## 15. 與其他工作的關係
 
 - **G03**：S2 依賴本規格 S2 的 `EcpayInvoiceClient`（新增 `invalid`、`allowance`）、`FakeEinvoiceServer`（新增路徑）、`invoices.status='SKIPPED'`、`invoice_cursors` 的第二列。**G03 必須在本規格合併後才開工**（G03 的 `V17` 依賴 `V16` 先存在）
@@ -566,3 +590,4 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 | 版本 | 日期 | 變更 |
 | --- | --- | --- |
 | v1.0 | 2026-10-14 | 初版。PO 2026-10-14 解除 G02 延後，沿用 2026-10-11 stage 硬規則 |
+| v1.1 | 2026-10-15 | 回應 Codex review 5522929018：(1) §6.5 新增「認領」步驟與 `uncertain` 不變式、§14.12（G03 退款不漏作廢的前提）；(2) 游標截止點的精確邊界表，§2.2、§14.6、驗收 12 統一為 `paid_at >= T0 - lag`；(3) §4 的 CHECK／UNIQUE 全部具名、驗收 1 的索引數更正為兩個 `CREATE INDEX`；新增驗收 21a |

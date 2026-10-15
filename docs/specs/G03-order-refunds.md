@@ -1,8 +1,8 @@
 # G03 — 訂單退款與發票作廢／折讓（只串 stage）
 
-版本：v1.0（2026-10-14）
+版本：v1.1（2026-10-15）
 作者：Claude（PM / SA）
-前置：**G02（[`G02-ecpay-einvoice.md`](G02-ecpay-einvoice.md)）必須整份合併後才能開工**。理由：本規格的 `V17` 必須排在 G02 的 `V16` 之後（Flyway 預設不接受亂序）；S2 直接擴充 G02 的發票用戶端與假伺服器。
+前置：**G02（[`G02-ecpay-einvoice.md`](G02-ecpay-einvoice.md) v1.1 以上）必須整份合併後才能開工**。本規格 §6.6 依賴 G02 v1.1 §6.5 的「認領」與 `uncertain` 不變式。理由：本規格的 `V17` 必須排在 G02 的 `V16` 之後（Flyway 預設不接受亂序）；S2 直接擴充 G02 的發票用戶端與假伺服器。
 決策依據：PO 2026-10-14 決策「G02 電子發票、G03 退款與退單解除延後」，沿用 2026-10-11 決策的 stage 硬規則。
 
 ---
@@ -82,13 +82,14 @@ CREATE TABLE invoice_reversals(
   kind VARCHAR(10),
   status VARCHAR(10) NOT NULL,
   allowance_no VARCHAR(20),
-  attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0),
+  attempts INTEGER NOT NULL DEFAULT 0,
   uncertain BOOLEAN NOT NULL DEFAULT FALSE,
   last_error VARCHAR(200),
   created_at BIGINT NOT NULL,
   updated_at BIGINT NOT NULL,
   done_at BIGINT,
-  CONSTRAINT ck_invoice_reversals_kind CHECK(kind IS NULL OR kind IN ('VOID','ALLOWANCE')),
+  CONSTRAINT ck_invoice_reversals_attempts CHECK(attempts>=0),
+  CONSTRAINT ck_invoice_reversals_kind CHECK(kind IS NULL OR kind IN ('VOID','ALLOWANCE','NONE')),
   CONSTRAINT ck_invoice_reversals_status CHECK(status IN ('PENDING','DONE','FAILED')),
   CONSTRAINT ck_invoice_reversals_done CHECK(status<>'DONE' OR kind IS NOT NULL)
 );
@@ -103,6 +104,8 @@ INSERT INTO role_permissions(role_code,permission) VALUES ('HQ','ORDER_REFUND');
 - **不新增訂單狀態 `REFUNDED`**：`orders.status` 的 CHECK 是 `V1` 的無名約束，跨 H2／PostgreSQL 改不動（G04 §14.8 同一個理由）。「已退款」由 `refunded_at IS NOT NULL` 表示，`status` 保留退款當下的值（§14.3）
 - `role_permissions` 的欄位名稱以 `V2__payment_reconciliation.sql` 授權 `PAYMENT_RECONCILE` 的那兩行為準，照抄它的寫法
 - `invoice_reversals.kind` 在建立時可以是 NULL —— 「作廢還是折讓」在**執行時**才依當下日期決定（§6.6），不是在退款當下
+- `kind='NONE'`（只會與 `status='DONE'` 一起出現）：退款當下開立結果不明而先建了作廢列，事後確認綠界**沒有**這張發票、本地已標 `SKIPPED`，不需要作廢或折讓（§6.6）
+- **CHECK 一律具名，不得寫成欄位上的 inline 約束**：本支 migration 共五個 CHECK —— `orders` 的 `ck_orders_refund`，以及 `ck_invoice_reversals_attempts`、`ck_invoice_reversals_kind`、`ck_invoice_reversals_status`、`ck_invoice_reversals_done`
 - `invoice_cursors` **不改表**，S2 由程式 insert `REFUNDED` 那一列（G02 §4 已預留）
 
 ## 5. 設定
@@ -206,22 +209,42 @@ CallResult allowance(String invoiceNo, String invoiceDate, int amount, String em
 
 **排程（`InvoiceService` 的同一個 `@Scheduled` 方法）—— 一輪的順序改為：**
 
-1. **退款掃描**（新）：讀 `invoice_cursors` 的 `REFUNDED` 列；不存在就建立（`at = now - lag`）並跳過。存在就 `orders.refundedCandidates(...)`，每一筆：
-   - 沒有 `invoices` 列 → insert 一列 `status='SKIPPED'`、`amount` 取 `invoiceCandidate(orderId)` 的 `total`（之後 G02 的入列 `where not exists` 自然跳過它）
-   - `PENDING` 或 `FAILED` → 條件更新為 `SKIPPED`（`where status in ('PENDING','FAILED')`），`last_error='訂單已退款，不需開立'`
-   - `ISSUED` → insert `invoice_reversals`（`status='PENDING'`、`kind=NULL`）`where not exists`
-   - `SKIPPED` → 不動
+1. **退款掃描**（新）：讀 `invoice_cursors` 的 `REFUNDED` 列；不存在就 insert `(REFUNDED, T0 - lag-seconds*1000, '')` 並跳過。邊界語意與 G02 §6.5 步驟 1 的邊界表**完全相同**（把 `paid_at` 換成 `refunded_at`）：`refunded_at >= C` 的處理，`< C` 的永遠不處理。存在就 `orders.refundedCandidates(at, id, now - lag, 200)`，每一筆依該訂單 `invoices` 列的狀態：
+   - **沒有 `invoices` 列** → insert 一列 `status='SKIPPED'`、`uncertain=false`、`amount` 取 `invoiceCandidate(orderId)` 的 `total`、`last_error='訂單已退款，不需開立'`（之後 G02 的入列 `where not exists` 自然跳過它）。沒有列就不可能被認領過，所以綠界一定沒有這張發票。若與另一個實例的 G02 入列撞主鍵，整個交易回滾、游標不推進，下一輪重來
+   - **`SKIPPED`** → 不動
+   - **`ISSUED`** → `ensureReversal(orderId)`
+   - **`PENDING` 或 `FAILED`** → 先試 `update invoices set status='SKIPPED', last_error='訂單已退款，不需開立', updated_at=? where order_id=? and status in ('PENDING','FAILED') and uncertain=false`
+     - 更新 1 列 → 完成。依 G02 v1.1 的 `uncertain` 不變式，這一列沒有在途的 `Issue`，綠界也沒有這張發票
+     - 更新 0 列（`uncertain=true`，或剛好被別人改了）→ 在同一個交易重讀該列：`ISSUED`、或 `PENDING`／`FAILED` 且 `uncertain=true` → `ensureReversal(orderId)`；`SKIPPED` → 不動。**不得**把 `uncertain=true` 的列改成 `SKIPPED` —— 綠界可能已經開了
    - 游標推進與上述寫入在同一個交易
+
+   `ensureReversal(orderId)`：`insert into invoice_reversals(order_id, branch_id, kind, status, …) values (?, ?, NULL, 'PENDING', …) where not exists`。已存在就不動。
 2. **入列**（G02 步驟 1，不變）
-3. **開立**（G02 步驟 2）——`issueOne` 第 1 步重讀時，若 `refundedAt != null` → 條件更新為 `SKIPPED`，**不呼叫綠界**。這一條擋的是「退款掃描的游標還沒走到、但訂單已經退款」的那幾分鐘
-4. **作廢／折讓**（新）：取 `invoice_reversals` `status='PENDING'` 最舊 `batch-size` 筆，逐筆 `reverseOne(orderId)`
+3. **開立**（G02 步驟 2）—— `issueOne` 第 1 步重讀 `invoiceCandidate` 之後，依序加入三條退款規則：
+   - (a) `invoice == null` 且 `refundedAt != null` → 條件更新為 `SKIPPED`、`uncertain=false`（沒有發票資訊不可能開過），結束；`invoice == null` 而未退款 → 照 G02 標 `FAILED`
+   - (b) `refundedAt != null` 且 `uncertain=false` → `update … set status='SKIPPED' … where order_id=? and status='PENDING' and uncertain=false`，**不呼叫綠界**；若該訂單有 `kind IS NULL` 的 `PENDING` 作廢列，改為 `DONE`／`kind='NONE'`，結束
+   - (c) `refundedAt != null` 且 `uncertain=true` → **照 G02 的第 2–4 步把開立結果確定下來**（先 `GetIssue`；查無才認領並 `Issue`；`10000009` 轉查詢），只有兩處不同：`Issue` 被 `Rejected`（非 `10000009`）時寫 `SKIPPED`、`uncertain=false`（不是 `FAILED`），並把作廢列改為 `DONE`／`NONE`；寫成 `ISSUED` 時呼叫 `ensureReversal`。理由見 §14.9
+   - 另外，**`issueOne` 任何一條寫成 `ISSUED` 的路徑**（不論訂單當時是否已退款），寫回成功後都再呼叫一次 `orders.invoiceCandidate(orderId)`；`refundedAt != null` → `ensureReversal`。這一條接住「退款在開立的 HTTP 呼叫進行中提交、而退款掃描已經走過這筆」的情況
+4. **作廢／折讓**（新）：取 `invoice_reversals r join invoices i on i.order_id=r.order_id where r.status='PENDING' and i.status='ISSUED'`，依 `r.updated_at` 最舊 `batch-size` 筆，逐筆 `reverseOne(orderId)`。**發票還沒確定（`PENDING`／`FAILED`）的作廢列不取**：它們等發票確定後再處理，而且不會因為永遠是最舊的而把批次塞滿（兩張表都是 `coffee-payments` 擁有，可以 join）
 5. INFO 摘要加上 `作廢 <n>、折讓 <n>、作廢折讓失敗 <n>`
 
-**開立與退款的競態**（開立的 HTTP 呼叫進行中、訂單剛好被退款）：開立回來後 `invoices` 變成 `ISSUED`；下一輪退款掃描看到 `ISSUED`，建立作廢列。**不會漏**，只是晚一輪。
+**開立與退款的競態 —— 每一種交錯都有人接住：**
+
+| 情況 | 誰接住 | 結果 |
+| --- | --- | --- |
+| 退款時還沒入列 | 退款掃描：沒有 `invoices` 列 → `SKIPPED` | 不開立 |
+| 退款時 `PENDING`、`uncertain=false`（沒人在呼叫） | 退款掃描或 `issueOne` (b) 的條件更新 | `SKIPPED`，不開立 |
+| 退款時 `Issue` 在途（已認領，`uncertain=true`） | 退款掃描建作廢列；開立寫回 `ISSUED` | 開立完成後作廢 |
+| 上次 `Issue` 逾時（`SUCCEED_THEN_TIMEOUT`，`uncertain=true`）後才退款 | 退款掃描建作廢列；下一輪 `issueOne` (c) 查到 → `ISSUED` | 作廢那張，`Issue` 不重送 |
+| `uncertain=true`、查詢查無 | `issueOne` (c) 認領並 `Issue`（`RelateNumber` 唯一，遲到的舊請求只會被拒） | 開出唯一一張後作廢 |
+| 退款提交得太晚，退款掃描的游標已經走過這筆（正常情況會被 `lag` 擋住，這是第二道防線） | `issueOne` 寫回 `ISSUED` 後的重讀 → `ensureReversal` | 作廢 |
+| 發票 `FAILED` 且 `uncertain=true`（例：連續 10 次不明）後退款 | 退款掃描建作廢列；作廢列等待。發票照常出現在 G02「發票開立失敗」清單，店長重試後走 (c) | 確定後作廢或 `NONE` |
+
+**不變式：本地發票列一旦是 `SKIPPED`，綠界就一定沒有這張發票；綠界有發票的訂單一旦退款，一定有一筆作廢列。**
 
 **`reverseOne(orderId)`：**
 
-1. 讀 `invoices`（必為 `ISSUED`）與 `invoice_reversals`
+1. 讀 `invoices`（批次查詢已保證為 `ISSUED`）與 `invoice_reversals`
 2. 若 `uncertain=true`：先 `getIssueByRelateNumber(orderId)`
    - `Ok` 且 `IIS_Invalid_Status == "1"` → `DONE`、`kind='VOID'`，結束
    - `Ok` 且 `IIS_Remain_Allowance_Amt == 0` → `DONE`、`kind='ALLOWANCE'`、`allowance_no` 維持 NULL（查詢不回折讓號），結束
@@ -260,7 +283,7 @@ Reversal retryReversal(Actor a, String orderId);
   - 訂單列與明細：`refundedAt != null` 時狀態徽章顯示「已退款」（取代原狀態文字），明細另列退款時間、原因、執行人
   - 明細的「退款」按鈕：只在 `can('ORDER_REFUND')`、已付款、未退款時顯示。按下開對話框：原因（必填）；線上付款訂單另有「綠界退刷紀錄」欄（必填）與一行提示「請先到綠界廠商後台完成退刷，再回來登記。系統不會自動退刷」；現金訂單提示「請從錢櫃退還 N 元給顧客」。送出成功後刷新明細
   - 已退款訂單不顯示任何狀態推進按鈕
-  - 發票區：`reversalStatus=DONE` → 「發票已作廢」或「發票已折讓（折讓單號 …）」；`PENDING` → 「發票作廢處理中」；`FAILED` 對店員顯示原因
+  - 發票區：`reversalStatus=DONE` → 「發票已作廢」或「發票已折讓（折讓單號 …）」；`reversalKind=NONE` 時不顯示作廢資訊（發票狀態本身就是「未開立」）；`PENDING` → 「發票作廢處理中」；`FAILED` 對店員顯示原因
 - **`CashSessionsView.vue`**：班別列與明細新增「現金退款 −N 元（M 筆）」；應有金額的說明加「已扣除現金退款」
 - **`ReportsView.vue`**：營收卡片下方新增「退款 −N 元（M 筆）」與「扣除退款後 N 元」；`refundOrders == 0` 時整行不顯示
 - **`ReconciliationView.vue`**：新增「發票作廢／折讓失敗」區塊（訂單編號、發票號碼、方式、原因、重試）
@@ -336,7 +359,7 @@ Reversal retryReversal(Actor a, String orderId);
 
 **動到：** `EcpayInvoiceClient.java`（新增兩個方法）、新增 `InvoiceDeadline.java`、`InvoiceService.java`（退款掃描、`issueOne` 的退款檢查、`reverseOne`）、`FakeEinvoiceServer.java`（只新增）、新增 `InvoiceDeadlineTest.java`、`InvoiceReversalEndToEndTest.java`。
 
-**驗收子集：** 12–23。
+**驗收子集：** 12–23（含 21a–21e）。
 
 ### S3 — 端點、報表、前端、文件
 
@@ -344,13 +367,13 @@ Reversal retryReversal(Actor a, String orderId);
 
 **驗收子集：** 24–33。
 
-**規模估計：** S2 最重（與 G02 S2 同級）。若一次做不完，切點在 `InvoiceDeadline` + 用戶端兩個新方法（驗收 12–14，無人呼叫，可獨立合併）與排程（15–23）之間。
+**規模估計：** S2 最重（與 G02 S2 同級）。若一次做不完，切點在 `InvoiceDeadline` + 用戶端兩個新方法（驗收 12–14，無人呼叫，可獨立合併）與排程（15–23）之間。排程這一段（退款掃描、`issueOne` 的三條規則、`reverseOne`）**不可再切**：任何一條單獨上線都會留下 §6.6 競態表裡沒人接住的一格，要預留完整一次執行。
 
 ## 13. 驗收條件
 
 **S1**
 
-- [ ] 1. `V17__order_refunds.sql` 依 §4 建立欄位、表、索引、具名 CHECK 與兩筆授權；`V1`–`V16` 一字未改
+- [ ] 1. `V17__order_refunds.sql` 依 §4 建立欄位、表、五個 `CREATE INDEX`、五個以 §4 名稱具名的 CHECK（**SQL 裡沒有任何 inline 的 `CHECK(...)`**）與兩筆授權；`V1`–`V16` 一字未改
 - [ ] 2. 店長退本店現金訂單（`PAID`、`PREPARING`、`READY`、`COMPLETED` 各一條）→ 200、`refundedAt` 有值、`status` 不變、`audit_log` 一列 `ORDER_REFUNDED`
 - [ ] 3. 店長退本店線上訂單：有 `providerNote` → 200；沒有 → 400 且訊息逐字相符；現金訂單帶 `providerNote` → 存 NULL
 - [ ] 4. 總部退任一分店 → 200；他店店長 → 403、**訂單、班別、稽核皆不變**；收銀 → 403；顧客 → 403；未登入 → 401；不帶 CSRF → 403；不存在 → 404
@@ -367,13 +390,18 @@ Reversal retryReversal(Actor a, String orderId);
 - [ ] 12. `InvoiceDeadlineTest`：六個雙月期各自的 12 日 23:59:59（可作廢）與 13 日 00:00:00（不可）、11–12 月跨年、閏年 2/29
 - [ ] 13. `invalid`／`allowance` 送出的明文經假伺服器解密後欄位與 §6.6 一致；`allowance` 的三個金額都等於 `invoices.amount`；email 為 NULL 時 `AllowanceNotify="N"` 且無 `NotifyMail`
 - [ ] 14. 兩個新方法對 `TIMEOUT`、`HTTP_500`、`BAD_CIPHER`、重新導向 → `Unknown`
-- [ ] 15. 第一次執行只建立 `REFUNDED` 游標；游標建立前退款的訂單不處理
+- [ ] 15. 第一次執行只建立 `REFUNDED` 游標（`at_ms == T0 - lag`、`order_id == ''`）；以 SQL 把四筆已退款訂單的 `refunded_at` 設成 `C - 1`、`C`、`T0 - 1000`、`T0 + 1000`（`C` 取自游標）→ 只有 `C - 1` 那筆永遠不處理（比照 G02 驗收 12）
 - [ ] 16. 已開立 → 退款 → 一輪 → `invoice_reversals` `DONE`／`VOID`；假伺服器該發票為已作廢
 - [ ] 17. 已開立、`invoice_date` 改成兩個月前（過期）→ 退款 → 一輪 → `DONE`／`ALLOWANCE`、`allowance_no` 有值、**沒有呼叫 `Invalid`**
 - [ ] 18. `VOID_PAST_DEADLINE`：未過期但綠界拒絕作廢 → 同一輪改走折讓 → `DONE`／`ALLOWANCE`
 - [ ] 19. `SUCCEED_THEN_TIMEOUT`（作廢與折讓各一）：第一輪 `PENDING`／`uncertain`；第二輪先 `GetIssue` → `DONE`，**`Invalid`／`Allowance` 各只被呼叫一次**
-- [ ] 20. 開立前退款：付款後在 `lag` 內退款 → 跑兩輪 → `invoices` 為 `SKIPPED`，**假伺服器從未收到 `Issue`**；`PENDING`、`FAILED` 的發票列遇到退款 → `SKIPPED`
-- [ ] 21. 開立呼叫進行中訂單被退款（假伺服器掛勾）→ 該輪 `ISSUED` → 下一輪作廢 → `DONE`
+- [ ] 20. 開立前退款：付款後在 `lag` 內退款 → 跑兩輪 → `invoices` 為 `SKIPPED`，**假伺服器從未收到 `Issue`**；`PENDING`／`uncertain=false` 與 `FAILED`／`uncertain=false`（`REJECTED` 造成）的發票列遇到退款 → `SKIPPED`，**假伺服器沒有收到任何新請求**
+- [ ] 21. 開立呼叫進行中訂單被退款：假伺服器 `Issue` 掛勾內提交退款，並在另一條執行緒跑完退款掃描 → 掃描結束時 `invoices` **不是** `SKIPPED`、作廢列已建立 → 開立寫回 `ISSUED` → 下一輪 `DONE`／`VOID`；`Issue` 只被呼叫一次
+- [ ] 21a. 同 21，但掛勾內只提交退款、**不**跑退款掃描，然後把 `REFUNDED` 游標推過這筆訂單（模擬掃描已走過）→ 開立寫回後的重讀建立作廢列 → 下一輪 `DONE`
+- [ ] 21b. **成功後逾時再退款**：`Issue` 為 `SUCCEED_THEN_TIMEOUT` → 第一輪 `PENDING`／`uncertain=true` → 退款 → 退款掃描後 `invoices` 仍為 `PENDING`、作廢列 `PENDING` → 下一輪 `GetIssue` 查到 → `ISSUED` → `DONE`／`VOID`；**`Issue` 只被呼叫一次、`Invalid` 只被呼叫一次，假伺服器上該發票為已作廢**
+- [ ] 21c. `uncertain=true` 且綠界查無（`Issue` 為 `TIMEOUT`、不記住）→ 退款 → 下一輪 `GetIssue` 查無 → 認領並 `Issue`（改為 `OK`）→ `ISSUED` → `DONE`／`VOID`；假伺服器上**恰好一張**發票且已作廢
+- [ ] 21d. `uncertain=true` 的退款訂單，`Issue` 被 `REJECTED` → `invoices` 為 `SKIPPED`、作廢列 `DONE`／`NONE`，沒有呼叫 `Invalid`／`Allowance`
+- [ ] 21e. 不餓死：`batch-size`（測試設 2）+ 1 筆「發票 `FAILED`／`uncertain=true` 的退款訂單」的作廢列，加上一筆發票 `ISSUED` 的作廢列（`updated_at` 最新）→ 一輪後後者 `DONE`，前者全部仍為 `PENDING` 且沒有呼叫綠界
 - [ ] 22. `REJECTED`（折讓也被拒）→ `FAILED`；`attempts` 達上限 → `FAILED`、`uncertain=true`
 - [ ] 23. log 衛生同 G02 驗收 22（含 email）；`TimeZoneGuardTest`、`EcpayNoEgressGuardTest` 不修改即通過
 
@@ -440,6 +468,12 @@ Reversal retryReversal(Actor a, String orderId);
 **理由：** `orders` 不能依賴 `payments`（會成環）；而且退款請求不應該因為綠界的延遲或失敗而失敗 —— 錢已經退給客人了，帳一定要先記上。用游標掃描與 G02 同一個模式，實作端不需要學第二套機制。
 **推翻的代價：** 改成 Spring 事件（`orders` 發布、`payments` 監聽）可以縮短延遲，但仍需要掃描作為漏接的補救，等於兩套。
 
+### 14.9 退款不終結結果不明的發票：先確定開立結果，再作廢
+
+**決定：** 只有 `uncertain=false` 的發票列可以因退款直接標 `SKIPPED`；`uncertain=true` 的一律照 G02 的流程把結果確定下來（查詢，查無就以同一個 `RelateNumber` 開立），開出來就作廢，確定沒開才標 `SKIPPED`／`NONE`。
+**理由：** v1.0 把所有 `PENDING`／`FAILED` 直接改成 `SKIPPED`，Codex 在 PR #92 review 5522929018 指出兩個漏洞：(1) 上次 `Issue` 在綠界成功但回應逾時的發票被標 `SKIPPED` 後，沒有人再查它、也沒有人作廢，綠界留下一張有效發票；(2) 多實例下退款掃描在 HTTP 進行中改 `SKIPPED`，開立的寫回更新 0 列，同樣的結果。「查無就直接 `SKIPPED`」也不夠：遲到的舊 `Issue` 請求仍可能在查詢之後才在綠界落地。以同一個 `RelateNumber` 開立是唯一不怕遲到請求的做法——綠界保證同一個 `RelateNumber` 只有一張，遲到的那個只會被拒。代價是罕見路徑（退款時開立結果不明）會多開一張再作廢一張，作廢在稅務上是正常流程。
+**推翻的代價：** 要避免「開了再作廢」，得假設遲到的 `Issue` 有時間上限（例如認領後超過 `2 × timeout-ms` 查無就視為不會再落地），把 (c) 的「查無就開立」改成「查無且已過安靜期就 `SKIPPED`」。這個假設無法在 stage 驗證，所以本輪不採用。
+
 ## 15. 與其他工作的關係
 
 - **G02**：硬前置。S2 擴充 `EcpayInvoiceClient`、`InvoiceService`、`FakeEinvoiceServer`，使用 `invoices.status='SKIPPED'`、`invoice_cursors` 的第二列
@@ -451,4 +485,5 @@ Reversal retryReversal(Actor a, String orderId);
 
 | 版本 | 日期 | 變更 |
 | --- | --- | --- |
+| v1.1 | 2026-10-15 | 回應 Codex review 5522929018：(1) §6.6 退款掃描不再把 `uncertain=true` 的發票改 `SKIPPED`，改為建作廢列、由 `issueOne` 確定結果，新增競態表、`kind='NONE'`、作廢批次只取已開立的發票、§14.9，驗收 20–21 改寫並新增 21a–21e；(2) `REFUNDED` 游標邊界與 G02 v1.1 統一，驗收 15 改寫；(3) §4 的 CHECK 全部具名 |
 | v1.0 | 2026-10-14 | 初版。PO 2026-10-14 解除 G03 延後，沿用 2026-10-11 stage 硬規則；`DoAction` 不支援 stage，線上退款改為後台退刷 + 系統登記 |
