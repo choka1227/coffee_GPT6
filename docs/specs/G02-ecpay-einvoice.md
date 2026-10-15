@@ -1,6 +1,6 @@
 # G02 — 綠界 B2C 電子發票（只串 stage）
 
-版本：v1.2（2026-10-15）
+版本：v1.3（2026-10-15）
 作者：Claude（PM / SA）
 前置：G01b（PR #87）、G04（PR #90）已合併。本規格**不依賴**任何尚未合併的工作，S1 可以立刻開工。
 決策依據：PO 2026-10-14 決策「G02 電子發票、G03 退款與退單解除延後，接續金流線」，沿用 2026-10-11 決策的 stage 硬規則（GAP-ANALYSIS「PO 決策：金流解除延後，只串測試環境」）。
@@ -81,6 +81,7 @@ CREATE TABLE invoices(
   uncertain BOOLEAN NOT NULL DEFAULT FALSE,
   claim_token VARCHAR(36),
   claimed_until BIGINT,
+  inflight_until BIGINT,
   last_error VARCHAR(200),
   created_at BIGINT NOT NULL,
   updated_at BIGINT NOT NULL,
@@ -90,7 +91,8 @@ CREATE TABLE invoices(
   CONSTRAINT ck_invoices_attempts CHECK(attempts>=0),
   CONSTRAINT ck_invoices_status CHECK(status IN ('PENDING','ISSUED','FAILED','SKIPPED')),
   CONSTRAINT ck_invoices_issued CHECK(status<>'ISSUED' OR (invoice_no IS NOT NULL AND invoice_date IS NOT NULL)),
-  CONSTRAINT ck_invoices_claim CHECK((claim_token IS NULL AND claimed_until IS NULL) OR (claim_token IS NOT NULL AND claimed_until IS NOT NULL AND status='PENDING'))
+  CONSTRAINT ck_invoices_claim CHECK((claim_token IS NULL AND claimed_until IS NULL) OR (claim_token IS NOT NULL AND claimed_until IS NOT NULL AND status='PENDING')),
+  CONSTRAINT ck_invoices_inflight CHECK(inflight_until IS NULL OR status IN ('PENDING','FAILED'))
 );
 CREATE INDEX idx_invoices_status ON invoices(status,updated_at);
 CREATE INDEX idx_invoices_branch_status ON invoices(branch_id,status,updated_at);
@@ -103,9 +105,10 @@ CREATE TABLE invoice_cursors(
 );
 ```
 
-- **CHECK 與 UNIQUE 一律具名，不得寫成欄位上的 inline 約束**。本表共五個 CHECK（`ck_invoices_amount`、`ck_invoices_attempts`、`ck_invoices_status`、`ck_invoices_issued`、`ck_invoices_claim`）與一個 UNIQUE（`uq_invoices_invoice_no`），加上 `orders` 的 `ck_orders_invoice_type`。G04 §14.8 記錄過 V1／V2 的無名 CHECK 跨 H2／PostgreSQL 改不動；這次先具名，日後要擴充值域時可以 `DROP CONSTRAINT ck_… ` 再加
+- **CHECK 與 UNIQUE 一律具名，不得寫成欄位上的 inline 約束**。本表共六個 CHECK（`ck_invoices_amount`、`ck_invoices_attempts`、`ck_invoices_status`、`ck_invoices_issued`、`ck_invoices_claim`、`ck_invoices_inflight`）與一個 UNIQUE（`uq_invoices_invoice_no`），加上 `orders` 的 `ck_orders_invoice_type`。G04 §14.8 記錄過 V1／V2 的無名 CHECK 跨 H2／PostgreSQL 改不動；這次先具名，日後要擴充值域時可以 `DROP CONSTRAINT ck_… ` 再加
 - **索引**：兩個 `CREATE INDEX`（`idx_invoices_status`、`idx_invoices_branch_status`）。`order_id` 與 `invoice_cursors.name` 的主鍵、`uq_invoices_invoice_no` 由資料庫自動建索引，不另建
 - `claim_token`／`claimed_until` 是 §6.5 的排他認領（租約）：兩者同時為 NULL（沒有持有者）或同時有值（有持有者，且只能在 `PENDING` 時持有，`ck_invoices_claim`）。`claim_token` 存 `UUID.randomUUID().toString()`
+- `inflight_until`（v1.3）是 §6.5 的**在途界線**：epoch 毫秒，「在這個時刻之前，過去送出過的某一個 `Issue` 仍可能在綠界成立」。它與持有者**分開建模**（§14.14）：釋放認領、行程當掉、`Unknown` 之後都**不清除**它，只有確定結果（「開立」「拒絕」）的持有者寫回才清成 NULL。`ISSUED`／`SKIPPED` 的列一定是 NULL（`ck_invoices_inflight`），所以 G03 的 `SKIPPED` 在結構上就保證沒有在途請求
 - `SKIPPED` 在 G02 **沒有任何程式會寫入**，保留給 G03（「發票還沒開就退款了，不用開」）。先放進 CHECK 是為了讓 G03 不必動這條約束
 - `invoice_carrier` 長度 8：手機條碼固定 8 碼（`/` + 7 碼）
 - 游標表**不預先 insert**：第一次排程執行時才建立（§6.4 步驟 1），所以啟用前的歷史訂單不會被開立
@@ -164,7 +167,7 @@ ecpay:
 2. `merchant-id`、`hash-key`、`hash-iv` 皆非空白；`hash-key`、`hash-iv` 各為 16 字元（AES-128）
 3. `base-url` 是**精確的** `https://einvoice-stage.ecpay.com.tw`，或 `http://127.0.0.1:<port>`／`http://localhost:<port>`（必須有明確連接埠，給假伺服器用）。其他一律拒絕 —— 正式網域、其他主機、`https://127.0.0.1`、帶路徑或查詢字串的都拒絕。**比照 `EcpayTradeQuery.validateEndpoint` 的寫法**
 4. `orders.invoice-required` 為 `true`（否則會一直累積「缺少發票資訊」的失敗列，§14.7）
-5. `timeout-ms` 在 1000–30000、`interval-ms` ≥ 10000、`batch-size` 在 1–100、`lag-seconds` 在 30–3600、`max-attempts` 在 1–100、`claim-lease-ms` 在 `STALE_REQUEST_WINDOW_MS + 3 × timeout-ms + 60000` 到 3600000 之間（`STALE_REQUEST_WINDOW_MS = 660000` 是程式常數，不是設定，§6.5、§14.13）
+5. `timeout-ms` 在 1000–30000、`interval-ms` ≥ 10000、`batch-size` 在 1–100、`lag-seconds` 在 30–3600、`max-attempts` 在 1–100、`claim-lease-ms` 在 `3 × timeout-ms + 60000` 到 3600000 之間（v1.3：租約只負責排他與接手，不再承擔舊請求的時間界線，所以下限不再含 11 分鐘；舊請求由 `inflight_until` 界定，§6.5、§14.14。`STALE_REQUEST_WINDOW_MS = 660000` 仍是程式常數，用來計算 `inflight_until`）
 
 `enabled=false` 時不做任何檢查，任何值都能啟動。
 
@@ -245,8 +248,8 @@ record Ok(Map<String,Object> data) implements CallResult {}            // TransC
 record Rejected(int rtnCode, String rtnMsg) implements CallResult {}   // TransCode==1 且 RtnCode!=1
 record Unknown(String reason) implements CallResult {}                 // 其餘一切：連線失敗、逾時、非 200、重新導向、TransCode!=1、解密失敗、JSON 錯誤
 
-CallResult issue(InvoiceCandidate c);
-CallResult getIssueByRelateNumber(String orderId);
+CallResult issue(InvoiceCandidate c, long timestampSec);   // v1.3：RqHeader.Timestamp 由呼叫端傳入（§6.5 第 4 步要先把它寫進 inflight_until 再送出）
+CallResult getIssueByRelateNumber(String orderId);          // 查詢不改變綠界狀態，Timestamp 照舊取當下
 ```
 
 **請求格式**（`POST {base-url}/B2CInvoice/Issue`、`/B2CInvoice/GetIssue`，`Content-Type: application/json`）：
@@ -300,51 +303,59 @@ CallResult getIssueByRelateNumber(String orderId);
 
 一句話：**「啟用時刻往前 lag 秒」之後付款的都開立，之前的都不開。** 之所以不是「啟用時刻之後付款的才開」，理由見 §14.6。
 
-**步驟 2 —— 開立。** 取 `status='PENDING'` 依 `updated_at` 最舊的 `batch-size` 筆，逐筆 `issueOne(orderId)`。**每筆之間不共用交易**；HTTP 呼叫期間**不持任何鎖、不開交易**。
+**步驟 2 —— 開立。** 取 `status='PENDING' and (inflight_until is null or inflight_until <= now)` 依 `updated_at` 最舊的 `batch-size` 筆，逐筆 `issueOne(orderId)`。**每筆之間不共用交易**；HTTP 呼叫期間**不持任何鎖、不開交易**。在途界線還沒過的列不取（它們這一輪什麼都不能做，見第 4 步），所以不會佔住批次。
 
-`issueOne`：
+`issueOne`（v1.3 改寫；與 v1.2 的差異見 §14.14）：
 
-1. `orders.invoiceCandidate(orderId)` 重讀，並讀這一列 `invoices`（記下讀到的 `uncertain`，記為 `wasUncertain`）。訂單資料的 `invoice` 為 `null` → `update … set status='FAILED', uncertain=false, last_error='訂單缺少發票資訊' where order_id=? and status='PENDING' and claim_token is null`，結束（沒有發票資訊就不可能呼叫過 `Issue`，所以結果是確定的；重試端點把它設回 `true` 也一樣在這一步被改回 `false`）
-2. **排他認領（租約）**：產生新的 `token`，執行
+1. **重讀訂單**：`orders.invoiceCandidate(orderId)`。這一步**只讀訂單**，不讀 `invoices` 列來做任何決定 —— 發票列的狀態一律以第 2 步認領後的重讀為準（v1.2 在認領前讀 `wasUncertain`，舊快照可能在認領前就過時，Codex review 5529132842）。訂單資料的 `invoice` 為 `null` → `update … set status='FAILED', uncertain=false, last_error='訂單缺少發票資訊' where order_id=? and status='PENDING' and claim_token is null and inflight_until is null`，結束（沒有發票資訊就不可能呼叫過 `Issue`；條件裡的 `inflight_until is null` 是防線，正常情況一定成立）
+2. **排他認領（租約），並在認領後重讀**：產生新的 `token`，執行
 
    ```sql
    update invoices
-      set claim_token=?, claimed_until=?(now + claim-lease-ms), uncertain=true, updated_at=?(now)
+      set claim_token=?, claimed_until=?(now + claim-lease-ms), updated_at=?(now)
     where order_id=? and status='PENDING'
       and (claim_token is null or claimed_until < ?(now))
    ```
 
-   **更新 0 列就結束、不呼叫綠界**（已有未過期的持有者，或這一列已被別的實例、重試端點或 G03 的退款掃描改走了）。只有這個 `update` 會設定 `claim_token`；`claimed_until < now` 才能接手，所以**同一時間最多一個持有者**。認領成功後，下列 3–5 步都以「持有者」身分進行
-3. **送出期限**：持有者在**每一次** HTTP 呼叫之前檢查 `now + timeout-ms <= claimed_until - STALE_REQUEST_WINDOW_MS`（`STALE_REQUEST_WINDOW_MS = 660000`，11 分鐘）。不成立 → **不呼叫**，以持有者寫回（第 5 步）`attempts+1`、維持 `uncertain=true`，結束。這一條保證：任何持有者送出的請求，其 `RqHeader.Timestamp` 都早於 `claimed_until - 11 分鐘`；綠界拒收 `Timestamp` 超過 10 分鐘的請求（§14.13），所以**租約到期、別人可以接手的那一刻起，舊持有者的請求都不可能再在綠界成立**
+   v1.3：認領**不再**設 `uncertain=true`，改在第 4b-1 步、真正送出 `Issue` 之前與 `inflight_until` 一起設。這樣 `uncertain` 在認領後仍保有「上一次是否可能已送出」的意義，第 3 步才有依據。**更新 0 列就結束、不呼叫綠界**（已有未過期的持有者，或這一列已被別的實例、重試端點或 G03 的退款掃描改走了）。只有這個 `update` 會設定 `claim_token`；`claimed_until < now` 才能接手，所以**同一時間最多一個持有者**。
+
+   更新 1 列後，**立刻以 token 重讀**：`select amount, attempts, uncertain, inflight_until from invoices where order_id=? and claim_token=?(token)`，記為 `snap`（0 列 → 結束）。以下 3–6 步的所有決定只看 `snap`。持有期間，除了持有者自己，只有第 7 步的遲到回應補償會碰這一列，而它只會把 `uncertain` 設成 `true`（更保守），不影響本次的決定。`tryClaim`（§10.1）回傳 `Optional<Claim>`，`record Claim(String token, int amount, int attempts, boolean uncertain, Long inflightUntil)`，也就是「認領」與「重讀」是同一個方法，呼叫端拿不到沒有重讀過的 token
+3. **要不要先查**：`snap.uncertain` → 先查（第 4 步 a）；否則直接開立（第 4 步 b）。`uncertain=false` 只有兩種來源：從未送出過 `Issue`（入列時的預設），或上一位持有者得到確定的「拒絕」（綠界確定沒有，也沒有在途請求，第 6 條）—— 兩者都可以直接開立。凡是送出過 `Issue` 而結果不確定的路徑（4b-1、「不明」「失敗」「等待」、重試端點、第 7 步補償）都讓它維持或變成 `true`
 4. 呼叫綠界（全程不開交易、不持鎖）：
-   - 若 `wasUncertain` 或 `attempts > 0`：先 `getIssueByRelateNumber`
+   - **a. 查詢**：記下 `qAt = now`，呼叫 `getIssueByRelateNumber`
      - `Ok` 且 `IIS_Sales_Amount == amount` → 結果「開立」（號碼、日期、隨機碼取自查詢結果），跳到第 5 步
-     - `Ok` 但金額不符 → 結果「失敗」、`last_error='綠界已有同編號發票但金額不符'`、**`uncertain` 維持 `true`**，跳到第 5 步（**不重開**）
-     - `Rejected` → 查無此發票，繼續呼叫 `issue`（**不寫回任何中間狀態**，`uncertain` 在資料庫裡維持 `true`）
+     - `Ok` 但金額不符 → 結果「失敗」、`last_error='綠界已有同編號發票但金額不符'`，跳到第 5 步（**不重開**）
+     - `Rejected`（查無）且 `snap.inflightUntil != null && qAt < snap.inflightUntil` → 結果「等待」：之前送出的某個 `Issue` 還可能在綠界成立，這次的「查無」不能當成「沒開」。跳到第 5 步（**不送出 `Issue`**）。步驟 2 的批次條件已排除這種列，這一條是防線（例如測試直接呼叫 `issueOne`）
+     - `Rejected`（查無）且在途界線已過 → 所有舊請求在綠界都已失效而且都沒有成立，繼續 b（**不寫回任何中間狀態**）
      - `Unknown` → 結果「不明」，跳到第 5 步
-   - 呼叫 `issue`：
-     - `Ok` → 結果「開立」
-     - `Rejected` 且 `rtnCode == 10000009`（RelateNumber 重複）→ 同一個持有期間內**再查一次** `getIssueByRelateNumber`（只回一次，避免迴圈；仍要先過第 3 步的送出期限），依上面的查詢規則得出結果；查詢 `Rejected` → 結果「不明」
-     - `Rejected` 其他 → 結果「拒絕」、`last_error='綠界拒絕開立（<RtnCode>）：<RtnMsg 截 100 字>'`
-     - `Unknown` → 結果「不明」
+   - **b. 寫入在途界線，然後開立**：
+     1. `ts = now / 1000`（秒），`update invoices set uncertain=true, inflight_until=?(ts*1000 + STALE_REQUEST_WINDOW_MS), updated_at=? where order_id=? and claim_token=?(token)`。**更新 0 列 → 已失去認領，結束，不送出**。這個 `update` 必須在送出之前提交（獨立的短交易）
+     2. `issue(c, ts)`（**同一個 `ts`** 放進 `RqHeader.Timestamp`）：
+        - `Ok` → 結果「開立」
+        - `Rejected` 且 `rtnCode == 10000009`（RelateNumber 重複）→ 同一個持有期間內**再查一次** `getIssueByRelateNumber`（只回一次，避免迴圈），`Ok` 依 a 的金額規則得出「開立」或「失敗」；`Rejected`／`Unknown` → 結果「不明」
+        - `Rejected` 其他 → 結果「拒絕」、`last_error='綠界拒絕開立（<RtnCode>）：<RtnMsg 截 100 字>'`
+        - `Unknown` → 結果「不明」
 5. **持有者寫回**：一律 `update invoices set …, claim_token=null, claimed_until=null, updated_at=now where order_id=? and claim_token=?(token)`，也就是**只有仍持有這個 token 的人寫得回去**：
-   - 「開立」→ `status='ISSUED'`、`uncertain=false`、`issued_at=now`
-   - 「拒絕」→ `status='FAILED'`、`uncertain=false`
-   - 「失敗」（金額不符）→ `status='FAILED'`、`uncertain=true`
-   - 「不明」→ `status` 維持 `PENDING`、`uncertain=true`、`attempts+1`；若 `attempts+1 >= max-attempts` → `status='FAILED'`、`last_error='連續 <n> 次無法確認開立結果'`，仍保留 `uncertain=true`（重試時一定先查詢）
-6. **失去認領後的回應（更新 0 列）**：代表租約已到期且被別人接手，或這一列已被改走。
-   - 結果是「拒絕」或「不明」→ 什麼都不做（現任持有者或下一輪會自己確定結果）
-   - 結果是「開立」→ 這是「綠界確定有這張發票」的實證，**不能丟掉**。執行補償：`update invoices set status='PENDING', uncertain=true, claim_token=null, claimed_until=null, last_error='收到遲到的開立回應，待確認', updated_at=now where order_id=? and status in ('FAILED','SKIPPED')`；`status='PENDING'` 時改為 `update … set uncertain=true where order_id=? and status='PENDING'`（不動別人的認領）；`ISSUED` 時不動。WARN 一行（只記 `orderId` 與「遲到的開立回應」）。下一輪 `issueOne` 會照常認領、先查詢、寫成 `ISSUED`（G03 會在那時建立作廢列）。依第 3 步與 §14.13，這條路徑在正常運作下不應發生；它是時間假設失效時的第二道防線
+   - 「開立」→ `status='ISSUED'`、`uncertain=false`、`inflight_until=null`、`issued_at=now`
+   - 「拒絕」→ `status='FAILED'`、`uncertain=false`、`inflight_until=null`
+   - 「失敗」（金額不符）→ `status='FAILED'`、`uncertain=true`、`inflight_until` **不動**
+   - 「不明」→ `status` 維持 `PENDING`、`uncertain=true`、`attempts+1`、`inflight_until` **不動**；若 `attempts+1 >= max-attempts` → `status='FAILED'`、`last_error='連續 <n> 次無法確認開立結果'`，仍保留 `uncertain=true` 與 `inflight_until`
+   - 「等待」→ `status` 維持 `PENDING`、`uncertain=true`、`attempts` **不加**、`inflight_until` **不動**、`last_error='等待前次開立請求失效'`
+6. **為什麼「開立」「拒絕」可以清掉 `inflight_until`**：走到 4b 之前，查詢是在 `qAt >= 舊的 inflight_until` 時送出的，所以在那之前送出的每一個 `Issue` 都已在綠界失效且沒有成立；4b 之後唯一還可能成立的請求是自己這一個，而它已經得到確定的回應。「開立」直接從查詢得出時（4a），綠界已有這張發票，再有遲到的請求也只會因 `RelateNumber` 重複被拒
+7. **失去認領後的回應（更新 0 列）**：代表租約已到期且被別人接手，或這一列已被改走。
+   - 結果是「拒絕」「不明」「失敗」「等待」→ 什麼都不做。現任持有者會看到 `inflight_until`（4b-1 已提交），在界線過後才會下結論
+   - 結果是「開立」→ 這是「綠界確定有這張發票」的實證，**不能丟掉**。執行補償：`update invoices set status='PENDING', uncertain=true, claim_token=null, claimed_until=null, last_error='收到遲到的開立回應，待確認', updated_at=now where order_id=? and status in ('FAILED','SKIPPED')`；`status='PENDING'` 時改為 `update … set uncertain=true where order_id=? and status='PENDING'`（不動別人的認領）；`ISSUED` 時不動。WARN 一行（只記 `orderId` 與「遲到的開立回應」）。下一輪 `issueOne` 會照常認領、先查詢、寫成 `ISSUED`（G03 會在那時建立作廢列）。依 §14.14，這條路徑在正常運作下不應發生；它是時間假設失效時的第二道防線
 
-**`uncertain` 與認領的不變式（G03 依賴這一條）：**
+**`uncertain`、認領與在途界線的不變式（G03 依賴這一條）：**
 
-- `uncertain` 從 `false` 變成 `true` 只有兩條路：認領（第 2 步）與重試端點（§6.6）。從 `true` 變成 `false` **只有持有者寫回**（第 5 步的「開立」「拒絕」）與第 1 步的「缺少發票資訊」（該路徑不可能呼叫過綠界，且要求 `claim_token is null`）
-- 因此 **`status in ('PENDING','FAILED') and uncertain=false and claim_token is null`** 的列，代表「綠界確定沒有這張發票，沒有任何持有者，也沒有任何還可能在綠界成立的舊請求」：
-  - 寫入 `uncertain=false` 的持有者是當下唯一的持有者（第 2 步的排他條件）
-  - 它之前的每一個持有者，其請求的 `Timestamp` 都早於自己的 `claimed_until - 11 分鐘`，而現任持有者是在那個 `claimed_until` 之後才接手的，所以那些請求在綠界都已過了 10 分鐘的有效期（第 3 步、§14.13）
-  - 持有者寫回同時清掉 `claim_token`，所以「沒有持有者」與「`uncertain=false`」在同一個條件更新裡同時成立
-- 任何人只要以 `where … and uncertain=false and claim_token is null` 的條件更新搶到這一列（G03 的退款掃描），就保證之後也不會有人呼叫 `Issue`：認領的條件要求 `status='PENDING'`，而那個條件更新已把它改成 `SKIPPED`；兩個條件更新作用在同一列，資料庫保證只有一個先成立
-- 行程在持有期間當掉時，這一列留在 `PENDING`／`uncertain=true`／`claim_token` 有值；`claimed_until` 過後下一輪接手，先查詢，不會盲目重開
+- `inflight_until` 只在 4b-1（持有者、送出前）寫入，只在「開立」「拒絕」的持有者寫回清除。釋放認領、`Unknown`、行程當掉、重試端點都**不清除**它
+- `uncertain` 從 `false` 變成 `true` 有三條路：4b-1（送出前）、重試端點（§6.6）、第 7 步補償。從 `true` 變成 `false` **只有**「開立」「拒絕」的持有者寫回，以及第 1 步的「缺少發票資訊」（要求 `claim_token is null and inflight_until is null`）
+- 因此 **`status in ('PENDING','FAILED') and uncertain=false and claim_token is null and inflight_until is null`** 的列，代表「綠界確定沒有這張發票，沒有任何持有者，也沒有任何還可能在綠界成立的舊請求」：
+  - 寫入 `uncertain=false` 的是「拒絕」：它的查詢晚於所有舊請求的失效時刻（第 6 條），自己的請求被確定拒絕
+  - 之後要再有人送出 `Issue`，必須先認領（要求 `status='PENDING'` 且沒有未過期的持有者），再在 4b-1 把 `uncertain` 設回 `true`；持有期間 `claim_token` 有值，所以上面的條件不成立
+- 任何人只要以 `where … and uncertain=false and claim_token is null and inflight_until is null` 的條件更新搶到這一列（G03 的退款掃描），就保證之後也不會有人呼叫 `Issue`：認領的條件要求 `status='PENDING'`，而那個條件更新已把它改成 `SKIPPED`；兩個條件更新作用在同一列，資料庫保證只有一個先成立
+- **「`Unknown` 後釋放」不會讓接手者誤判**（v1.2 的缺口）：A 的 `Issue` 逾時 → 寫回「不明」、釋放認領、`inflight_until` 保留 → B 立刻認領也不會送出 `Issue`：步驟 2 的批次不取它；就算直接呼叫，4a 的查無也會因 `qAt < inflight_until` 得出「等待」。界線過後 B 的查詢若查到 A 遲到成立的發票 → `ISSUED`；查無 → A 的請求已確定失效，B 才開立
+- 行程在持有期間當掉時，這一列留在 `PENDING`／`uncertain=true`／`claim_token` 有值；`claimed_until` 過後下一輪接手，先查詢，且同樣受在途界線約束
 
 **步驟 3 —— INFO 摘要一行：** `綠界發票：入列 <n>、開立 <n>、失敗 <n>、待確認 <n>`。全為 0 時不印。
 
@@ -369,7 +380,7 @@ public interface Invoices {
 | --- | --- | --- | --- |
 | GET | `/api/payments/invoices/order/{orderId}` | 先呼叫 `orders.get(a, orderId)`（它已經處理 SELF／BRANCH／GLOBAL 與 404），通過才查 `invoices` | 200 `Invoice`；尚無發票列 → 200 `{"status":"NONE"}`（其餘欄位 null） |
 | GET | `/api/payments/invoices/failed?branchId=` | `PAYMENT_RECONCILE`、非顧客；非 GLOBAL 只看本店（帶他店 `branchId` → 403） | 200 `InvoicePage`，`updated_at` 新到舊，最多 200 筆，超過 `truncated=true` |
-| POST | `/api/payments/invoices/order/{orderId}/retry` | `PAYMENT_RECONCILE`、非顧客、`a.branch(invoice.branchId)` | `FAILED` → 以 `where order_id=? and status='FAILED'` 條件更新為 `PENDING`、`attempts=0`、**`uncertain=true`**、`claim_token=null`、`claimed_until=null`、`last_error=null`，200（`FAILED` 列依 `ck_invoices_claim` 本來就沒有持有者）；不存在 404 `找不到這筆發票`；不是 `FAILED` → 409 `這張發票目前不需要重試` |
+| POST | `/api/payments/invoices/order/{orderId}/retry` | `PAYMENT_RECONCILE`、非顧客、`a.branch(invoice.branchId)` | `FAILED` → 以 `where order_id=? and status='FAILED'` 條件更新為 `PENDING`、`attempts=0`、**`uncertain=true`**、`claim_token=null`、`claimed_until=null`、`last_error=null`，**`inflight_until` 不動**（v1.3：店長按重試不代表舊請求已失效；連續不明而 `FAILED` 的列仍要等界線過後才能下結論），200（`FAILED` 列依 `ck_invoices_claim` 本來就沒有持有者）；不存在 404 `找不到這筆發票`；不是 `FAILED` → 409 `這張發票目前不需要重試` |
 
 - **權限重用 `PAYMENT_RECONCILE`**，不新增權限（§14.8）
 - `retry` 不在請求內呼叫綠界，只改狀態，交給下一輪排程。理由：避免顧客端以外又多一個可觸發連外呼叫的端點
@@ -414,11 +425,11 @@ public interface Invoices {
 
 JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice/GetIssue`。**它自己用 `EinvoiceCodec` 解密請求、加密回應**（測試同時驗證雙向編碼）。`EinvoiceCodec` 是 package-private 的話，假伺服器另寫一份 30 行的 AES 實作，或把 `EinvoiceCodec` 改成 `public final` 放在 `internal`（測試在 `coffee-app` 可以引用 —— `ModuleBoundariesTest` 只管業務模組之間，組裝層例外）。二選一，回報裡寫明。
 
-**認領方法的可見性**：驗收 21b 要直接呼叫 §6.5 第 2 步的認領 SQL，所以把它寫成 `InvoiceService` 的 `public Optional<String> tryClaim(String orderId, long now)`（回傳 token），與 `public void issueOne(String orderId)` 同樣是 `public`、放在 `internal`。理由同上：測試在組裝層，可以引用 `internal`；業務模組之間仍不得引用。
+**認領方法的可見性**：驗收 21b 要直接呼叫 §6.5 第 2 步的認領 SQL，所以把它寫成 `InvoiceService` 的 `public Optional<Claim> tryClaim(String orderId, long now)`（v1.3：回傳認領後重讀的 `Claim`，不是裸 token，§6.5 第 2 步），與 `public void issueOne(String orderId)` 同樣是 `public`、放在 `internal`。**測試接縫（v1.3）**：另提供 `public void issueOne(String orderId, Runnable afterOrderRead)`，在第 1 步讀完訂單、第 2 步認領之前執行 `afterOrderRead`；`issueOne(orderId)` 以 no-op 呼叫它。驗收 21h 用它製造「B 先讀、A 跑完、B 才認領」的交錯。理由同上：測試在組裝層，可以引用 `internal`；業務模組之間仍不得引用。
 
 **它會記錄**每一筆收到的請求（路徑 + 外層 `RqHeader.Timestamp` + 解密後的 Data JSON），供測試斷言 `RelateNumber`、`SalesAmount`、`CarrierType` 等欄位。
 
-**掛勾**：每支 API 可設一個 `Consumer<Request>`，在**決定回應之前**同步執行（測試在裡面讀寫 DB、等 `CountDownLatch`）。驗收 21、21a–21e 用它製造交錯。
+**掛勾**：每支 API 可設一個 `Consumer<Request>`，在**決定回應之前**同步執行（測試在裡面讀寫 DB、等 `CountDownLatch`）。驗收 21、21a–21h 用它製造交錯。
 
 情境（`enum Scenario`，**每支 API 各自可設定**）：
 
@@ -429,6 +440,7 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 | `REJECTED` | `RtnCode=4000001`、`RtnMsg="參數錯誤"` | `RtnCode=1600003` |
 | `SUCCEED_THEN_TIMEOUT` | **記住發票**，然後睡到逾時才回（模擬「成功但回應沒回來」） | 同 `OK` |
 | `TIMEOUT` | 不記住，睡到逾時 | 睡到逾時 |
+| `DELAYED_EFFECT`（v1.3） | **不記住**，睡到用戶端逾時（用戶端得到 `Unknown`）；請求放進「待生效」佇列。測試呼叫 `applyDelayed()` 時才把佇列裡的請求當成 `OK` 開立並記住（模擬「綠界在用戶端放棄之後才處理完」）；呼叫 `dropDelayed()` 則丟棄（模擬請求過期失效）。**不得以 sleep 決定生效時刻** | 同 `OK`（只看已記住的） |
 | `HTTP_500` | 回 500 | 回 500 |
 | `TRANS_CODE_ERROR` | `TransCode=999`、`Data` 空 | 同 |
 | `BAD_CIPHER` | `TransCode=1`、`Data` 是無法解密的亂碼 | 同 |
@@ -476,15 +488,17 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 
 ### S1 — schema、訂單發票資訊、`Orders` 新方法
 
-**動到：** `V16__einvoice.sql`、`Orders.java`、`OrderService.java`、所有 `new Orders.Create(...)` 呼叫點（只補 `null`）、`application.yml`（只加 `orders.invoice-required`）、新增 `OrderInvoiceRequestTest.java`。
+**動到：** `V16__einvoice.sql`、`Orders.java`、`OrderService.java`、所有 `new Orders.Create(...)` 呼叫點（只補 `null`）、`application.yml`（只加 `orders.invoice-required`）、新增 `OrderInvoiceRequestTest.java`；**前置修正（v1.3）** `coffee-payments/internal/ReconciliationService.java`（見下）。
 
-**驗收子集：** 1–6。
+**前置修正 —— 主線既有的 1 ms 時間彈（v1.3 登記，與發票無關，但會讓本規格任何一個階段的 CI 隨機變紅）：** PR #92 head `8c2c0e3` 的 push CI（run 38692156036）在 `ReconciliationTest.outOfRangePaymentDateFallsBackWithoutRejectingConfirmedPayment:319` 失敗，`expected 1792045528109`、`actual 1792045528110`；同一個 commit 的 PR CI 是綠的。根因在生產程式碼：`ReconciliationService.verify`（`:441`）與 `perform`（`:510`）各自呼叫一次 `System.currentTimeMillis()`，「以查核時間入帳」的 `paidAt` 取前者、回傳的 `queriedAt` 取後者，跨毫秒時兩者差 1。**修法：** `perform` 把自己的 `now` 傳進 `verify`（`verify(id, expectedTotal, now)`），刪掉 `verify` 內的 `currentTimeMillis()`；`paidAt` 與 `queriedAt`、`payment_reconciliations.queried_at` 從此是同一個值。**不得**放寬測試斷言（`isEqualTo(result.queriedAt())` 是正確的契約）。
+
+**驗收子集：** 1–6、6a。
 
 ### S2 — 編解碼、用戶端、開立排程、假伺服器
 
 **動到：** 新增 `EinvoiceCodec.java`、`EcpayInvoiceClient.java`、`InvoiceService.java`（只有排程與 `issueOne`，**還沒有** `Invoices` 介面）、`application.yml`（`ecpay.invoice.*`）、新增 `FakeEinvoiceServer.java`、`EinvoiceCodecTest.java`、`EinvoiceEndToEndTest.java`、`EinvoiceStageGuardTest.java`、`EcpayNoEgressGuardTest.java`（只新增方法）。
 
-**驗收子集：** 7–22（含 21a–21f）。
+**驗收子集：** 7–22（含 21a–21h）。
 
 **規模估計：** 本規格最重的一段（一個編解碼器、一個用戶端、一個排程、一支約 12 個情境的端到端測試）。**若一次做不完，切點在用戶端與排程之間**：先推 `EinvoiceCodec` + `EcpayInvoiceClient` + 假伺服器 + 驗收 7–11（此時沒有人呼叫用戶端，可以獨立合併），排程與驗收 12–22 下一次執行接續。**不要**把排程做一半就推。
 
@@ -492,18 +506,19 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 
 **動到：** 新增 `Invoices.java`、`InvoiceController.java`、`InvoiceService.java`（實作 `Invoices`）、`EcpayService.config()`、`application-ecpay-stage.yml`、`MenuView.vue`、新增 `invoice.ts` 與 `invoice.spec.ts`、`OrdersView.vue`、`ReconciliationView.vue`、`shared/types.ts`、DOM 測試、新增 `InvoiceApiTest.java`、`EcpayStageProfileTest.java`（只新增斷言）、`docs/ECPAY.md`、`docs/reports/G02-ecpay-einvoice.md`。
 
-**驗收子集：** 23–34。
+**驗收子集：** 23–34（含 26a）。
 
 ## 13. 驗收條件
 
 **S1**
 
-- [ ] 1. `V16__einvoice.sql` 建立 §4 的欄位、兩張表、兩個 `CREATE INDEX`；六個 CHECK（含 `ck_orders_invoice_type`、`ck_invoices_claim`）與 `uq_invoices_invoice_no` 皆以 §4 的名稱具名，**SQL 裡沒有任何 inline 的 `CHECK(...)` 或 `UNIQUE`**；Flyway 在 H2 與 CI 用的資料庫上都能套用；`V1`–`V15` 一字未改
+- [ ] 1. `V16__einvoice.sql` 建立 §4 的欄位、兩張表、兩個 `CREATE INDEX`；七個 CHECK（含 `ck_orders_invoice_type`、`ck_invoices_claim`、`ck_invoices_inflight`）與 `uq_invoices_invoice_no` 皆以 §4 的名稱具名，**SQL 裡沒有任何 inline 的 `CHECK(...)` 或 `UNIQUE`**；Flyway 在 H2 與 CI 用的資料庫上都能套用；`V1`–`V15` 一字未改
 - [ ] 2. `orders.invoice-required=false`：不帶 `invoice` 建立訂單 → 201、四個欄位為 NULL、`Order.invoice == null`（**既有的建立訂單測試全部不修改即通過**，`new Create(...)` 補 `null` 不算修改測試邏輯）
 - [ ] 3. `orders.invoice-required=true`：不帶 `invoice` → 400 `請選擇發票開立方式`；§6.2 表格每一列各一條（`@ParameterizedTest`），訊息逐字相符
 - [ ] 4. 三種類型各一條成功案例，DB 只存相關欄位（`CLOUD` 的 `carrier`／`loveCode` 為 NULL 等）；`carrier` 小寫輸入存成大寫
 - [ ] 5. 同一個 `Idempotency-Key`、同樣品項但不同 `invoice.email` → 409（指紋納入發票資訊）；完全相同 → 回同一筆訂單
 - [ ] 6. `invoiceCandidates`：未付款、已取消不出現；`(paid_at, id)` 嚴格遞增；`paid_at == afterAt` 時以 `id > afterId` 續接（造兩筆同 `paid_at` 的訂單驗證不漏不重）；`until` 之後的不出現；`limit` 生效。`invoiceCandidate` 不存在回 empty
+- [ ] 6a. （前置修正）`ReconciliationService.verify` 不再自行取時間；`ReconciliationTest` 一字未改且全綠；`grep -n currentTimeMillis` 在 `verify` 方法內無結果
 
 **S2**
 
@@ -522,12 +537,14 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 - [ ] 19. `REJECTED` → `FAILED`、`last_error` 含 `4000001`；`attempts` 達 `max-attempts`（測試設 3）→ `FAILED`、`uncertain=true`
 - [ ] 20. 訂單沒有發票資訊（`invoice-required` 關閉時建立、之後才付款）→ `FAILED`、`訂單缺少發票資訊`，不呼叫綠界
 - [ ] 21. 持有者寫回：`REJECTED` 情境下，在 `Issue` 掛勾內以 SQL 把該列的 `claim_token` 改成另一個值（模擬被接手）→ 回來後寫回更新 0 列、該列維持 `PENDING`／`uncertain=true`、`claim_token` 仍是測試設的值（**`Rejected` 沒有把別人的狀態清成 `uncertain=false`**）
-- [ ] 21a. 認領：假伺服器收到 `Issue` 的當下（掛勾內讀 DB），該列 `uncertain=true`、`claim_token` 有值、`claimed_until == 認領時的 now + claim-lease-ms`；入列後直接改 `FAILED` 再呼叫 `issueOne` → 不呼叫綠界。持有者寫回之後 `claim_token`／`claimed_until` 皆為 NULL；`Rejected` 之後 `uncertain=false`；`訂單缺少發票資訊` 之後 `uncertain=false`
+- [ ] 21a. 認領：假伺服器收到 `Issue` 的當下（掛勾內讀 DB），該列 `uncertain=true`、`claim_token` 有值、`claimed_until == 認領時的 now + claim-lease-ms`、`inflight_until == 該請求 RqHeader.Timestamp × 1000 + 660000`（假伺服器記錄的 Timestamp）；入列後直接改 `FAILED` 再呼叫 `issueOne` → 不呼叫綠界。持有者寫回之後 `claim_token`／`claimed_until` 皆為 NULL；`Rejected` 之後 `uncertain=false`、`inflight_until` 為 NULL；`OK` 之後 `inflight_until` 為 NULL；`TIMEOUT` 之後 `inflight_until` **保留**；`訂單缺少發票資訊` 之後 `uncertain=false`
 - [ ] 21b. **兩 worker 排他**（`CountDownLatch`）：兩條執行緒先各自讀到同一列（`PENDING`／`uncertain=false`／無持有者），在 latch 放行後同時執行第 2 步的認領 SQL（測試直接呼叫 `InvoiceService` 的認領方法；該方法為 `public`，見 §10.1 的可見性說明）→ **恰好一個**更新 1 列。重複 20 次皆成立
 - [ ] 21c. **在途期間另一個 worker 跑 `issueOne`**：worker A 的 `Issue` 掛勾內等 latch；此時 worker B 對同一筆呼叫 `issueOne` → B **沒有送出任何請求**（假伺服器的請求數不變）、該列 `claim_token` 仍是 A 的；放行 A（`OK`）→ `ISSUED`、`Issue` 總共只被呼叫一次
 - [ ] 21d. **接手當掉的持有者**：以 SQL 把一列設為 `PENDING`／`uncertain=true`／`claim_token='dead'`／`claimed_until=now+60000` → `issueOne` 不送出請求；改 `claimed_until=now-1` → `issueOne` 接手、**先 `GetIssue`**（假伺服器斷言呼叫順序），`SUCCEED_THEN_TIMEOUT` 先前記住的發票 → `ISSUED`，`Issue` 沒有再被呼叫
-- [ ] 21e. **送出期限**：`uncertain=true` 的列，在 `GetIssue` 掛勾內以 SQL 把 `claimed_until` 改成 `now + 1000` → 查詢回 `Rejected` 後**不送出 `Issue`**，該列 `attempts+1`、`uncertain=true`、持有者已清除
+- [ ] 21e. **在途界線擋住批次與開立**（v1.3 取代 v1.2 的「送出期限」）：以 SQL 把一列設為 `PENDING`／`uncertain=true`／無持有者／`inflight_until=now+60000` → 跑一輪排程 → 假伺服器**沒有收到任何請求**（批次不取）；直接呼叫 `issueOne` → 只收到一次 `GetIssue`、**沒有 `Issue`**，該列 `PENDING`／`uncertain=true`、`attempts` 不變、`last_error='等待前次開立請求失效'`、持有者已清除；改 `inflight_until=now-1` → 下一輪 `GetIssue` 查無後才 `Issue`
 - [ ] 21f. **遲到的開立回應**：`OK` 情境，在 `Issue` 掛勾內以 SQL 把該列改成 `FAILED`／`uncertain=false`／無持有者（模擬時間假設失效）→ 回應回來後該列被補償為 `PENDING`／`uncertain=true`、`last_error='收到遲到的開立回應，待確認'`；下一輪先 `GetIssue` → `ISSUED`，`Issue` 總共只被呼叫一次。同一情境但改成 `PENDING` 且 `claim_token='other'` → 只把 `uncertain` 設 `true`、`claim_token` 仍為 `'other'`
+- [ ] 21g. **`Unknown` 後早釋放、舊請求延後成立**（Codex review 5529132842 的交錯）：`Issue` 設 `DELAYED_EFFECT`。(1) worker A 跑 `issueOne` → `Unknown` → 該列 `PENDING`／`uncertain=true`／無持有者／`inflight_until` 有值（A 的請求仍在假伺服器的待生效佇列）；(2) worker B 立刻跑一輪排程、再直接呼叫 `issueOne` → **`Issue` 總數仍為 1**（B 至多送出 `GetIssue`）；(3) 假伺服器 `applyDelayed()`（A 的請求此刻才成立）；(4) 以 SQL 把 `inflight_until` 改成 `now-1`（模擬界線已過），跑一輪 → `GetIssue` 查到 → `ISSUED`。**最終斷言**：假伺服器上恰好一張發票、本地 `ISSUED`、號碼一致、`Issue` 總數 1。變體：(3) 改呼叫 `dropDelayed()` → (4) 後 `GetIssue` 查無 → `Issue` → `ISSUED`，假伺服器上恰好一張
+- [ ] 21h. **認領前的舊快照不得決定外部呼叫**（`CountDownLatch`）：一筆 `PENDING`／`uncertain=false`／`attempts=0`／無持有者的發票，`Issue` 設 `DELAYED_EFFECT`。(1) worker B 呼叫 `issueOne(orderId, afterOrderRead)`，在 `afterOrderRead` 內等 latch（B 已讀完訂單、尚未認領）；(2) worker A 跑完整的 `issueOne` → `Unknown`、釋放認領；(3) 放行 B → B 認領成功，**重讀到 `uncertain=true`、`inflight_until` 有值** → 只送 `GetIssue`、查無後得出「等待」，**沒有送出 `Issue`**。斷言：`Issue` 總數 1、該列 `PENDING`／`uncertain=true`／`inflight_until` 未變
 - [ ] 22. **log 衛生**：`OutputCaptureExtension` 擷取的完整輸出不含測試 key、iv、任何測試 email、手機條碼、捐贈碼，也沒有 `\tat ` 開頭的行（`@AfterEach` 每個情境斷言一次，比照 G04 驗收 20）；`EcpayNoEgressGuardTest` 新增的三個方法與反向樣本全綠
 
 **S3**
@@ -536,6 +553,7 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 - [ ] 24. `GET /api/payments/invoices/failed`：總部看到兩店；店長只看本店；店長帶他店 `branchId` → 403；收銀與顧客 → 403；超過 200 筆 `truncated=true`
 - [ ] 25. `POST …/retry`：店長重試本店 `FAILED` → 200、`PENDING`、`attempts=0`、`uncertain=true`；他店店長 → 403 且資料不變；收銀 → 403；不帶 CSRF → 403；`ISSUED` → 409；不存在 → 404
 - [ ] 26. 重試後下一輪排程：先 `GetIssue`、再決定是否 `Issue`（假伺服器斷言呼叫順序）
+- [ ] 26a. **重試不清除在途界線**（v1.3）：`TIMEOUT` 情境連續到 `max-attempts`（測試設 3）→ `FAILED`／`uncertain=true`／`inflight_until` 有值 → `POST …/retry` → `PENDING`／`attempts=0`／`inflight_until` 與重試前相同；界線未過之前跑一輪 → 假伺服器沒有收到任何請求
 - [ ] 27. 所有端點的回應本文不含 key、iv、merchant id、base-url；`GET /api/payments/config` 多 `invoice.enabled`，既有欄位不變
 - [ ] 28. `invoice.spec.ts`：§6.2 每條規則一正一反，訊息與後端逐字相同
 - [ ] 29. `MenuView.vue` DOM 測試：`invoice.enabled=false` 時沒有發票欄位且 payload 無 `invoice`；`true` 時三種類型切換顯示正確欄位、驗證失敗不送出、成功時 payload 的 `invoice` 只含相關欄位
@@ -623,6 +641,8 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 
 **v1.2 更正：** v1.1 的認領條件只有 `status='PENDING'`，不是排他的：兩個實例都會認領成功、都呼叫 `Issue`，先回來的 `Rejected` 會把列寫成 `FAILED`／`uncertain=false`，而另一個請求仍在途（Codex 在 PR #92 review 5526548535 指出的交錯）。v1.2 改為 §14.13 的租約認領。
 
+**v1.3 更正：** 認領本身不再設 `uncertain=true`，改在真正送出 `Issue` 之前（§6.5 第 4b-1 步）與 `inflight_until` 一起設。本條的目的（讓 `uncertain=false` 成為「綠界確定沒有、也沒有在途請求」的不變式）不變；持有期間由 `claim_token` 排除，送出之後由 `uncertain`／`inflight_until` 排除（§14.14）。
+
 ### 14.13 排他認領用「租約 + token」，並以綠界的 `Timestamp` 有效期界定舊請求
 
 **決定：** §6.5 第 2–6 步。認領寫入 `claim_token` 與 `claimed_until = now + claim-lease-ms`（預設 15 分鐘），只有沒有持有者或租約已過期才能認領；所有寫回以 `claim_token = 自己的 token` 為條件；持有者只在 `claimed_until - 11 分鐘` 之前送出請求；失去認領後收到的「開立」回應走補償。
@@ -631,12 +651,29 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 - **排他**：`claimed_until < now` 才能接手，所以同一時間只有一個持有者；以 token 寫回，被接手的舊持有者寫不回任何東西，不會用 `Rejected` 清掉別人的 `uncertain`（v1.1 的缺口）
 - **可接手**：行程當掉時不需要人工解鎖，租約到期自動由下一輪接手，接手後先查詢
 - **舊請求的時間界線**：只有「租約」還不夠 —— 舊持有者的請求可能在租約到期前一刻送出、在綠界晚一點才成立，而新持有者剛好拿到確定的 `Rejected`，就又回到「本地以為沒開、綠界其實開了」。綠界的電子發票 API 以 `RqHeader.Timestamp` 驗證請求時間，**超過 10 分鐘的請求不受理**（官方 SDK 指南與 B2C 電子發票文件的 `Timestamp` 說明；以 §11 步驟 8 的實機結果為準）。持有者只在 `claimed_until - 11 分鐘` 之前送出，所以租約一到期，所有舊請求在綠界都已失效。這把「舊請求最晚何時可能成立」從無法驗證的網路延遲，換成一個綠界自己會執行、而且 stage 可以實測的規則
-- **第二道防線**：萬一時間假設失效（例如實機發現綠界不檢查 `Timestamp`），只要舊持有者還活著收到「開立」，§6.5 第 6 步的補償會把列拉回 `PENDING`／`uncertain=true`，下一輪查到就寫 `ISSUED`，G03 再補作廢。剩下沒蓋到的只有「舊持有者在請求送出後當掉、而請求在 10 分鐘外才成立」，這正是 `Timestamp` 規則排除的情況
+- **第二道防線**：萬一時間假設失效（例如實機發現綠界不檢查 `Timestamp`），只要舊持有者還活著收到「開立」，§6.5 第 7 步（v1.3 編號）的補償會把列拉回 `PENDING`／`uncertain=true`，下一輪查到就寫 `ISSUED`，G03 再補作廢。剩下沒蓋到的只有「舊持有者在請求送出後當掉、而請求在 10 分鐘外才成立」，這正是 `Timestamp` 規則排除的情況
 - **代價**：當掉後的接手最慢 15 分鐘；發票的法定開立期限以天計，這個延遲無關緊要。正常路徑多寫兩個欄位，不多一次 SQL（認領本來就有）
 
 **推翻的代價：**
 - 若 §11 步驟 8 實測發現綠界**不檢查** `Timestamp`：把 `STALE_REQUEST_WINDOW_MS` 的依據改為「`timeout-ms` × 3 + 安全邊際」，並在 G03 把「退款時 `uncertain=false` 直接 `SKIPPED`」改為「先建作廢列、等租約到期加一個安靜期後以 `GetIssue` 確認查無才 `SKIPPED`」（G03 §14.9 的推翻方案），約半個施工階段
 - 改用資料庫的 `select … for update skip locked` 持鎖跨 HTTP：要放棄 §14.11「HTTP 期間不持鎖」，重試端點會被卡住最長 `3 × timeout-ms`，而且行程當掉時鎖會隨連線釋放，舊請求的時間界線問題仍然存在 —— 不比租約安全
+
+**v1.3 更正：** 本條的「持有者只在 `claimed_until - 11 分鐘` 之前送出」**已被 §14.14 取代**。它只涵蓋「等租約到期才接手」，而 `Unknown` 之後持有者會立即釋放認領，接手者不必等租約到期（Codex 在 PR #92 review 5529132842 指出）。租約與 token 的排他、可接手、以 token 寫回、第二道防線仍然有效；舊請求的時間界線改由持久的 `inflight_until` 承擔。
+
+### 14.14 「目前沒有持有者」與「過去的請求都已失效」分開建模：持久的在途界線 `inflight_until`
+
+**決定：** §6.5 第 2–7 步（v1.3）。持有者在**送出 `Issue` 之前**，先以 token 為條件提交 `inflight_until = RqHeader.Timestamp × 1000 + 11 分鐘`，再用同一個 `Timestamp` 送出。這個欄位不隨認領釋放、`Unknown`、行程當掉或重試而清除，只有得到確定結果（「開立」「拒絕」）的持有者寫回才清除。任何持有者要從「查無」推出「可以開立」或「確定沒開」，查詢必須在 `inflight_until` 之後送出；批次直接不取界線未過的列。另外，認領與重讀合為一步（`tryClaim` 回傳重讀後的 `Claim`），認領不再設 `uncertain`，改在送出前與 `inflight_until` 一起設。
+
+**理由：**
+- v1.2 用「租約到期」同時代表兩件事：「沒有人持有」與「舊請求都失效了」。`Unknown` 寫回會清掉租約，於是第一件事成立了、第二件事沒有：A 的請求還在綠界處理，B 立刻接手、查無、開立被拒，就寫出 `FAILED`／`uncertain=false`，G03 隨即 `SKIPPED`，A 的請求隨後成立 —— 綠界有效發票、本地 `SKIPPED`、沒有作廢列。兩件事的生命週期本來就不同（持有是「現在誰在做」，在途是「過去送出了什麼」），用一個欄位表示必然有一條路徑把它們拆開
+- 界線寫在**送出之前**、而且是**持久**的：送出後行程才當掉、`Unknown` 後才釋放、租約過期後才被接手，這三種情況下界線都已經在資料庫裡。送出前寫入失敗（失去認領）就不送，所以「送出了卻沒有界線」不可能發生
+- 界線的長度仍依賴綠界拒收 `Timestamp` 超過 10 分鐘的請求（§11 步驟 8 實測），多留 1 分鐘給各伺服器之間的時鐘誤差（前提：伺服器以 NTP 對時，誤差在 1 分鐘內）。和 v1.2 不同的是，它不再需要假設「接手一定發生在舊租約到期之後」
+- 認領前的快照（v1.2 的 `wasUncertain`）會在認領前過時；把重讀放進認領、讓呼叫端拿不到沒重讀過的 token，從介面上排除這類錯誤
+- **代價**：`Unknown` 之後要等 11 分鐘才會重試或下結論（v1.2 是下一輪就查）。發票的法定開立期限以天計，無關緊要；正常路徑（一次 `OK`）多一次單列 `update`（送出前寫界線）
+
+**推翻的代價：**
+- 若 §11 步驟 8 實測發現綠界**不檢查** `Timestamp`：界線就沒有上限，`inflight_until` 必須改為「永不自動失效」—— 界線未過的列只能以查詢查到發票來結案，查無就一直等，直到店長在綠界後台確認後人工結案（新增一個人工結案端點，約半個施工階段）。G03 的退款也跟著只能「先建作廢列、等人工確認」
+- 拿掉 `inflight_until` 回到 v1.2：必須禁止 `Unknown` 後釋放認領（改為持有到租約自然到期），這樣每一次逾時都會把重試延後 15 分鐘，而且「租約期間內送出、到期後才成立」的界線推導要重新證明 —— 不比現在簡單
 
 ## 15. 與其他工作的關係
 
@@ -649,5 +686,6 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 | 版本 | 日期 | 變更 |
 | --- | --- | --- |
 | v1.0 | 2026-10-14 | 初版。PO 2026-10-14 解除 G02 延後，沿用 2026-10-11 stage 硬規則 |
+| v1.3 | 2026-10-15 | 回應 Codex review 5529132842：v1.2 在 `Unknown` 後立即釋放租約，接手者不必等舊租約到期，§14.13 的時間界線推導不涵蓋這條路徑；且認領前讀到的 `wasUncertain` 可能過時。§4 新增 `inflight_until` 與 `ck_invoices_inflight`；§5.3 `claim-lease-ms` 下限改為 `3 × timeout-ms + 60000`；§6.4 `issue` 改由呼叫端傳入 `Timestamp`；§6.5 `issueOne` 改寫：只讀訂單、認領後以 token 重讀（`tryClaim` 回傳 `Claim`）、認領不設 `uncertain`、送出前先提交在途界線、查無須晚於界線才能開立、新增結果「等待」、批次不取界線未過的列、確定結果才清除界線，不變式改寫；§6.6 重試不清除界線；§10.1 新增 `DELAYED_EFFECT` 情境與 `issueOne(orderId, afterOrderRead)` 接縫；§14.13 標註部分被取代，新增 §14.14；驗收 1、21a 修訂，21e 改寫，新增 21g、21h、26a |
 | v1.2 | 2026-10-15 | 回應 Codex review 5526548535：v1.1 的認領不是排他的（兩個實例都會認領成功，先回來的 `Rejected` 會清掉另一個在途請求的 `uncertain`）。§4 新增 `claim_token`／`claimed_until` 與 `ck_invoices_claim`；§5 新增 `claim-lease-ms` 與啟動檢查；§6.5 `issueOne` 改寫為租約認領、送出期限、以 token 寫回、失去認領後的開立回應補償，查詢與開立之間不再寫回中間狀態；§6.6 重試清除持有者；§10.1 假伺服器新增掛勾與 `Timestamp` 記錄、`tryClaim` 可見性；§11 新增步驟 8；§14.11、§14.12 補充，新增 §14.13；驗收 1、11、21、21a 修訂，新增 21b–21f |
 | v1.1 | 2026-10-15 | 回應 Codex review 5522929018：(1) §6.5 新增「認領」步驟與 `uncertain` 不變式、§14.12（G03 退款不漏作廢的前提）；(2) 游標截止點的精確邊界表，§2.2、§14.6、驗收 12 統一為 `paid_at >= T0 - lag`；(3) §4 的 CHECK／UNIQUE 全部具名、驗收 1 的索引數更正為兩個 `CREATE INDEX`；新增驗收 21a |
