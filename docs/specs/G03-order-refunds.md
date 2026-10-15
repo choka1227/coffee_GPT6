@@ -169,7 +169,7 @@ o = snapshot(id)
 4. 回傳 `snapshot(id)`
 
 - **`status` 不改**（§14.3）。**不呼叫** `catalog.releaseStock`（§14.5）
-- **已退款訂單**：`transition()` 與 `cash()` 在既有檢查之前加 `Problem.check(o.refundedAt() == null, …)` → 409 `這筆訂單已經退款`
+- **已退款訂單**：`transition()` 與 `cash()` 在既有檢查之前加 `if (o.refundedAt() != null) throw new Problem(409, "這筆訂單已經退款");`。**不可用 `Problem.check`**：它固定拋 400（`coffee-shared` 的 `Problem.check(boolean,String)`），照用會讓驗收 7 失敗；也**不要**為此修改或新增 `Problem.check` 的 overload，既有 400 契約不動（v1.3.1）
 
 ### 6.3 端點（`OrderController`）
 
@@ -514,6 +514,7 @@ Reversal retryReversal(Actor a, String orderId);
 
 | 版本 | 日期 | 變更 |
 | --- | --- | --- |
+| v1.3.1 | 2026-10-15 | 回應 Codex review 5533221990：§6.2「已退款訂單」改為明確 `throw new Problem(409, …)`，`Problem.check` 固定回 400，照原寫法驗收 7 必然失敗；`Problem.check` 的 400 契約不動 |
 | v1.3 | 2026-10-15 | 回應 Codex review 5529132842（配合 G02 v1.3 的在途界線）：前置改為 G02 v1.3；§4 `invoice_reversals` 新增 `inflight_until` 與 `ck_invoice_reversals_inflight`；§6.6 退款掃描與 (b) 的 `SKIPPED` 條件加上 `inflight_until is null`，(b) 不再依據認領前讀到的 `uncertain`，(c) 改依 G02 v1.3 第 2–7 步，競態表新增一列，`reverseOne` 改寫為認領後重讀、送出前寫界線、新增「等待」；§6.7 重試保留界線；§10.1 新增 `DELAYED_EFFECT`；§14.9 補充；驗收 1 修訂、新增 21j–21l |
 | v1.2 | 2026-10-15 | 回應 Codex review 5526548535（配合 G02 v1.2 的排他認領）：§4 `invoice_reversals` 新增 `claim_token`／`claimed_until` 與 `ck_invoice_reversals_claim`；§6.6 退款掃描與 (b) 的 `SKIPPED` 條件加上 `claim_token is null`、(c) 改用 G02 v1.2 的租約認領、`ensureReversal` 可把 `DONE`／`NONE` 重設、競態表新增三列、`reverseOne` 改用租約認領與 token 寫回；§6.7 重試清除持有者；§14.9 補充；驗收 1 修訂、新增 21f–21i |
 | v1.1 | 2026-10-15 | 回應 Codex review 5522929018：(1) §6.6 退款掃描不再把 `uncertain=true` 的發票改 `SKIPPED`，改為建作廢列、由 `issueOne` 確定結果，新增競態表、`kind='NONE'`、作廢批次只取已開立的發票、§14.9，驗收 20–21 改寫並新增 21a–21e；(2) `REFUNDED` 游標邊界與 G02 v1.1 統一，驗收 15 改寫；(3) §4 的 CHECK 全部具名 |

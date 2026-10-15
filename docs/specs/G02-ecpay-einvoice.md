@@ -478,7 +478,7 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 5. **失敗與重試**：以 `ECPAY_INVOICE_HASH_KEY=wrongwrongwrong1` 啟動，建立並付款一筆訂單；預期 10 輪後（或直接觀察）出現在對帳頁「發票開立失敗」。改回正確 key 重啟，按「重試」，下一輪開出發票
 6. **字軌**：若步驟 1 被拒且訊息與字軌有關，記錄 `RtnCode` 與訊息 —— 這代表共用測試特店也需要自行設定字軌，由下一輪規格處理
 7. **email 是否必填**：用 curl 依 §6.4 送一筆 `MOBILE` 但 `CustomerEmail` 空白的 `Issue`，記錄是否被接受（決定 §14.2 是否可放寬）
-8. **`Timestamp` 有效期**：用 curl 依 §6.4 送兩筆內容正確的 `Issue`（不同 `RelateNumber`），`RqHeader.Timestamp` 分別設為「現在 − 11 分鐘」與「現在 − 9 分鐘」。預期前者被拒（記錄 `TransCode`／`RtnCode` 與訊息）、後者成功。**這一步的結果是 §14.13 時間假設的實證**：若前者也成功，依 §14.13 的推翻代價開下一輪規格修補
+8. **`Timestamp` 有效期**：用 curl 依 §6.4 送兩筆內容正確的 `Issue`（不同 `RelateNumber`），`RqHeader.Timestamp` 分別設為「現在 − 11 分鐘」與「現在 − 9 分鐘」。預期前者被拒（記錄 `TransCode`／`RtnCode` 與訊息）、後者成功。**這一步的結果是 §14.14 時間假設的實證**：若前者也成功，依 §14.14 的推翻代價開下一輪規格修補（§14.13 的時間界線已被 §14.14 取代，不要套用它的推翻方案）
 
 驗收紀錄表沿用 `docs/ECPAY.md` 既有格式，新增 G02 一張。
 
@@ -490,7 +490,7 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 
 **動到：** `V16__einvoice.sql`、`Orders.java`、`OrderService.java`、所有 `new Orders.Create(...)` 呼叫點（只補 `null`）、`application.yml`（只加 `orders.invoice-required`）、新增 `OrderInvoiceRequestTest.java`；**前置修正（v1.3）** `coffee-payments/internal/ReconciliationService.java`（見下）。
 
-**前置修正 —— 主線既有的 1 ms 時間彈（v1.3 登記，與發票無關，但會讓本規格任何一個階段的 CI 隨機變紅）：** PR #92 head `8c2c0e3` 的 push CI（run 38692156036）在 `ReconciliationTest.outOfRangePaymentDateFallsBackWithoutRejectingConfirmedPayment:319` 失敗，`expected 1792045528109`、`actual 1792045528110`；同一個 commit 的 PR CI 是綠的。根因在生產程式碼：`ReconciliationService.verify`（`:441`）與 `perform`（`:510`）各自呼叫一次 `System.currentTimeMillis()`，「以查核時間入帳」的 `paidAt` 取前者、回傳的 `queriedAt` 取後者，跨毫秒時兩者差 1。**修法：** `perform` 把自己的 `now` 傳進 `verify`（`verify(id, expectedTotal, now)`），刪掉 `verify` 內的 `currentTimeMillis()`；`paidAt` 與 `queriedAt`、`payment_reconciliations.queried_at` 從此是同一個值。**不得**放寬測試斷言（`isEqualTo(result.queriedAt())` 是正確的契約）。
+**前置修正 —— 主線既有的 1 ms 時間彈（v1.3 登記，與發票無關，但會讓本規格任何一個階段的 CI 隨機變紅）：** PR #92 head `8c2c0e3` 的 push CI（run 38692156036）在 `ReconciliationTest.outOfRangePaymentDateFallsBackWithoutRejectingConfirmedPayment:319` 失敗，`expected 1792045528109`、`actual 1792045528110`；同一個 commit 的 PR CI 是綠的。根因在生產程式碼：`ReconciliationService.verify`（`:441`）與 `perform`（`:510`）各自呼叫一次 `System.currentTimeMillis()`，「以查核時間入帳」的 `paidAt` 取前者、回傳的 `queriedAt` 取後者，跨毫秒時兩者差 1。**修法：** `perform` 把自己的 `now` 傳進 `verify`（`verify(id, expectedTotal, now)`），刪掉 `verify` 內的 `currentTimeMillis()`；`paidAt` 與 `queriedAt`、`payment_reconciliations.queried_at` 從此是同一個值。**不得**放寬測試斷言（`isEqualTo(result.queriedAt())` 是正確的契約）。`verify` 還有第三個呼叫點 `recheckOne(Expired, long now)`（`:391`，G04 作廢後複查）：同樣改傳該方法既有的 `now`，漏改會編譯失敗（v1.3.1）。
 
 **驗收子集：** 1–6、6a。
 
@@ -686,6 +686,7 @@ JDK `HttpServer` 綁 `127.0.0.1:0`，提供 `/B2CInvoice/Issue` 與 `/B2CInvoice
 | 版本 | 日期 | 變更 |
 | --- | --- | --- |
 | v1.0 | 2026-10-14 | 初版。PO 2026-10-14 解除 G02 延後，沿用 2026-10-11 stage 硬規則 |
+| v1.3.1 | 2026-10-15 | 回應 Codex review 5533221990 的兩項非阻擋提醒：§11 步驟 8 改指向 §14.14 的推翻代價（§14.13 的時間界線已被取代）；§12 S1 前置修正補上 `verify` 的第三個呼叫點 `recheckOne`（`:391`） |
 | v1.3 | 2026-10-15 | 回應 Codex review 5529132842：v1.2 在 `Unknown` 後立即釋放租約，接手者不必等舊租約到期，§14.13 的時間界線推導不涵蓋這條路徑；且認領前讀到的 `wasUncertain` 可能過時。§4 新增 `inflight_until` 與 `ck_invoices_inflight`；§5.3 `claim-lease-ms` 下限改為 `3 × timeout-ms + 60000`；§6.4 `issue` 改由呼叫端傳入 `Timestamp`；§6.5 `issueOne` 改寫：只讀訂單、認領後以 token 重讀（`tryClaim` 回傳 `Claim`）、認領不設 `uncertain`、送出前先提交在途界線、查無須晚於界線才能開立、新增結果「等待」、批次不取界線未過的列、確定結果才清除界線，不變式改寫；§6.6 重試不清除界線；§10.1 新增 `DELAYED_EFFECT` 情境與 `issueOne(orderId, afterOrderRead)` 接縫；§14.13 標註部分被取代，新增 §14.14；驗收 1、21a 修訂，21e 改寫，新增 21g、21h、26a |
 | v1.2 | 2026-10-15 | 回應 Codex review 5526548535：v1.1 的認領不是排他的（兩個實例都會認領成功，先回來的 `Rejected` 會清掉另一個在途請求的 `uncertain`）。§4 新增 `claim_token`／`claimed_until` 與 `ck_invoices_claim`；§5 新增 `claim-lease-ms` 與啟動檢查；§6.5 `issueOne` 改寫為租約認領、送出期限、以 token 寫回、失去認領後的開立回應補償，查詢與開立之間不再寫回中間狀態；§6.6 重試清除持有者；§10.1 假伺服器新增掛勾與 `Timestamp` 記錄、`tryClaim` 可見性；§11 新增步驟 8；§14.11、§14.12 補充，新增 §14.13；驗收 1、11、21、21a 修訂，新增 21b–21f |
 | v1.1 | 2026-10-15 | 回應 Codex review 5522929018：(1) §6.5 新增「認領」步驟與 `uncertain` 不變式、§14.12（G03 退款不漏作廢的前提）；(2) 游標截止點的精確邊界表，§2.2、§14.6、驗收 12 統一為 `paid_at >= T0 - lag`；(3) §4 的 CHECK／UNIQUE 全部具名、驗收 1 的索引數更正為兩個 `CREATE INDEX`；新增驗收 21a |
