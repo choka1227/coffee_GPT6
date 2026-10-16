@@ -388,7 +388,7 @@ public class ReconciliationService implements Reconciliation {
   private String recheckOne(Expired expired, long now) {
     synchronized (locks[Math.floorMod(expired.orderId().hashCode(), locks.length)]) {
       var order = orders.paymentSnapshot(expired.orderId());
-      Verification result = verify(order.id(), order.total());
+      Verification result = verify(order.id(), order.total(), now);
       return switch (result.outcome()) {
         case "STILL_UNPAID" -> {
           finishRecheck(order.id(), "UNPAID", now);
@@ -437,8 +437,7 @@ public class ReconciliationService implements Reconciliation {
       long paidAt,
       String detail) {}
 
-  private Verification verify(String id, int expectedTotal) {
-    long now = System.currentTimeMillis();
+  private Verification verify(String id, int expectedTotal, long now) {
     String outcome = "QUERY_FAILED", status = "unknown", trade = "";
     String detail = "綠界查單失敗，請稍後再試";
     Integer amount = null;
@@ -517,7 +516,7 @@ public class ReconciliationService implements Reconciliation {
                 id);
         if (last != null && now - last < 60000) throw new Problem(429, "查核過於頻繁，請稍後再試");
       }
-      Verification verification = verify(id, o.total());
+      Verification verification = verify(id, o.total(), now);
       final String result = verification.outcome();
       final String tradeStatus = verification.tradeStatus();
       final String tradeNo = verification.tradeNo();
