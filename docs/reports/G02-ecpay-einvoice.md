@@ -7,8 +7,9 @@
 
 ## 施工進度
 
-- [ ] S1 程式與驗收測試已實作，等待最新 head 遠端 CI 驗證
-- [ ] S2 AES、用戶端、假伺服器、開立排程（尚未開始）
+- [x] S1 完成；26f5963 兩組遠端 CI 綠（後端327 tests）
+- [ ] S2a AES、用戶端、假伺服器、驗收7–11 已實作，等待最新 head CI
+- [ ] S2b 開立排程與驗收12–22（尚未開始，依規格§12於用戶端／排程間切分）
 - [ ] S3 端點、前端、demo profile、完整操作文件（尚未開始）
 
 ## S1 設計與範圍
@@ -70,6 +71,44 @@
 
 ## 後續驗證與選擇
 
-§5.2 憑證尚未對照官方頁面（本階段不使用發票憑證）；於 S2／S3 核對。
-EinvoiceCodec 可見性尚未決定（S2）；stage Timestamp 假設與實機驗證尚未執行。
+§5.2 公開stage憑證已於2026-10-16對照官方測試介接頁（https://developers.ecpay.com.tw/7849/）：
+一般特店MerchantID及HashKey／HashIV與規格一致；本階段不使用它們，測試使用自訂假伺服器值。
+EinvoiceCodec 採 public internal（見下）；stage Timestamp 假設與實機驗證尚未執行。
 S2 依 §12 可在用戶端與排程之間切分，排程不可推半成品。G03 必須等整份 G02 合併。
+
+## S2a 設計與驗收對照（2026-10-16）
+
+新增 public final internal EinvoiceCodec，讓組裝層假伺服器直接引用（§10.1 選項二），
+不新增業務模組跨界依賴。AES-128-CBC/PKCS5Padding、PHP urlencode（*→%2A）；
+任何編解碼錯誤只回固定中文訊息，不保留原始例外 cause。
+
+新增 EcpayInvoiceClient（Issue/GetIssue），但尚無排程或端點呼叫。JSON 欄位、
+整數金額、Timestamp 由呼叫端傳入；拒絕重新導向，未知結果用原因類別表示。
+不印原文、密文、例外堆疊；RtnMsg 限100字且清除換行及已知敏感參數。
+設定預設停用，正式設定特店／key／iv留空，demo profile本階段不動。
+
+設定防線在 client 建構子先落地（驗收11），下一階段 InvoiceService 注入同一個
+client即可保證未通過設定檢查不能啟動；不另複製一份驗證。停用時不建立HttpClient，
+不解析endpoint／timeout，方法直接DISABLED。AES設定另檢查UTF-8長度16 bytes，
+避免16個非ASCII字元通過後才執行期失敗。
+
+FakeEinvoiceServer 支援所有§10.1情境、各路徑掛勾、外層Timestamp／解密Data記錄、
+applyDelayed/dropDelayed；遲到生效由測試明確驅動，不靠sleep。關閉時中斷executor後
+以共同deadline bounded join實際worker thread，不以executor狀態推定執行緒已結束。
+
+| 驗收 | 測試方法 |
+| --- | --- |
+| 7 | EinvoiceCodecTest.roundTrip、encodingUsesPhpRulesAndAesEncryptsTheEncodedText、failuresNeverCarrySecretsOrInputInMessageOrCause |
+| 8 | EinvoiceClientTest.issueAndQueryUseEncryptedEnvelopeAndDiscountedOrderTotal（三種類型） |
+| 9 | failuresAreUnknownAndRedirectsAreNotFollowed、rejectionDuplicateMissingQueryAndConnectionFailureAreDistinct |
+| 10 | failuresAreUnknownAndRedirectsAreNotFollowed（HTTP_302且假伺服器沒有額外請求） |
+| 11 | EinvoiceStageGuardTest.invalidConfigurationFailsContextWithoutEchoingValues（33組）、exactStageAndExplicitLoopbackAreAcceptedWithoutConnecting、numericBoundsAreInclusive、disabledClientAcceptsInvalidSettingsAndCannotSend |
+| 22部分 | EcpayNoEgressGuardTest新增四個守門／反向測試；ClientTest各情境輸出衛生斷言；完整排程log驗收仍屬S2b |
+
+EcpayNoEgressGuardTest 只追加常數／方法，不修改原方法；src/main掃描無既存正式網域例外。
+兩支原金流profile測試只追加本機invoice.base-url覆寫，原斷言不變，避免未來demo profile
+啟用發票時測試連外。沒有修改既有migration、AGENTS.md或CLAUDE.md。
+
+本地：前端143 tests與build通過；後端verify仍因Maven Central DNS失敗未進編譯。
+最新提交必須由遠端Checks／Actions補足，不能沿用26f5963的S1綠燈。
+本階段不使用公開發票stage憑證，也未執行官方stage介接實測；公開值的核對結果見上節。

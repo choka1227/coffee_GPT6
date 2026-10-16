@@ -27,6 +27,7 @@ class EcpayStageProfileTest {
   @DynamicPropertySource
   static void localQueryOnly(DynamicPropertyRegistry registry) {
     registry.add("ecpay.query-url", FAKE::queryUrl);
+    registry.add("ecpay.invoice.base-url", () -> "http://127.0.0.1:1");
   }
 
   @Autowired Environment environment;

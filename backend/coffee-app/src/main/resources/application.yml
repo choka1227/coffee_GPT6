@@ -37,6 +37,19 @@ app:
 orders:
   invoice-required: ${ORDERS_INVOICE_REQUIRED:false}
 ecpay:
+  invoice:
+    enabled: ${ECPAY_INVOICE_ENABLED:false}
+    environment: ${ECPAY_INVOICE_ENVIRONMENT:stage}
+    merchant-id: ${ECPAY_INVOICE_MERCHANT_ID:}
+    hash-key: ${ECPAY_INVOICE_HASH_KEY:}
+    hash-iv: ${ECPAY_INVOICE_HASH_IV:}
+    base-url: ${ECPAY_INVOICE_BASE_URL:https://einvoice-stage.ecpay.com.tw}
+    timeout-ms: 10000
+    interval-ms: ${ECPAY_INVOICE_INTERVAL_MS:300000}
+    batch-size: 20
+    lag-seconds: 120
+    max-attempts: 10
+    claim-lease-ms: 900000
   enabled: ${ECPAY_ENABLED:false}
   environment: ${ECPAY_ENVIRONMENT:stage}
   merchant-id: ${ECPAY_MERCHANT_ID:}
