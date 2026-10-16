@@ -59,6 +59,14 @@ public final class FakeEinvoiceServer implements AutoCloseable {
   public int invoiceCount() { return invoices.size(); }
   public void applyDelayed() { delayed.forEach(this::remember); delayed.clear(); }
   public void dropDelayed() { delayed.clear(); }
+  public void reset() {
+    received.clear();
+    invoices.clear();
+    delayed.clear();
+    scenarios.clear();
+    hooks.clear();
+    sequence.set(0);
+  }
 
   private Map<String, Object> remember(Request request) {
     return invoices.computeIfAbsent(request.data().path("RelateNumber").asText(), id -> {

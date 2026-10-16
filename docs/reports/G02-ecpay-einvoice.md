@@ -8,8 +8,8 @@
 ## 施工進度
 
 - [x] S1 完成；26f5963 兩組遠端 CI 綠（後端327 tests）
-- [ ] S2a AES、用戶端、假伺服器、驗收7–11 已實作，等待最新 head CI
-- [ ] S2b 開立排程與驗收12–22（尚未開始，依規格§12於用戶端／排程間切分）
+- [x] S2a AES、用戶端、假伺服器、驗收7–11 完成；905587d 兩組遠端 CI 綠（後端387 tests）
+- [ ] S2b 開立排程與驗收12–22 已實作，等待本次最新 head CI（依規格§12切分）
 - [ ] S3 端點、前端、demo profile、完整操作文件（尚未開始）
 
 ## S1 設計與範圍
@@ -119,3 +119,44 @@ JsonParserFactory（組裝環境有Jackson時由Boot轉接），不更改任何p
 API依據：https://docs.spring.io/spring-boot/3.5/api/java/org/springframework/boot/json/JsonWriter.html 。
 原解析與錯誤分類驗收照常執行，沒有放寬斷言。本地JDK僅有java執行器、缺javac/jshell，
 因此獨立codec編譯也未能執行；仍以最新head遠端完整verify補足。
+
+## S2b 設計、風險與驗收對照（2026-10-16）
+
+新增 InvoiceService：預設停用；同一短交易鎖住 PAID 游標、最多入列200筆並推進；
+首次只初始化 T0-lag。cursor 初建競爭的唯一鍵錯誤，在原交易回滾後重試，不在
+PostgreSQL 已中止的交易內繼續操作。每批最多開立 batch-size 筆，單筆例外不打斷整批。
+
+tryClaim 回傳認領後以 token 重讀的 Claim，不使用認領前的發票快照。送 Issue 前先提交
+uncertain=true 與同一個 Timestamp×1000+660000；Unknown／等待／金額不符保留界線。
+只有持有 token 才能寫回並釋放租約；遲到 Ok 依規格保守補償，不奪取別人的 token。
+外層 NOT_SUPPORTED 暫停呼叫者交易、內層 REQUIRES_NEW 短交易確保 HTTP 全程無交易／鎖。
+不新增 migration、端點、第三方依賴或模組跨界；既有 migration／AGENTS／CLAUDE 不改。
+
+明示的防禦性判讀：GetIssue 只有查無碼1600003才允許走「查無→等待／開立」；其他
+Rejected 視為不明，避免把驗證／授權錯誤當作不存在。Ok 欄位缺失或不符合儲存格式時
+視為不明，不清除在途界線。查詢金額只接受整數元的數值／字串表示，不作小數換算。
+Timestamp 有效期與 NTP 仍依已合併規格假設；本機假伺服器不是官方 stage 實測證據。
+
+| 驗收 | InvoiceServiceTest 方法 |
+| --- | --- |
+| 12–15 | initialCursorInclusiveBoundaryLagAndIdempotentEnqueue；cursorEnqueuesAtMost200AndRetainsSameMillisecondRemainder（201筆同毫秒，兩輪200/201；批次Issue20/40） |
+| 16、21d | timeoutThenQueryDoesNotIssueTwiceAndDeadLeaseRequiresExpiry |
+| 17–18 | duplicateQueriesWithinSameClaimAndAmountMismatchNeverReissues |
+| 19 | rejectionClearsBoundaryButUnknownExhaustionPreservesIt |
+| 20、§9金額防線 | missingInvoiceAndChangedAmountFailWithoutNetwork |
+| 21、21a | losingRejectedHolderCannotClearOthersUncertainty；onlyOneWorkerClaimsIn20SynchronizedRaces；成功／拒絕／逾時案例皆驗證租約與界線 |
+| 21b | onlyOneWorkerClaimsIn20SynchronizedRaces（20次latch競爭，每次一個勝者） |
+| 21c | activeIssueExcludesOtherWorkerWithoutHoldingDatabaseLocks |
+| 21e | inflightBoundaryBlocksBatchAndDirectIssueButNotConfirmation |
+| 21f | lateOkCompensatesWithoutStealingOtherClaim（FAILED／SKIPPED／他人PENDING三種） |
+| 21g | delayedEffectCannotCauseASecondIssueUntilBoundaryExpires（apply／drop兩種） |
+| 21h | postClaimSnapshotWinsOverOrderReadBeforeAnotherWorkersTimeout |
+| 22 | 每個案例 AfterEach OutputCapture 完整輸出衛生斷言；原 NoEgressGuard 不改 |
+| HTTP無交易 | ambientTransactionIsSuspendedAndHttpSeesCommittedInflightState（假伺服器另一DB連線可讀寫） |
+
+FakeEinvoiceServer 只追加 reset 供獨立案例重置；延後生效依 apply/drop 明確驅動，
+雙 worker 的先後使用 bounded latch／Future，不靠任意 sleep。
+
+本地 backend verify 再次因 Maven Central DNS 無法下載 parent，未進編譯；前端143 tests
+通過，build另記於PR。提交時遠端CI待驗證，最新Checks／Actions jobs結果以PR為準。
+本階段尚未作官方stage介接、S3端點／授權／CSRF／前端／profile／操作文件。
