@@ -34,6 +34,8 @@ app:
   seed-demo: false
   bootstrap-username: ${BOOTSTRAP_USERNAME:}
   bootstrap-password: ${BOOTSTRAP_PASSWORD:}
+orders:
+  invoice-required: ${ORDERS_INVOICE_REQUIRED:false}
 ecpay:
   enabled: ${ECPAY_ENABLED:false}
   environment: ${ECPAY_ENVIRONMENT:stage}

@@ -138,7 +138,7 @@ class OrderPreviewTest {
         cashier,
         new Orders.Create(
             "taipei", "TAKEAWAY", "CASH", "", null,
-            List.of(line(2))),
+            List.of(line(2)), null),
         UUID.randomUUID().toString());
     assertThat(created.total()).isEqualTo(280);
     assertThat(remaining()).isZero();
@@ -159,7 +159,7 @@ class OrderPreviewTest {
     Problem preview = problem(() -> orders.preview(cashier, request(null, 1)));
     Problem create = problem(() -> orders.create(
         cashier,
-        new Orders.Create("taipei", "TAKEAWAY", "CASH", "", null, List.of(line(1))),
+        new Orders.Create("taipei", "TAKEAWAY", "CASH", "", null, List.of(line(1)), null),
         UUID.randomUUID().toString()));
 
     assertThat(preview.status).isEqualTo(400);
@@ -233,7 +233,7 @@ class OrderPreviewTest {
       Orders.Order created = orders.create(
           cashier,
           new Orders.Create(
-              "taipei", "TAKEAWAY", "CASH", "", null, List.of(line(1))),
+              "taipei", "TAKEAWAY", "CASH", "", null, List.of(line(1)), null),
           UUID.randomUUID().toString());
       assertThat(created.total()).isEqualTo(140);
     }

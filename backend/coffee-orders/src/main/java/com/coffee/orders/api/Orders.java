@@ -2,9 +2,15 @@ package com.coffee.orders.api;
 
 import com.coffee.shared.Actor;
 import java.util.List;
+import java.util.Optional;
 
 public interface Orders {
   record LineInput(String productId, int quantity, List<String> optionIds) {}
+
+  record InvoiceRequest(String type, String email, String carrier, String loveCode) {}
+
+  record InvoiceCandidate(
+      String orderId, String branchId, int total, long paidAt, InvoiceRequest invoice) {}
 
   record Create(
       String branchId,
@@ -12,7 +18,8 @@ public interface Orders {
       String paymentMethod,
       String note,
       String discountCode,
-      List<LineInput> items) {}
+      List<LineInput> items,
+      InvoiceRequest invoice) {}
 
   record PreviewRequest(String branchId, String discountCode, List<LineInput> items) {}
 
@@ -75,7 +82,8 @@ public interface Orders {
       Long paidAt,
       Integer tendered,
       Integer changeAmount,
-      List<Line> items) {}
+      List<Line> items,
+      InvoiceRequest invoice) {}
 
   record Query(
       String status, String branchId, Long from, Long to, String q, String cursor, int limit) {}
@@ -108,4 +116,8 @@ public interface Orders {
   List<Order> reconciliationCandidates(Actor actor, long since, long until, int limit, int offset);
 
   Order paymentSnapshot(String id);
+
+  List<InvoiceCandidate> invoiceCandidates(long afterAt, String afterId, long until, int limit);
+
+  Optional<InvoiceCandidate> invoiceCandidate(String orderId);
 }

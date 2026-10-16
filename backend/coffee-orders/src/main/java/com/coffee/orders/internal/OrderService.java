@@ -9,7 +9,10 @@ import com.coffee.orders.api.Orders;
 import com.coffee.shared.*;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.*;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,6 +33,8 @@ public class OrderService implements Orders {
   private final Promotions promotions;
   private final Branches branches;
   private final Audit audit;
+  @Value("${orders.invoice-required:false}")
+  private boolean invoiceRequired;
 
   public OrderService(
       JdbcTemplate db,
@@ -63,11 +68,14 @@ public class OrderService implements Orders {
     String fingerprint = fingerprint(q);
     var existing =
         db.queryForList(
-            "select id,request_hash from orders where account_id=? and idempotency_key=?",
+            "select id,request_hash,invoice_type from orders where account_id=? and idempotency_key=?",
             a.id(),
             key);
     if (!existing.isEmpty()) {
-      Problem.check(fingerprint.equals(existing.get(0).get("request_hash")), "同一識別碼不能用於不同訂單");
+      if (!fingerprint.equals(existing.get(0).get("request_hash"))) {
+        int status = q.invoice() != null || existing.get(0).get("invoice_type") != null ? 409 : 400;
+        throw new Problem(status, "同一識別碼不能用於不同訂單");
+      }
       return get(a, (String) existing.get(0).get("id"));
     }
     long now = System.currentTimeMillis();
@@ -110,6 +118,14 @@ public class OrderService implements Orders {
         now,
         key,
         fingerprint);
+    InvoiceRequest invoice = q.invoice();
+    db.update(
+        "update orders set invoice_type=?,invoice_email=?,invoice_carrier=?,invoice_love_code=? where id=?",
+        invoice == null ? null : invoice.type(),
+        invoice == null ? null : invoice.email(),
+        invoice == null ? null : invoice.carrier(),
+        invoice == null ? null : invoice.loveCode(),
+        id);
     if (applied != null) {
       db.update(
           "insert into order_discounts(order_id,discount_id,code,name,kind,percent,amount,subtotal,discount_amount,created_at) values(?,?,?,?,?,?,?,?,?,?)",
@@ -300,7 +316,31 @@ public class OrderService implements Orders {
             .map(l -> l == null ? null : new LineInput(
                 l.productId(), l.quantity(),
                 l.optionIds() == null ? null : l.optionIds().stream().sorted().toList()))
-            .toList());
+            .toList(),
+        normalizeInvoice(q.invoice(), invoiceRequired));
+  }
+
+  static InvoiceRequest normalizeInvoice(InvoiceRequest invoice, boolean required) {
+    if (invoice == null) {
+      Problem.check(!required, "請選擇發票開立方式");
+      return null;
+    }
+    Problem.check(invoice.type() != null
+        && Set.of("CLOUD", "MOBILE", "DONATE").contains(invoice.type()), "發票開立方式不正確");
+    String email = invoice.email() == null ? "" : invoice.email().trim();
+    Problem.check(email.length() <= 100 && email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"),
+        "請輸入正確的發票通知 email");
+    String carrier = null;
+    String loveCode = null;
+    if ("MOBILE".equals(invoice.type())) {
+      carrier = invoice.carrier() == null ? "" : invoice.carrier().trim().toUpperCase(Locale.ROOT);
+      Problem.check(carrier.matches("^/[0-9A-Z.+-]{7}$"), "手機條碼格式不正確");
+    }
+    if ("DONATE".equals(invoice.type())) {
+      loveCode = invoice.loveCode() == null ? "" : invoice.loveCode().trim();
+      Problem.check(loveCode.matches("^[0-9]{3,7}$"), "捐贈碼格式不正確");
+    }
+    return new InvoiceRequest(invoice.type(), email, carrier, loveCode);
   }
 
   private String normalizeCode(String code) {
@@ -310,10 +350,13 @@ public class OrderService implements Orders {
 
   private String fingerprint(Create q) {
     try {
+      // Preserve fingerprints of pre-G02 requests when no invoice was supplied.
+      String value = q.toString();
+      if (q.invoice() == null) value = value.substring(0, value.length() - ", invoice=null]".length()) + "]";
       return HexFormat.of()
           .formatHex(
               MessageDigest.getInstance("SHA-256")
-                  .digest(q.toString().getBytes(StandardCharsets.UTF_8)));
+                  .digest(value.getBytes(StandardCharsets.UTF_8)));
     } catch (Exception e) {
       throw new IllegalStateException(e);
     }
@@ -383,7 +426,8 @@ public class OrderService implements Orders {
                     r.getLong("created_at"),
                     r.getObject("paid_at", Long.class),
                     r.getObject("tendered", Integer.class),
-                    r.getObject("change_amount", Integer.class)),
+                    r.getObject("change_amount", Integer.class),
+                    readInvoice(r)),
             params.toArray());
     boolean more = headers.size() > limit;
     if (more) headers = new ArrayList<>(headers.subList(0, limit));
@@ -551,12 +595,13 @@ public class OrderService implements Orders {
       long createdAt,
       Long paidAt,
       Integer tendered,
-      Integer changeAmount) {
+      Integer changeAmount,
+      InvoiceRequest invoice) {
     Order toOrder(List<Line> lines, OrderDiscount discount) {
       return new Order(
           id, branchId, branchName, accountId, status, fulfillment, paymentMethod, total,
           subtotal, discountAmount, itemDiscountAmount, discount, null, note,
-          createdAt, paidAt, tendered, changeAmount, lines);
+          createdAt, paidAt, tendered, changeAmount, lines, invoice);
     }
   }
 
@@ -666,6 +711,29 @@ public class OrderService implements Orders {
     return snapshot(id);
   }
 
+  private static InvoiceRequest readInvoice(ResultSet r) throws SQLException {
+    if (r.getString("invoice_type") == null) return null;
+    return new InvoiceRequest(r.getString("invoice_type"), r.getString("invoice_email"),
+        r.getString("invoice_carrier"), r.getString("invoice_love_code"));
+  }
+
+  public List<InvoiceCandidate> invoiceCandidates(
+      long afterAt, String afterId, long until, int limit) {
+    return db.query(
+        "select * from orders where paid_at is not null and paid_at<=?"
+            + " and (paid_at>? or (paid_at=? and id>?)) order by paid_at,id limit ?",
+        (r, n) -> new InvoiceCandidate(r.getString("id"), r.getString("branch_id"),
+            r.getInt("total"), r.getLong("paid_at"), readInvoice(r)),
+        until, afterAt, afterAt, afterId, limit);
+  }
+
+  public Optional<InvoiceCandidate> invoiceCandidate(String orderId) {
+    return db.query("select * from orders where id=? and paid_at is not null",
+        (r, n) -> new InvoiceCandidate(r.getString("id"), r.getString("branch_id"),
+            r.getInt("total"), r.getLong("paid_at"), readInvoice(r)), orderId)
+        .stream().findFirst();
+  }
+
   @Transactional
   public void confirmOnline(String id, int amount, String trade) {
     confirmOnline(id, amount, trade, System.currentTimeMillis());
@@ -718,7 +786,7 @@ public class OrderService implements Orders {
                 r.getObject("paid_at", Long.class),
                 r.getObject("tendered", Integer.class),
                 r.getObject("change_amount", Integer.class),
-                List.of()),
+                List.of(), readInvoice(r)),
         params.toArray());
   }
 
@@ -845,7 +913,7 @@ public class OrderService implements Orders {
                                         z.getString("group_name"), z.getString("option_name"),
                                         z.getInt("price_delta")),
                                     x.getString("id"))),
-                        id)),
+                        id), readInvoice(r)),
             id);
     if (rows.isEmpty()) throw new Problem(404, "找不到訂單");
     return rows.get(0);

@@ -119,7 +119,7 @@ class OrderDiscountTest {
         cashier,
         new Orders.Create(
             "taipei", "TAKEAWAY", "CASH", "", code,
-            List.of(new Orders.LineInput("latte", 1, List.of("temp-hot", "sugar-none")))),
+            List.of(new Orders.LineInput("latte", 1, List.of("temp-hot", "sugar-none"))), null),
         key);
   }
 

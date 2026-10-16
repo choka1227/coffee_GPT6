@@ -318,7 +318,7 @@ class EcpayStageEndToEndTest {
             "ECPAY",
             "",
             null,
-            List.of(new Orders.LineInput("latte", 2, List.of("temp-hot", "sugar-none")))),
+            List.of(new Orders.LineInput("latte", 2, List.of("temp-hot", "sugar-none"))), null),
         UUID.randomUUID().toString());
   }
 

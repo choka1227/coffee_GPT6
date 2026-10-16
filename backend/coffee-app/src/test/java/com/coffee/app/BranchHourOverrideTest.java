@@ -495,7 +495,7 @@ class BranchHourOverrideTest {
                 null,
                 List.of(
                     new Orders.LineInput(
-                        "latte", 1, List.of("temp-hot", "sugar-none")))),
+                        "latte", 1, List.of("temp-hot", "sugar-none"))), null),
             "override-existing-" + UUID.randomUUID());
     db.update(
         "update orders set created_at=created_at-86400000 where id=?", existing.id());

@@ -109,6 +109,6 @@ class EcpayLogHygieneTest {
         null,
         null,
         null,
-        List.of());
+        List.of(), null);
   }
 }
