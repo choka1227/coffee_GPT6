@@ -269,6 +269,7 @@ coffee-app         啟動、Security、Session、Flyway       依賴：全部（
 - 所有寫入請求需要 CSRF token。**唯一例外**是 `POST /api/payments/ecpay/callback`（改用金流簽章驗證）
 - 密碼用 BCrypt（strength 12）。變更或重設密碼要 `session_version + 1` 使既有 session 失效
 - **金鑰、商店代號、HashKey / HashIV 一律走環境變數**，不可寫進程式碼、不可進 Git、不可進前端建置產物
+  - **唯一例外：綠界官方公開的「測試特店」參數**（金流 `3002607`、電子發票 `2000132` 等，綠界文件公開、人人可查，不是機密）可以作為 `${ENV:預設值}` 的預設值，**只能放在 `application-ecpay-stage.yml` 這類 demo／開發 profile 與 `docs/`**；`application.yml`（正式設定）的特店欄位預設值一律留空。依據是 PO 2026-10-11 決策第 2 條（見 `docs/GAP-ANALYSIS.md`），先例是 G01b 已合併的 `application-ecpay-stage.yml`。正式特店憑證仍不得進 Git，也仍不得寫進 log、錯誤訊息或 API 回應
 - 建立訂單必須帶 `Idempotency-Key` header；對 `(account_id, idempotency_key)` 建唯一鍵並保存請求指紋
 - 訂單狀態更新與收款**必須先取行鎖**（`select ... for update`），禁止跳階或重複列帳
 - 金流回呼的簽章比對用固定時間比較，拒絕重複參數
