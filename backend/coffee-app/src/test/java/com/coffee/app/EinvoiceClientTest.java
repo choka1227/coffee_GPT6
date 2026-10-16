@@ -7,7 +7,6 @@ import com.coffee.orders.api.Orders.InvoiceCandidate;
 import com.coffee.orders.api.Orders.InvoiceRequest;
 import com.coffee.payments.internal.EcpayInvoiceClient;
 import com.coffee.payments.internal.EcpayInvoiceClient.*;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.ServerSocket;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -22,7 +21,7 @@ class EinvoiceClientTest {
   private static final String KEY = "0123456789abcdef", IV = "fedcba9876543210";
 
   static EcpayInvoiceClient client(String url) {
-    return new EcpayInvoiceClient(new ObjectMapper(), true, "stage", "test-merchant", KEY, IV,
+    return new EcpayInvoiceClient(true, "stage", "test-merchant", KEY, IV,
         url, true, 1000, 10000, 20, 120, 10, 900000);
   }
 

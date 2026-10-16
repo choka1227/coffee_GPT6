@@ -2,7 +2,6 @@ package com.coffee.app;
 
 import static org.assertj.core.api.Assertions.*;
 import com.coffee.payments.internal.EcpayInvoiceClient;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -11,7 +10,6 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 class EinvoiceStageGuardTest {
   private ApplicationContextRunner runner(String... properties) {
     return new ApplicationContextRunner().withUserConfiguration(EcpayInvoiceClient.class)
-        .withBean(ObjectMapper.class, ObjectMapper::new)
         .withPropertyValues("ecpay.invoice.enabled=true", "ecpay.invoice.environment=stage",
             "ecpay.invoice.merchant-id=test-merchant", "ecpay.invoice.hash-key=0123456789abcdef",
             "ecpay.invoice.hash-iv=fedcba9876543210", "orders.invoice-required=true")

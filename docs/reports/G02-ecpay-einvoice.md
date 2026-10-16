@@ -112,3 +112,10 @@ EcpayNoEgressGuardTest 只追加常數／方法，不修改原方法；src/main�
 本地：前端143 tests與build通過；後端verify仍因Maven Central DNS失敗未進編譯。
 最新提交必須由遠端Checks／Actions補足，不能沿用26f5963的S1綠燈。
 本階段不使用公開發票stage憑證，也未執行官方stage介接實測；公開值的核對結果見上節。
+
+首輪S2a遠端CI指出coffee-payments沒有Jackson編譯相依（只有app透過web starter提供）。
+為守住零新Maven相依，client改用既有Spring Boot 3.5 JsonWriter.standard()與
+JsonParserFactory（組裝環境有Jackson時由Boot轉接），不更改任何pom或模組邊界。
+API依據：https://docs.spring.io/spring-boot/3.5/api/java/org/springframework/boot/json/JsonWriter.html 。
+原解析與錯誤分類驗收照常執行，沒有放寬斷言。本地JDK僅有java執行器、缺javac/jshell，
+因此獨立codec編譯也未能執行；仍以最新head遠端完整verify補足。

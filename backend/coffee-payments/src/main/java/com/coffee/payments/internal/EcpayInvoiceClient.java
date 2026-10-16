@@ -1,10 +1,6 @@
 package com.coffee.payments.internal;
 
 import com.coffee.orders.api.Orders.InvoiceCandidate;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -16,6 +12,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.json.JsonParser;
+import org.springframework.boot.json.JsonParserFactory;
+import org.springframework.boot.json.JsonWriter;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -31,10 +30,10 @@ public final class EcpayInvoiceClient {
   private final URI endpoint;
   private final Duration timeout;
   private final HttpClient http;
-  private final ObjectMapper json;
+  private final JsonParser parser = JsonParserFactory.getJsonParser();
+  private final JsonWriter<Map<String, Object>> writer = JsonWriter.standard();
 
   public EcpayInvoiceClient(
-      ObjectMapper mapper,
       @Value("${ecpay.invoice.enabled:false}") boolean enabled,
       @Value("${ecpay.invoice.environment:stage}") String environment,
       @Value("${ecpay.invoice.merchant-id:}") String merchant,
@@ -52,7 +51,6 @@ public final class EcpayInvoiceClient {
     this.merchant = merchant;
     this.key = key;
     this.iv = iv;
-    this.json = mapper.copy().enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
     if (!enabled) {
       endpoint = null;
       timeout = null;
@@ -134,26 +132,27 @@ public final class EcpayInvoiceClient {
 
   private CallResult call(String path, Map<String, Object> data, long timestampSec) {
     try {
-      String body = json.writeValueAsString(Map.of("MerchantID", merchant,
+      String body = writer.writeToString(Map.of("MerchantID", merchant,
           "RqHeader", Map.of("Timestamp", timestampSec, "Revision", "3.0.0"),
-          "Data", EinvoiceCodec.encrypt(json.writeValueAsString(data), key, iv)));
+          "Data", EinvoiceCodec.encrypt(writer.writeToString(data), key, iv)));
       var response = http.send(HttpRequest.newBuilder(endpoint.resolve("/B2CInvoice/" + path))
           .timeout(timeout).header("Content-Type", "application/json")
           .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)).build(),
           HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
       if (response.statusCode() != 200) return new Unknown("HTTP_" + response.statusCode());
       if (response.body().length() > 65536) return new Unknown("JSON");
-      JsonNode outer = json.readTree(response.body());
-      if (outer == null || !outer.isObject() || !integer(outer.get("TransCode")))
+      Map<String, Object> outer = parser.parseMap(response.body());
+      if (!integer(outer.get("TransCode")))
         return new Unknown("JSON");
-      if (outer.get("TransCode").intValue() != 1) return new Unknown("TRANS_CODE");
-      if (!outer.path("Data").isTextual()) return new Unknown("JSON");
-      JsonNode result = json.readTree(EinvoiceCodec.decrypt(outer.get("Data").textValue(), key, iv));
-      if (result == null || !result.isObject() || !integer(result.get("RtnCode")))
+      if (((Number) outer.get("TransCode")).intValue() != 1) return new Unknown("TRANS_CODE");
+      if (!(outer.get("Data") instanceof String encrypted)) return new Unknown("JSON");
+      Map<String, Object> result = parser.parseMap(EinvoiceCodec.decrypt(encrypted, key, iv));
+      if (!integer(result.get("RtnCode")))
         return new Unknown("JSON");
-      int code = result.get("RtnCode").intValue();
-      if (code == 1) return new Ok(json.convertValue(result, new TypeReference<>() {}));
-      String message = result.path("RtnMsg").asText("").replaceAll("[\\r\\n\\t]", " ");
+      int code = ((Number) result.get("RtnCode")).intValue();
+      if (code == 1) return new Ok(java.util.Collections.unmodifiableMap(result));
+      String message = result.get("RtnMsg") instanceof String text ? text : "";
+      message = message.replaceAll("[\\r\\n\\t]", " ");
       // Provider messages may echo request fields: never retain known sensitive values.
       for (Object value : List.of(key, iv, merchant)) message = message.replace(value.toString(), "[已隱藏]");
       for (String field : List.of("CustomerEmail", "CarrierNum", "LoveCode")) {
@@ -169,13 +168,14 @@ public final class EcpayInvoiceClient {
     } catch (EinvoiceException e) {
       return new Unknown("DECRYPT");
     } catch (java.io.IOException e) {
-      return new Unknown(e instanceof com.fasterxml.jackson.core.JacksonException ? "JSON" : "CONNECT");
+      return new Unknown("CONNECT");
     } catch (RuntimeException e) {
       return new Unknown("JSON");
     }
   }
 
-  private static boolean integer(JsonNode node) {
-    return node != null && node.isIntegralNumber() && node.canConvertToInt();
+  private static boolean integer(Object value) {
+    return value instanceof Integer || (value instanceof Long number
+        && number >= Integer.MIN_VALUE && number <= Integer.MAX_VALUE);
   }
 }
