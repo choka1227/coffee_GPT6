@@ -95,3 +95,74 @@ COOKIE_SECURE=true
 - [全方位付款建立訂單](https://developers.ecpay.com.tw/2862/)
 - [檢查碼機制](https://developers.ecpay.com.tw/2902/)
 - [測試商店、測試卡與模擬通知](https://developers.ecpay.com.tw/2856/)
+
+## 電子發票（G02，只串 stage）
+
+`./scripts/build.sh` 後以 `./start-demo.sh` 啟動，demo 的 `ecpay-stage` profile
+同時啟用發票與訂單發票必填。一般設定仍全部預設停用、憑證留空。
+電子發票沒有回呼，本機可驗證；付款回呼的公開 HTTPS 需求不因此改變。
+
+三種方式：雲端發票、手機條碼、捐贈；全部必填通知 email（trim後最多100字、
+須為email格式）。手機條碼為 `/` 加7碼英數／`.`／`+`／`-`（自動轉大寫），
+捐贈碼3–7位數字。不做紙本、統編或線上驗證條碼。
+金額一律採後端訂單應收整數元，單行「餐飲費用」。顧客端只在本機記憶email／條碼，
+POS不讀取、不保存，成功建立訂單後清空表單，避免下一位客人沿用個資。
+
+### 設定與安全界線
+
+| 環境變數 | 一般預設 | demo 預設 |
+| --- | --- | --- |
+| ORDERS_INVOICE_REQUIRED | false | true |
+| ECPAY_INVOICE_ENABLED | false | true |
+| ECPAY_INVOICE_ENVIRONMENT | stage | stage（固定） |
+| ECPAY_INVOICE_MERCHANT_ID | 空 | 2000132 |
+| ECPAY_INVOICE_HASH_KEY | 空 | 官方公開測試值 |
+| ECPAY_INVOICE_HASH_IV | 空 | 官方公開測試值 |
+| ECPAY_INVOICE_INTERVAL_MS | 300000 | 60000 |
+| ECPAY_INVOICE_BASE_URL | https://einvoice-stage.ecpay.com.tw | 沿用一般值 |
+
+發票使用一般特店 `2000132`，不可拿金流 `3002607` 的key／iv代替。
+2026-10-16 已核對[官方電子發票測試介接資訊](https://developers.ecpay.com.tw/7849/)，
+與demo profile及規格§5.2一致。只有公開測試憑證可提交；正式憑證不得進Git、log或API。
+base-url僅接受精確stage網址或有明確port的HTTP loopback；不跟隨重新導向。
+停用demo發票時可同時設定 `ECPAY_INVOICE_ENABLED=false`、`ORDERS_INVOICE_REQUIRED=false`。
+
+排程預設 timeout 10000ms、batch20、lag120秒、max-attempts10、租約900000ms。
+首次只建立游標，付款時間 `< 啟用時刻-lag` 的歷史訂單永遠不入列；之後的已付款訂單
+在lag過後入列。demo通常需等2–3分鐘（lag+下一輪排程），不是付款當下立即開立。
+首次啟用前lag窗內沒有發票資訊的舊訂單會失敗，需人工確認，不可猜填客戶資料。
+
+### 失敗怎麼處理
+
+總部／店長於「金流對帳→發票開立失敗」查看原因，先確認設定或綠界stage後台，
+再按「重試」。只有本店店長或總部可操作，仍需登入與CSRF；不在按鈕請求內呼叫綠界。
+重試將attempts歸零、保持uncertain=true，下一輪先查詢再決定是否開立。
+若先前請求結果不明，持久在途界線仍保留（Timestamp+11分鐘）；界線未過不會重開，
+因此重試後不一定下一分鐘就有結果。金額不符須人工確認，不可刪列／清除界線強迫重開。
+單筆只有確定成功或確定拒絕才清除在途界線；系統不會記錄個資、密文、金鑰或例外堆疊。
+
+### 官方stage實機驗證（尚未執行，不以假伺服器代替）
+
+以下均只用測試資料。不得臨時開啟原文DEBUG或將信封／憑證貼進報告；手動curl介接
+可依規格§6.4以本機受保護的環境變數／暫存內容製作JSON加密信封，結束即清理，
+不要把key／iv放入命令列歷史或提交檔案。
+
+1. 雲端發票：顧客建現金訂單、店員收現，等lag與下一輪排程，確認訂單明細號碼格式。
+2. 手機條碼、捐贈各一筆：條碼採官方測試文件提供者；若沒有則記錄接受／拒絕結果與RtnCode，不假造成功。捐贈碼用3–7位測試數字。
+3. 到stage廠商後台比對號碼、日期、隨機碼；以GetIssue實際回應核對IIS_*欄位名稱，僅記錄欄位與遮罩結果。這是G03 S2的輸入。
+4. 完成一筆stage信用卡付款，確認同樣開出發票。
+5. 用 `ECPAY_INVOICE_HASH_KEY=wrongwrongwrong1`（測試故障值）啟動並付款，觀察連續10輪失敗；恢復正確測試key後重啟、按重試，等待在途界線及查詢確認再開立。
+6. 若字軌相關拒絕，記錄RtnCode與去識別訊息，交下一輪規格處理，不自行擴充字軌功能。
+7. 手動送一筆MOBILE且CustomerEmail空白的Issue，記錄是否接受，以覆核email必填決策（目前系統表單仍必填）。
+8. 用不同RelateNumber各送一筆正確Issue，Timestamp分別為現在−11分鐘／−9分鐘；預期前者拒絕、後者成功，記錄TransCode／RtnCode及去識別訊息。若−11分鐘仍成功，按規格§14.14提出時間假設修補，不自行放寬界線或啟用正式環境。
+
+| 步驟 | 日期 | 結果（通過／不通過／不適用） | 去識別觀察／錯誤碼 |
+| --- | --- | --- | --- |
+| 1 雲端 | | 未執行 | |
+| 2 條碼／捐贈 | | 未執行 | |
+| 3 欄位核對 | | 未執行 | G03 S2輸入 |
+| 4 線上付款 | | 未執行 | |
+| 5 失敗與重試 | | 未執行 | |
+| 6 字軌 | | 未執行 | |
+| 7 email必填 | | 未執行 | |
+| 8 Timestamp | | 未執行 | §14.14假設 |

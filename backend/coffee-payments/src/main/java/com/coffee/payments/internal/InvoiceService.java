@@ -2,6 +2,9 @@ package com.coffee.payments.internal;
 
 import com.coffee.orders.api.Orders;
 import com.coffee.orders.api.Orders.InvoiceCandidate;
+import com.coffee.payments.api.Invoices;
+import com.coffee.shared.Actor;
+import com.coffee.shared.Problem;
 import com.coffee.payments.internal.EcpayInvoiceClient.*;
 import java.util.*;
 import org.slf4j.Logger;
@@ -17,7 +20,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /** Durable invoice queue. All network calls run outside transactions, including caller transactions. */
 @Service
-public class InvoiceService {
+public class InvoiceService implements Invoices {
   public static final long STALE_REQUEST_WINDOW_MS = 660000;
   private static final Logger log = LoggerFactory.getLogger(InvoiceService.class);
   private final Orders orders;
@@ -31,6 +34,53 @@ public class InvoiceService {
   public record Claim(String token, int amount, int attempts, boolean uncertain, Long inflightUntil) {}
   private record Outcome(String status, boolean uncertain, boolean clearBound, int attempts,
                          String error, String number, String date, String random) {}
+
+  private Invoice readInvoice(java.sql.ResultSet row, int index) throws java.sql.SQLException {
+    return new Invoice(row.getString("order_id"), row.getString("branch_id"), row.getInt("amount"),
+        row.getString("status"), row.getString("invoice_no"), row.getString("invoice_date"),
+        row.getString("random_number"), row.getInt("attempts"), row.getString("last_error"), row.getLong("updated_at"));
+  }
+
+  @Override
+  public Optional<Invoice> forOrder(Actor actor, String orderId) {
+    orders.get(actor, orderId);
+    return db.query("select * from invoices where order_id=?", this::readInvoice, orderId).stream().findFirst();
+  }
+
+  private void requireStaff(Actor actor) {
+    actor.require("PAYMENT_RECONCILE");
+    if (actor.customer()) throw new Problem(403, "顧客不能管理發票");
+  }
+
+  @Override
+  public InvoicePage failed(Actor actor, String branchId) {
+    requireStaff(actor);
+    String branch = branchId == null || branchId.isBlank() ? null : branchId;
+    if (!actor.global()) {
+      if (branch != null) actor.branch(branch);
+      branch = actor.branchId();
+      if (branch == null) throw new Problem(403, "只能存取所屬分店資料");
+    }
+    List<Invoice> rows = branch == null
+        ? db.query("select * from invoices where status='FAILED' order by updated_at desc,order_id limit 201", this::readInvoice)
+        : db.query("select * from invoices where status='FAILED' and branch_id=? order by updated_at desc,order_id limit 201", this::readInvoice, branch);
+    return new InvoicePage(List.copyOf(rows.subList(0, Math.min(200, rows.size()))), rows.size() > 200);
+  }
+
+  @Override
+  public Invoice retry(Actor actor, String orderId) {
+    requireStaff(actor);
+    return tx.execute(ignored -> {
+      var invoice = db.query("select * from invoices where order_id=?", this::readInvoice, orderId)
+          .stream().findFirst().orElseThrow(() -> new Problem(404, "找不到這筆發票"));
+      actor.branch(invoice.branchId());
+      if (db.update("update invoices set status='PENDING',attempts=0,uncertain=true,claim_token=null,"
+          + "claimed_until=null,last_error=null,updated_at=? where order_id=? and status='FAILED'",
+          System.currentTimeMillis(), orderId) == 0)
+        throw new Problem(409, "這張發票目前不需要重試");
+      return db.queryForObject("select * from invoices where order_id=?", this::readInvoice, orderId);
+    });
+  }
 
   public InvoiceService(Orders orders, EcpayInvoiceClient client, JdbcTemplate db,
       PlatformTransactionManager transactions,

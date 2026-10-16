@@ -6,6 +6,14 @@ ecpay:
   merchant-id: ${ECPAY_MERCHANT_ID:3002607}
   hash-key: ${ECPAY_HASH_KEY:pwFHCqoQZGmho4w6}
   hash-iv: ${ECPAY_HASH_IV:EkRm7iFT261dpevs}
+  invoice:
+    enabled: ${ECPAY_INVOICE_ENABLED:true}
+    environment: stage
+    # 官方公開電子發票測試特店，與金流特店不同；來源 https://developers.ecpay.com.tw/7849/
+    merchant-id: ${ECPAY_INVOICE_MERCHANT_ID:2000132}
+    hash-key: ${ECPAY_INVOICE_HASH_KEY:ejCk326UnaZWKisg}
+    hash-iv: ${ECPAY_INVOICE_HASH_IV:q9jcZX8Ib9LM8wYk}
+    interval-ms: ${ECPAY_INVOICE_INTERVAL_MS:60000}
   reconcile:
     enabled: ${ECPAY_RECONCILE_ENABLED:true}
     interval-ms: ${ECPAY_RECONCILE_INTERVAL_MS:120000}
@@ -16,3 +24,5 @@ ecpay:
     after-minutes: ${ECPAY_EXPIRE_AFTER_MINUTES:40}
     recheck-after-minutes: ${ECPAY_EXPIRE_RECHECK_AFTER_MINUTES:10}
     interval-ms: ${ECPAY_EXPIRE_INTERVAL_MS:120000}
+orders:
+  invoice-required: ${ORDERS_INVOICE_REQUIRED:true}

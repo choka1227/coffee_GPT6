@@ -9,8 +9,8 @@
 
 - [x] S1 完成；26f5963 兩組遠端 CI 綠（後端327 tests）
 - [x] S2a AES、用戶端、假伺服器、驗收7–11 完成；905587d 兩組遠端 CI 綠（後端387 tests）
-- [ ] S2b 開立排程與驗收12–22 已實作，等待本次最新 head CI（依規格§12切分）
-- [ ] S3 端點、前端、demo profile、完整操作文件（尚未開始）
+- [x] S2b 開立排程與驗收12–22 完成；4d8e3e9兩組CI綠，後端410 tests
+- [ ] S3 端點、前端、demo profile、完整操作文件已實作，待最新head驗證
 
 ## S1 設計與範圍
 
@@ -164,3 +164,40 @@ FakeEinvoiceServer 只追加 reset 供獨立案例重置；延後生效依 apply
 本地 backend verify 再次因 Maven Central DNS 無法下載 parent，未進編譯；前端143 tests
 通過，build另記於PR。提交時遠端CI待驗證，最新Checks／Actions jobs結果以PR為準。
 本階段尚未作官方stage介接、S3端點／授權／CSRF／前端／profile／操作文件。
+
+## S3 設計與驗收對照（2026-10-16）
+
+Invoices介面與InvoiceController新增3端點。forOrder完全重用orders.get授權；失敗清單／
+重試先檢查PAYMENT_RECONCILE與非SELF，再套用分店範圍。retry以FAILED條件原子更新，
+歸零attempts、uncertain=true、清租約但不動inflight_until；請求內不呼叫綠界。
+NONE回應明列其餘欄位null。config只新增invoice.enabled，原有欄位保持。
+EcpayService舊建構子保留作為相容轉接，新旗標採建構子注入，無模組邊界變動。
+
+前端invoice.ts驗證／正規化與後端逐字相同；共用結帳表單停用時不帶invoice。
+只有顧客讀寫coffee.invoice.last（try/catch），POS不預填或保存且建單成功即清空。
+訂單明細以序號防止切換訂單後舊回應覆蓋新狀態；顧客不顯示FAILED原因。
+對帳頁新增失敗清單、金額、原因、時間與POST重試，保留既有付款異常功能。
+
+demo profile啟用stage發票／必填；2026-10-16再次核對官方
+https://developers.ecpay.com.tw/7849/ 一般特店2000132／HashKey／HashIV，與§5.2一致。
+沒有官方stage實際開立；8步實測與紀錄表已寫進docs/ECPAY.md，不當作自動測試通過。
+無migration、相依、權限常數或CSRF例外變更；StageProfileTest只追加新斷言。
+
+| 驗收 | 測試方法／證據 |
+| --- | --- |
+| 23 | InvoiceApiTest.readsUseOrderAuthorizationAndNoneDoesNotLeakData |
+| 24 | failedListIsStaffScopedSortedAndTruncated（兩店／SELF／收銀／201筆） |
+| 25–26 | retryEnforcesCsrfScopeAndStateWithoutSendingHttp |
+| 26a | retryPreservesUnknownBoundaryUntilSafeQuery（真TIMEOUT三次後HTTP重試、界線保留、批次不連外） |
+| 27 | Browser.request每次回應檢查憑證／特店／URL不洩漏，config檢查新舊欄位 |
+| 28 | invoice.spec.ts錯誤訊息、有效邊界與三種類型正規化 |
+| 29 | InvoiceFlow.dom.test.ts發票結帳表單：停用／三種payload／驗證／記憶／POS隔離／Storage故障 |
+| 30 | 發票狀態與重試：五種訂單明細情境 |
+| 31 | 對帳頁失敗清單存在=true/false，POST URL及刷新 |
+| 32 | EcpayStageProfileTest.profileEnablesStageInvoiceWithSeparatePublicTestMerchant |
+| 33 | docs/ECPAY.md電子發票章節、8步與逐項紀錄表 |
+| 34 | 本檔各階段對照、官方核對／可見性／已知規格問題 |
+
+本地backend verify仍於下載parent時遇Maven Central DNS失敗，未進編譯；持續實作並推送，
+交由最新head遠端Checks與Actions jobs補足。前端測試／build結果與最新CI記於PR，
+本次提交時仍待遠端驗證，未宣稱已完成整份或官方stage實測。

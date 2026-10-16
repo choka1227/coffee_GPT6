@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 import { api } from "../../shared/api";
 import { money } from "../../shared/format";
-import type { PaymentAnomaly, ReconciliationPending, ReconciliationAttempt } from "../../shared/types";
+import type { PaymentAnomaly, ReconciliationPending, ReconciliationAttempt, Invoice, InvoicePage } from "../../shared/types";
 
 const items = ref<ReconciliationPending[]>([]);
 const truncated = ref(false);
@@ -12,6 +12,25 @@ const busy = ref(false);
 const message = ref("");
 const anomalyItems = ref<PaymentAnomaly[]>([]);
 const anomalyTruncated = ref(false);
+const invoiceItems = ref<Invoice[]>([]);
+const invoiceTruncated = ref(false);
+async function loadInvoices() {
+  try {
+    const page = await api<InvoicePage>("/payments/invoices/failed");
+    invoiceItems.value = page.items;
+    invoiceTruncated.value = page.truncated;
+  } catch (e) { message.value = (e as Error).message; }
+}
+async function retryInvoice(id: string | null) {
+  if (!id || busy.value) return;
+  busy.value = true;
+  try {
+    await api(`/payments/invoices/order/${encodeURIComponent(id)}/retry`, { method: "POST" });
+    await loadInvoices();
+    message.value = "已排入發票重試，等待排程確認。";
+  } catch (e) { message.value = (e as Error).message; }
+  finally { busy.value = false; }
+}
 const resolutionNotes = ref<Record<string, string>>({});
 const labels: Record<string, string> = {
   CONFIRMED: "已確認付款", STILL_UNPAID: "尚未付款", AMOUNT_MISMATCH: "金額不符",
@@ -29,6 +48,7 @@ async function load() {
     truncated.value = result.truncated;
     anomalyItems.value = anomalyPage.items;
     anomalyTruncated.value = anomalyPage.truncated;
+    await loadInvoices();
   }
   catch (e) { message.value = (e as Error).message; }
   finally { busy.value = false; }
@@ -71,6 +91,14 @@ onMounted(load);
     <button :disabled="busy" @click="load">重新整理</button>
     <p v-if="truncated">僅顯示前 200 筆。</p>
     <p role="status">{{ message }}</p>
+    <section v-if="invoiceItems.length" class="invoice-failures">
+      <h2>發票開立失敗</h2><p v-if="invoiceTruncated">僅顯示前 200 筆發票。</p>
+      <article v-for="invoice in invoiceItems" :key="invoice.orderId || ''">
+        <p>訂單編號：{{ invoice.orderId }}</p><p>金額：{{ money(invoice.amount || 0) }}</p>
+        <p>失敗原因：{{ invoice.lastError }}</p><p>最後更新時間：{{ date(invoice.updatedAt) }}</p>
+        <button :disabled="busy" @click="retryInvoice(invoice.orderId)">重試</button>
+      </article>
+    </section>
     <p v-if="!busy && !items.length">目前沒有待查核訂單。</p>
     <section v-if="anomalyItems.length">
       <h2>作廢後收到付款，需人工退款</h2>

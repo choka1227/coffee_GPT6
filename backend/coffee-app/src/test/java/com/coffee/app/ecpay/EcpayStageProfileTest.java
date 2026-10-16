@@ -38,6 +38,17 @@ class EcpayStageProfileTest {
   }
 
   @Test
+  void profileEnablesStageInvoiceWithSeparatePublicTestMerchant() {
+    assertThat(environment.getProperty("ecpay.invoice.enabled", Boolean.class)).isTrue();
+    assertThat(environment.getProperty("ecpay.invoice.environment")).isEqualTo("stage");
+    assertThat(environment.getProperty("ecpay.invoice.merchant-id")).isEqualTo("2000132")
+        .isNotEqualTo(environment.getProperty("ecpay.merchant-id"));
+    assertThat(environment.getProperty("ecpay.invoice.hash-key")).isEqualTo("ejCk326UnaZWKisg");
+    assertThat(environment.getProperty("ecpay.invoice.hash-iv")).isEqualTo("q9jcZX8Ib9LM8wYk");
+    assertThat(environment.getProperty("orders.invoice-required", Boolean.class)).isTrue();
+  }
+
+  @Test
   void profileEnablesOnlyStagePaymentAndReconciliation() throws Exception {
     assertThat(environment.getProperty("ecpay.enabled", Boolean.class)).isTrue();
     assertThat(environment.getProperty("ecpay.environment")).isEqualTo("stage");
