@@ -21,6 +21,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.util.AopTestUtils;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -73,9 +75,13 @@ class InvoiceServiceTest {
   @AfterAll static void stopFake() { fake.close(); }
 
   private String paid(String method) {
+    return paid(method, new Orders.InvoiceRequest("CLOUD", EMAIL, null, null));
+  }
+
+  private String paid(String method, Orders.InvoiceRequest invoice) {
     var order = orders.create(cashier, new Orders.Create("taipei", "TAKEAWAY", method, "", null,
         List.of(new Orders.LineInput("latte", 1, List.of("temp-hot", "sugar-none"))),
-        new Orders.InvoiceRequest("CLOUD", EMAIL, null, null)), UUID.randomUUID().toString());
+        invoice), UUID.randomUUID().toString());
     if (method.equals("CASH")) orders.cash(cashier, order.id(), order.total());
     else orders.confirmOnline(order.id(), order.total(), UUID.randomUUID().toString(), System.currentTimeMillis());
     return order.id();
@@ -83,9 +89,13 @@ class InvoiceServiceTest {
 
   private String pending() {
     String id = paid("CASH");
+    enqueue(id);
+    return id;
+  }
+
+  private void enqueue(String id) {
     db.update("insert into invoices(order_id,branch_id,amount,status,created_at,updated_at) "
         + "select id,branch_id,total,'PENDING',0,0 from orders where id=?", id);
-    return id;
   }
 
   private Map<String, Object> row(String id) {
@@ -191,6 +201,22 @@ class InvoiceServiceTest {
     assertThat(issueCount()).isEqualTo(1);
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"OTHER_REJECTED", "MISSING_FIELDS", "STRING_AMOUNT"})
+  void queryOnlyTreatsNotFoundAsAbsenceAndRequiresCompleteSuccess(String scenario) {
+    String id = pending();
+    service.issueOne(id);
+    db.update("update invoices set status='PENDING',uncertain=true,inflight_until=? where order_id=?",
+        System.currentTimeMillis() + 60000, id);
+    Object boundary = row(id).get("inflight_until");
+    fake.respond("GetIssue", FakeEinvoiceServer.Scenario.valueOf(scenario));
+    service.issueOne(id);
+    if (scenario.equals("STRING_AMOUNT")) issued(id);
+    else assertThat(row(id)).containsEntry("status", "PENDING").containsEntry("uncertain", true)
+        .containsEntry("attempts", 1).containsEntry("inflight_until", boundary);
+    assertThat(issueCount()).isEqualTo(1);
+  }
+
   @Test
   void rejectionClearsBoundaryButUnknownExhaustionPreservesIt() {
     String id = pending();
@@ -215,8 +241,12 @@ class InvoiceServiceTest {
 
   @Test
   void missingInvoiceAndChangedAmountFailWithoutNetwork() {
-    String missing = pending();
-    db.update("update orders set invoice_type=null,invoice_email=null where id=?", missing);
+    Object orderService = AopTestUtils.getUltimateTargetObject(orders);
+    String missing;
+    ReflectionTestUtils.setField(orderService, "invoiceRequired", false);
+    try { missing = paid("CASH", null); }
+    finally { ReflectionTestUtils.setField(orderService, "invoiceRequired", true); }
+    enqueue(missing);
     service.issueOne(missing);
     assertThat(row(missing)).containsEntry("status", "FAILED").containsEntry("uncertain", false)
         .containsEntry("last_error", "訂單缺少發票資訊");
@@ -226,6 +256,17 @@ class InvoiceServiceTest {
     assertThat(row(changed)).containsEntry("status", "FAILED")
         .containsEntry("last_error", "訂單金額已變動，請人工確認");
     assertThat(fake.received()).isEmpty();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"CLOUD", "MOBILE", "DONATE"})
+  void allInvoiceTypesCompleteWithoutLoggingPrivateFields(String type) {
+    String id = paid("CASH", new Orders.InvoiceRequest(type, EMAIL,
+        type.equals("MOBILE") ? "/ABC1234" : null, type.equals("DONATE") ? "7654321" : null));
+    enqueue(id);
+    service.issueOne(id);
+    issued(id);
+    assertThat(issueCount()).isEqualTo(1);
   }
 
   @Test

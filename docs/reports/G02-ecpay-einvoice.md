@@ -151,11 +151,15 @@ Timestamp 有效期與 NTP 仍依已合併規格假設；本機假伺服器不�
 | 21f | lateOkCompensatesWithoutStealingOtherClaim（FAILED／SKIPPED／他人PENDING三種） |
 | 21g | delayedEffectCannotCauseASecondIssueUntilBoundaryExpires（apply／drop兩種） |
 | 21h | postClaimSnapshotWinsOverOrderReadBeforeAnotherWorkersTimeout |
-| 22 | 每個案例 AfterEach OutputCapture 完整輸出衛生斷言；原 NoEgressGuard 不改 |
+| 22 | 每個案例 AfterEach OutputCapture 完整輸出衛生斷言；allInvoiceTypesCompleteWithoutLoggingPrivateFields 實際送出三種類型；原 NoEgressGuard 不改 |
 | HTTP無交易 | ambientTransactionIsSuspendedAndHttpSeesCommittedInflightState（假伺服器另一DB連線可讀寫） |
+| 防禦判讀 | queryOnlyTreatsNotFoundAsAbsenceAndRequiresCompleteSuccess（非查無拒絕／缺少號碼保留界線；整數金額字串可確認） |
 
 FakeEinvoiceServer 只追加 reset 供獨立案例重置；延後生效依 apply/drop 明確驅動，
 雙 worker 的先後使用 bounded latch／Future，不靠任意 sleep。
+缺少發票資訊的案例由 invoice-required=false 建立並付款，再恢復 true，
+不以 SQL 偽造缺少資料；驗證歷史訂單在啟用後的處理。排程最外層也攔住批次
+基礎設施例外，只印固定 WARN、不交給預設排程錯誤處理器輸出堆疊。
 
 本地 backend verify 再次因 Maven Central DNS 無法下載 parent，未進編譯；前端143 tests
 通過，build另記於PR。提交時遠端CI待驗證，最新Checks／Actions jobs結果以PR為準。

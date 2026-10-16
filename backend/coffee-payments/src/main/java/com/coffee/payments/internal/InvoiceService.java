@@ -56,7 +56,11 @@ public class InvoiceService {
   @Scheduled(fixedDelayString = "${ecpay.invoice.interval-ms:300000}")
   public void scheduled() {
     if (!enabled) return;
-    runOnce(System.currentTimeMillis());
+    try {
+      runOnce(System.currentTimeMillis());
+    } catch (RuntimeException failure) {
+      log.warn("綠界發票：批次處理失敗");
+    }
   }
 
   /** Explicit queue clock for deterministic cutoff tests; HTTP timestamps always use current time. */
@@ -195,8 +199,16 @@ public class InvoiceService {
 
   private Outcome confirmed(Claim snap, Ok response, boolean query) {
     var data = response.data();
-    if (query && !Integer.toString(snap.amount()).equals(String.valueOf(data.get("IIS_Sales_Amount"))))
-      return failure(snap, "綠界已有同編號發票但金額不符");
+    if (query) {
+      String amount = Objects.toString(data.get("IIS_Sales_Amount"), "");
+      if (!amount.matches("[0-9]+")) return unknown(snap);
+      try {
+        if (Integer.parseInt(amount) != snap.amount())
+          return failure(snap, "綠界已有同編號發票但金額不符");
+      } catch (NumberFormatException invalidAmount) {
+        return unknown(snap);
+      }
+    }
     String number = Objects.toString(data.get(query ? "IIS_Number" : "InvoiceNo"), "");
     String date = Objects.toString(data.get(query ? "IIS_Create_Date" : "InvoiceDate"), "");
     String random = Objects.toString(data.get(query ? "IIS_Random_Number" : "RandomNumber"), "");

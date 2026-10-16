@@ -17,7 +17,7 @@ public final class FakeEinvoiceServer implements AutoCloseable {
   public enum Scenario {
     OK, DUPLICATE, REJECTED, SUCCEED_THEN_TIMEOUT, TIMEOUT, DELAYED_EFFECT,
     HTTP_500, TRANS_CODE_ERROR, BAD_CIPHER, AMOUNT_MISMATCH, REDIRECT_TO_PRODUCTION,
-    BAD_JSON, BAD_DATA_JSON
+    BAD_JSON, BAD_DATA_JSON, OTHER_REJECTED, MISSING_FIELDS, STRING_AMOUNT
   }
 
   public record Request(String path, JsonNode outer, JsonNode data) {
@@ -105,8 +105,8 @@ public final class FakeEinvoiceServer implements AutoCloseable {
       }
       Map<String, Object> result = new LinkedHashMap<>();
       result.put("RtnCode", 1);
-      if (scenario == Scenario.REJECTED) {
-        result.put("RtnCode", issue ? 4000001 : 1600003);
+      if (scenario == Scenario.REJECTED || scenario == Scenario.OTHER_REJECTED) {
+        result.put("RtnCode", issue || scenario == Scenario.OTHER_REJECTED ? 4000001 : 1600003);
         result.put("RtnMsg", "參數錯誤");
       } else if (issue) {
         result.putAll(remember(request));
@@ -124,6 +124,9 @@ public final class FakeEinvoiceServer implements AutoCloseable {
           result.put("IIS_Remain_Allowance_Amt", invoice.get("SalesAmount"));
         }
       }
+      if (scenario == Scenario.MISSING_FIELDS) result.remove(issue ? "InvoiceNo" : "IIS_Number");
+      if (scenario == Scenario.STRING_AMOUNT && result.containsKey("IIS_Sales_Amount"))
+        result.put("IIS_Sales_Amount", "0" + result.get("IIS_Sales_Amount"));
       String encrypted = scenario == Scenario.BAD_CIPHER ? "bad-cipher"
           : EinvoiceCodec.encrypt(scenario == Scenario.BAD_DATA_JSON ? "{" : json.writeValueAsString(result), key, iv);
       send(exchange, 200, json.writeValueAsString(Map.of("TransCode",
