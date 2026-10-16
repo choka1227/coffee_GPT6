@@ -45,7 +45,7 @@
 | --- | --- |
 | 1 | OrderInvoiceRequestTest.migrationCreatesNamedConstraintsAndIndexesWithoutInitializingCursor；全部 Spring context 經 Flyway 套用 V16 |
 | 2 | legacyOrdersAndFingerprintsRemainCompatible；oldHttpPayloadWorksWhileRequiredInvoiceReturnsExact400；既有 Create 呼叫只補 null |
-| 3 | rejectsEveryInvalidInvoice（16 組參數）；HTTP 必填錯誤精確 400 |
+| 3 | rejectsEveryInvalidInvoice（16 組參數）；HTTP 必填錯誤精確 400；InvoiceRequestValidationTest 純單元測試覆蓋正規化、必填旗標及「非必填仍須驗證已提供欄位」 |
 | 4 | persistsNormalizedInvoiceInAllOrderProjections（4 組，涵蓋三類及邊界） |
 | 5 | invoiceIsPartOfIdempotencyFingerprint；legacyOrdersAndFingerprintsRemainCompatible |
 | 6 | paidCandidateCursorUsesTimeThenIdAndInclusiveUpperBound |
@@ -62,7 +62,10 @@
 
 ## 遠端 CI
 
-首個 S1 head 尚待 Checks API 與 Actions jobs 驗證；不採用主線或舊 head 的成功代替。
+首個 S1 head b919cde 的兩組 CI 均完成編譯，但新增測試的反射工具呼叫因泛型推導
+選到 Class overload 而產生 ClassCastException。已將解代理結果先存入 Object，再呼叫
+物件 overload；未放寬／跳過測試。最新修正 head 仍需 Checks API 與 Actions jobs 驗證；
+不採用主線或舊 head 的成功代替。
 整份規格未完成，PR 維持 draft，不啟用 auto-merge。
 
 ## 後續驗證與選擇

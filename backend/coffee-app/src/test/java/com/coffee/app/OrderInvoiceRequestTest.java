@@ -49,7 +49,8 @@ class OrderInvoiceRequestTest {
   }
 
   private void required(boolean value) {
-    ReflectionTestUtils.setField(AopTestUtils.getUltimateTargetObject(orders), "invoiceRequired", value);
+    Object target = AopTestUtils.getUltimateTargetObject(orders);
+    ReflectionTestUtils.setField(target, "invoiceRequired", value);
   }
 
   private Orders.Create request(InvoiceRequest invoice) {
