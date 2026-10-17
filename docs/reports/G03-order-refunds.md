@@ -7,8 +7,9 @@ G02 #94 已於 2026-10-17T14:40:29Z 整份合併（7a861b2），V16 已存在。
 
 ## 施工狀態
 
-- [ ] S1 退款本體：程式與驗收1–11測試已完成，等待最新 head 遠端 verify。
-- [ ] S2 發票作廢／折讓：未開始；先12–14，再15–23不可拆排程。
+- [x] S1 退款本體：fe14fa55的兩組完整CI成功，backend432／frontend183測試及build通過。
+- [ ] S2a 日期與用戶端（驗收12–14）：程式與測試完成，等待本次最新head遠端verify。
+- [ ] S2b 發票退款掃描／作廢排程（15–23含21a–21l）：未開始，不可拆排程。
 - [ ] S3 端點／報表／前端／文件：未開始。
 
 整份保持 draft，不啟用 auto-merge，不能以 S1 當作完整退款上線。
@@ -65,3 +66,37 @@ S2 驗收12–23（含21a–21l）與 S3 驗收24–33未實作／未驗證；�
 因此先被CSRF擋成403；付款掃描從0開始只取200筆，拿不到數千筆demo資料後的新訂單。
 已保持401／單筆退款欄位的原斷言，分別補匿名CSRF及精確paid_at範圍fixture，未放寬安全或分頁條件。
 另補退款／交班兩種鎖順序測試；修正後結果一律以最新head CI為準。
+
+## S2a 日期與作廢／折讓用戶端
+
+來源仍為主線7a861b2的G03；本次執行識別codex-g03-s2a-20261017T1635Z。
+補掃#95沒有新提交或新實質證據，保留既有REQUEST_CHANGES、不重送審查；它不阻擋G03施工。
+
+- `InvoiceDeadline.canVoid(invoiceDate, now)`使用Asia/Taipei，雙月期結束後次月13日00:00為排他界線，
+  即12日23:59:59.999可作廢、13日起走折讓。可解析DB日期時間的前10碼；無效日期／缺時間／未來日期保守false。
+- `EcpayInvoiceClient.invalid/allowance`帶呼叫端timestampSec（依v1.3 §6.6第4步），共用現有AES信封、
+  stage限制、HTTP逾時及不跟隨redirect。作廢日期取前10碼，折讓三處金額均使用呼叫端的發票快照amount。
+  null／空白email不放NotifyMail並設AllowanceNotify=N；有email設E。
+- `NotifyMail`與`Reason`加入provider拒絕訊息遮罩欄位，既有金鑰／MerchantID遮罩保留。
+- FakeEinvoiceServer保留Issue/GetIssue情境行為，只追加Invalid/Allowance路徑與獨立作廢狀態／剩餘額。
+  支援VOID_PAST_DEADLINE、SUCCEED_THEN_TIMEOUT、DELAYED_EFFECT及套用／丟棄延後結果，
+  兩個新路徑皆支援掛勾。超額／已作廢不再折讓；新情境ECHO_SENSITIVE驗證回應衛生。
+- 無新migration／依賴／端點／設定／權限變更，不修改InvoiceService，不接上排程，不呼叫DoAction。
+
+### 驗收方法
+
+| 驗收 | 測試方法 |
+| --- | --- |
+| 12 | InvoiceDeadlineTest.allBimonthlyPeriodsAcceptTwelfthButNeverThirteenth（12個月）；leapDayAndCrossYearUseTaipeiRatherThanUtcCalendar；malformedDateNeverAuthorizesVoid；missingClockAndFutureInvoiceNeverAuthorizeVoid |
+| 13 | InvoiceReversalClientTest.encryptedRequestsMatchSpecAndQueryReflectsProviderState（兩路徑）；nullEmailOmitsNotificationMailAndUsesSameFullAmount |
+| 14 | bothOperationsReturnUnknownOnUncertainTransportOrEnvelope（七情境×兩路徑）；disabledInvalidInputAndConnectionFailuresDoNotLeakOrSendUnexpectedRequests |
+| 假伺服器與衛生補強 | successThenTimeoutIsVisibleToQueryWithoutResending；delayedEffectCanBeAppliedOrDroppedWithoutChangingLegacyIssueScenarios；voidDeadlineRefusalAndSensitiveEchoAreSafe |
+
+### 疑點與下一階段
+
+- 日期格式依已合併規格yyyy-MM-dd，未執行官方stage實機驗證；不能將假伺服器結果當官方驗收。
+- 無效／未來發票日期保守不授權作廢；用戶端無效發票欄位或非正金額回Unknown且不連外。
+  `allowance`的Ok保留IA_Allow_No原欄位；S2b須依規格驗證成功欄位並寫回，這裡不假造作廢排程成功。
+- S2b完整處理退款掃描、issueOne三條規則與reverseOne；驗收15–23全部尚未完成。
+- 本地frontend183測試與build通過；backend verify仍因Maven Central DNS失敗未編譯。
+  本次remote verify尚待push後查最新head，不沿用fe14fa55的綠燈。
