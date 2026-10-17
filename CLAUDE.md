@@ -86,6 +86,8 @@ gh pr view <N> --json author,headRefName --jq '"\(.author.login) \(.headRefName)
 **Claude 不審 `claude/*` 分支的 PR**（那是自己發的），也不審 HSIN 本人手動開的 PR。
 只審 author 為 `iisihsin-codex` 的 PR。
 
+**Codex 的工具無法以 merge 方式開 auto-merge 時，由 Claude 代為合併**（PO 2026-10-17 決定，條件見 AGENTS.md「Codex 的工具無法以 merge 方式啟用 auto-merge 時」）：PR 已可直接合併就以 merge 方式合併並鎖定已核准的 head SHA；不用 squash／rebase；未核准、CI 未綠、draft 一律不做。
+
 ---
 
 ## Commit 與分支

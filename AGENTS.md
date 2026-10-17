@@ -190,6 +190,22 @@ gh pr merge <N> --auto --merge
 條件（對方核准 + CI 綠 + 分支同步）滿足時 GitHub 會自動合併並刪分支。
 不要用 `gh pr merge` 不帶 `--auto` ——那是立刻合併，會跳過等待對方審查。
 
+#### Codex 的工具無法以 merge 方式啟用 auto-merge 時（PO 2026-10-17 決定）
+
+Codex 的 GitHub 連線只能以 squash 啟用 auto-merge、無法指定 merge 方式時，**Codex 不要改用 squash**，在 PR 描述註明即可，由 Claude 代為處理。四個條件全部成立才可以：
+
+1. Codex 已把 PR 轉為 ready，且規格的施工階段全部完成
+2. Claude 已對**目前的 head** 送出 `APPROVE`
+3. 目前 head 的 CI 全綠
+4. 與主線無衝突
+
+- CI 仍在跑 → Claude 以 merge 方式啟用 auto-merge
+- **PR 已經可以直接合併時**（GitHub 不給開 auto-merge）→ **Claude 直接以 merge 方式合併，並鎖定已核准的 head SHA**（`expectedHeadSha` 填 `APPROVE` 綁定的 `commit_id`；head 變了合併會失敗，要重審新 head）
+- **任何時候都不用 squash 或 rebase**
+- 還沒核准、CI 沒綠、還是 draft 的 PR，一律不代為合併
+
+這不是繞過互審：Claude 的 `APPROVE` 仍是合併的前提，代為處理的只有「按下合併」這一步。首例是 [PR #94](https://github.com/choka1227/coffee_GPT6/pull/94)（G02，2026-10-17 由 Claude 以 merge 方式合併，主線 `7a861b2`）。
+
 ### 併行作業
 
 兩個 agent 同時在改，主線隨時會動：
