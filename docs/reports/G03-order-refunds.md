@@ -100,3 +100,8 @@ S2 驗收12–23（含21a–21l）與 S3 驗收24–33未實作／未驗證；�
 - S2b完整處理退款掃描、issueOne三條規則與reverseOne；驗收15–23全部尚未完成。
 - 本地frontend183測試與build通過；backend verify仍因Maven Central DNS失敗未編譯。
   本次remote verify尚待push後查最新head，不沿用fe14fa55的綠燈。
+
+首輪S2a遠端完成編譯並執行470 tests；三個新測試錯把Unknown當成「沒有副作用」。
+BAD_CIPHER／BAD_DATA_JSON／TRANS_CODE_ERROR假伺服器在操作成立後破壞回應，發票實際已作廢，
+因此原本查詢預期未作廢不正確。修正測試明確驗證三情境已作廢、其他四情境未作廢，
+並追加剩餘金額未變（後續折讓因發票已作廢被拒）；Unknown斷言保留，不改假伺服器或生產行為去掩蓋不明結果。

@@ -122,7 +122,13 @@ class InvoiceReversalClientTest {
           assertThat(((Unknown) result).reason()).isEqualTo("HTTP_302");
       }
       assertThat(server.received()).hasSize(3);
-      assertThat(((Ok) client.getIssueByRelateNumber(ID)).data().get("IIS_Invalid_Status")).isEqualTo("0");
+      // These scenarios corrupt only the response, after the provider has applied the operation.
+      // Unknown must never be interpreted as proof that the side effect did not happen.
+      boolean applied = Set.of(Scenario.BAD_CIPHER, Scenario.BAD_DATA_JSON, Scenario.TRANS_CODE_ERROR)
+          .contains(scenario);
+      var query = (Ok) client.getIssueByRelateNumber(ID);
+      assertThat(query.data().get("IIS_Invalid_Status")).isEqualTo(applied ? "1" : "0");
+      assertThat(query.data().get("IIS_Remain_Allowance_Amt")).isEqualTo(126);
     }
     clean(output);
   }
