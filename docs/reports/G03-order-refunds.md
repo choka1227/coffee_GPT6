@@ -33,6 +33,8 @@ S2 才會接上退款與發票開立競態防線；本階段未呼叫任何綠�
    執行最新版 InitialData，可能已帶新權限。不防重會違反主鍵；不擴大授權角色。
 3. OrderPaginationTest 手建 schema 必須補 nullable 退款欄位（否則新增 mapper 讀取不存在的欄位）；
    只追加欄位、未改斷言。三個 Order fixture 與一個 InvoiceCandidate fixture 只補 null。
+   BranchDaySettingsMigrationTest 的權限總數14改15並明確斷言ORDER_REFUND，原BRANCH_HOURS_OVERRIDE斷言保留，
+   這是新增權限的精確契約同步，未刪除或放寬測試。
 4. 規格未要求未歸班獨立退款欄位；現有 Page 的金額／筆數按同一區間扣除，不新增未要求的 API 欄位。
 
 ## 驗收對照
