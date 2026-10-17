@@ -81,7 +81,7 @@ class PreviewWriteGuardTest {
     var captured = WriteDetectingDataSource.around(() -> orders.create(
         identity.find("cashier"),
         new Orders.Create(
-            "taipei", "TAKEAWAY", "CASH", "", null, List.of(line())),
+            "taipei", "TAKEAWAY", "CASH", "", null, List.of(line()), null),
         UUID.randomUUID().toString()));
 
     assertThat(captured.writes()).anySatisfy(sql -> assertThat(sql.trim())

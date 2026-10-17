@@ -214,6 +214,6 @@ class EcpayStageGuardTest {
         null,
         null,
         null,
-        List.of());
+        List.of(), null);
   }
 }

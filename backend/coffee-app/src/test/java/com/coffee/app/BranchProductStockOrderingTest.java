@@ -312,7 +312,7 @@ class BranchProductStockOrderingTest {
   }
 
   private Orders.Create createRequest(Orders.LineInput... lines) {
-    return new Orders.Create("taipei", "TAKEAWAY", "CASH", "庫存測試", null, List.of(lines));
+    return new Orders.Create("taipei", "TAKEAWAY", "CASH", "庫存測試", null, List.of(lines), null);
   }
 
   private Orders.LineInput line(String productId, int quantity) {

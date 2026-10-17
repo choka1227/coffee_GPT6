@@ -83,7 +83,7 @@ class ReconciliationTest {
             method,
             "",
             null,
-            List.of(new Orders.LineInput("latte", 1, List.of("temp-hot", "sugar-none")))),
+            List.of(new Orders.LineInput("latte", 1, List.of("temp-hot", "sugar-none"))), null),
         UUID.randomUUID().toString());
   }
 
@@ -132,7 +132,7 @@ class ReconciliationTest {
                 "taipei", "TAKEAWAY", "ECPAY", "", "STACK10",
                 List.of(
                     new Orders.LineInput(
-                        "latte", 1, List.of("temp-hot", "sugar-none")))),
+                        "latte", 1, List.of("temp-hot", "sugar-none"))), null),
             UUID.randomUUID().toString());
 
     var candidate =

@@ -23,6 +23,7 @@ public class EcpayService {
   private final JdbcTemplate db;
   private final boolean enabled;
   private final boolean expireEnabled;
+  private final boolean invoiceEnabled;
   private final long checkoutWindowMinutes, expireAfterMinutes;
   private final PaymentAnomalies anomalies;
   private final String merchant, key, iv, base, environment;
@@ -39,7 +40,8 @@ public class EcpayService {
       @Value("${ecpay.environment:stage}") String environment,
       @Value("${ecpay.expire.enabled:false}") boolean expireEnabled,
       @Value("${ecpay.expire.checkout-window-minutes:20}") long checkoutWindowMinutes,
-      @Value("${ecpay.expire.after-minutes:60}") long expireAfterMinutes) {
+      @Value("${ecpay.expire.after-minutes:60}") long expireAfterMinutes,
+      @Value("${ecpay.invoice.enabled:false}") boolean invoiceEnabled) {
     this.orders = orders;
     this.db = db;
     this.enabled = enabled;
@@ -49,6 +51,7 @@ public class EcpayService {
     this.base = base.replaceAll("/+$", "");
     this.environment = environment;
     this.expireEnabled = expireEnabled;
+    this.invoiceEnabled = invoiceEnabled;
     this.checkoutWindowMinutes = checkoutWindowMinutes;
     this.expireAfterMinutes = expireAfterMinutes;
     this.anomalies = new PaymentAnomalies(db);
@@ -60,6 +63,13 @@ public class EcpayService {
         log.warn(
             "綠界付款通知（ReturnURL）需要可從外網連線的 HTTPS 網址；目前設定無法收到通知，付款狀態將由排程對帳補救");
     }
+  }
+
+  public EcpayService(Orders orders, JdbcTemplate db, boolean enabled, String merchant,
+      String key, String iv, String base, String environment, boolean expireEnabled,
+      long checkoutWindowMinutes, long expireAfterMinutes) {
+    this(orders, db, enabled, merchant, key, iv, base, environment, expireEnabled,
+        checkoutWindowMinutes, expireAfterMinutes, false);
   }
 
   public EcpayService(
@@ -94,6 +104,7 @@ public class EcpayService {
     return Map.of(
         "enabled", enabled,
         "environment", environment,
+        "invoice", Map.of("enabled", invoiceEnabled),
         "expire",
             Map.of(
                 "enabled", expireEnabled,

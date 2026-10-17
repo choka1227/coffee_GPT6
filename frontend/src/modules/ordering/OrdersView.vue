@@ -9,7 +9,7 @@ import {
   Check,
 } from "lucide-vue-next";
 import { api, send } from "../../shared/api";
-import type { Order, OrderPage, PaymentConfig } from "../../shared/types";
+import type { Order, OrderPage, PaymentConfig, Invoice } from "../../shared/types";
 import { useAuth } from "../identity/store";
 import { money, dateTime, statuses } from "../../shared/format";
 import { notify } from "../../shared/notice";
@@ -31,6 +31,17 @@ const auth = useAuth(),
   paymentConfig = ref<PaymentConfig | null>(null);
 let queryTimer: ReturnType<typeof setTimeout> | undefined;
 let requestSequence = 0;
+const invoice = ref<Invoice | null>(null);
+let invoiceSequence = 0;
+watch(selected, async (order) => {
+  const sequence = ++invoiceSequence;
+  invoice.value = null;
+  if (!order?.paidAt) return;
+  try {
+    const result = await api<Invoice>("/payments/invoices/order/" + encodeURIComponent(order.id));
+    if (sequence === invoiceSequence) invoice.value = result;
+  } catch { /* Invoice availability must not hide the order receipt. */ }
+});
 const nextStatus: Record<string, string> = {
   PAID: "PREPARING",
   PREPARING: "READY",
@@ -295,6 +306,9 @@ async function pay(o: Order) {
         statuses[selected.status]
       }}</span>
       <h3>#{{ selected.id }}</h3>
+      <p v-if="invoice?.status === 'ISSUED'" class="invoice-status">發票號碼 {{ invoice.invoiceNo }}（隨機碼 {{ invoice.randomNumber }}）</p>
+      <p v-else-if="invoice?.status === 'PENDING' || (invoice?.status === 'FAILED' && auth.customer)" class="invoice-status">發票開立中</p>
+      <p v-else-if="invoice?.status === 'FAILED'" class="invoice-status">發票開立失敗：{{ invoice.lastError }}</p>
       <p class="muted">
         {{ selected.branchName }} · {{ dateTime(selected.createdAt) }}
       </p>

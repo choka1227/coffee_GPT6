@@ -67,6 +67,7 @@ class EcpayStageEndToEndTest {
   @DynamicPropertySource
   static void ecpay(DynamicPropertyRegistry registry) {
     registry.add("ecpay.query-url", FAKE::queryUrl);
+    registry.add("ecpay.invoice.base-url", () -> "http://127.0.0.1:1");
   }
 
   @LocalServerPort int port;
@@ -318,7 +319,7 @@ class EcpayStageEndToEndTest {
             "ECPAY",
             "",
             null,
-            List.of(new Orders.LineInput("latte", 2, List.of("temp-hot", "sugar-none")))),
+            List.of(new Orders.LineInput("latte", 2, List.of("temp-hot", "sugar-none"))), null),
         UUID.randomUUID().toString());
   }
 

@@ -118,6 +118,7 @@ export interface OrderOption {
   priceDelta: number;
 }
 export interface Order {
+  invoice?: InvoiceRequest | null;
   id: string;
   branchId: string;
   branchName: string;
@@ -344,6 +345,7 @@ export interface PaymentAnomaly {
   detectedAt: number;
 }
 export interface PaymentConfig {
+  invoice: { enabled: boolean };
   enabled: boolean;
   environment: string;
   expire: {
@@ -352,3 +354,22 @@ export interface PaymentConfig {
     afterMinutes: number;
   };
 }
+export interface InvoiceRequest {
+  type: "CLOUD" | "MOBILE" | "DONATE";
+  email: string;
+  carrier?: string;
+  loveCode?: string;
+}
+export interface Invoice {
+  orderId: string | null;
+  branchId: string | null;
+  amount: number | null;
+  status: "NONE" | "PENDING" | "ISSUED" | "FAILED" | "SKIPPED";
+  invoiceNo: string | null;
+  invoiceDate: string | null;
+  randomNumber: string | null;
+  attempts: number | null;
+  lastError: string | null;
+  updatedAt: number | null;
+}
+export interface InvoicePage { items: Invoice[]; truncated: boolean }

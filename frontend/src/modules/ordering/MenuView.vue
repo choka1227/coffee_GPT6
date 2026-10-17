@@ -42,6 +42,7 @@ import {
   validateTendered,
 } from "./checkout";
 import { promotionCartHint, promotionText } from "./promotions";
+import { validateInvoice, toInvoiceRequest } from "./invoice";
 import {
   beginQuote,
   emptyQuoteState,
@@ -79,7 +80,8 @@ const auth = useAuth(),
   stockBusy = ref(false),
   branchHours = ref<BranchHours[]>([]),
   todayOverride = ref<BranchDayOverride | null>(null),
-  config = ref({ enabled: false, environment: "stage" });
+  config = ref({ enabled: false, environment: "stage", invoice: { enabled: false } });
+const invoiceForm = ref({ type: "CLOUD", email: "", carrier: "", loveCode: "" });
 let retryBody = "",
   retryKey = "";
 const QUOTE_DEBOUNCE_MS = 300;
@@ -246,10 +248,17 @@ async function load() {
   try {
     const [b, c] = await Promise.all([
       api<Branch[]>("/branches"),
-      api<{ enabled: boolean; environment: string }>("/payments/config"),
+      api<{ enabled: boolean; environment: string; invoice: { enabled: boolean } }>("/payments/config"),
     ]);
     branches.value = b;
     config.value = c;
+    if (auth.customer && c.invoice?.enabled) {
+      try {
+        const last = JSON.parse(localStorage.getItem("coffee.invoice.last") || "null");
+        if (typeof last?.email === "string") invoiceForm.value.email = last.email;
+        if (typeof last?.carrier === "string") invoiceForm.value.carrier = last.carrier;
+      } catch { /* Storage is optional; private browsing must not block checkout. */ }
+    }
     if (!b.some((branch) => branch.id === branchId.value)) branchId.value = b[0]?.id || "";
     await Promise.all([loadMenu(), loadBranchHours()]);
     menuReady = true;
@@ -427,6 +436,10 @@ async function checkout() {
     paymentMethod: payment.value,
     discountCode: discountCode.value,
   });
+  if (config.value.invoice?.enabled) {
+    const invalid = validateInvoice(invoiceForm.value);
+    if (invalid) { notify(invalid); return; }
+  }
   let cash = tendered.value;
   if (path === "POS_CASH_SINGLE") {
     const due = amountDue({ path, cartTotal: total.value, pendingOrderTotal: null });
@@ -447,6 +460,7 @@ async function checkout() {
       paymentMethod: payment.value,
       note: note.value,
       discountCode: discountCode.value,
+      ...(config.value.invoice?.enabled ? { invoice: toInvoiceRequest(invoiceForm.value) } : {}),
       items: cart.value.map(({ productId, quantity, optionIds }) => ({
         productId,
         quantity,
@@ -464,6 +478,14 @@ async function checkout() {
     order = await send<Order>("/orders", body, "POST", {
       "Idempotency-Key": retryKey,
     });
+    if (auth.customer && config.value.invoice?.enabled) {
+      try {
+        localStorage.setItem("coffee.invoice.last", JSON.stringify({
+          email: invoiceForm.value.email.trim(), carrier: invoiceForm.value.carrier.trim().toUpperCase(),
+        }));
+      } catch { /* Checkout already succeeded; do not turn a storage error into a retry. */ }
+    }
+    if (!auth.customer) invoiceForm.value = { type: "CLOUD", email: "", carrier: "", loveCode: "" };
     cart.value = [];
     note.value = "";
     discountCode.value = "";
@@ -848,7 +870,15 @@ async function saveStock(clear = false) {
               }}
             </option>
           </select></label
-        ><div v-if="pendingCashOrder">
+        ><fieldset v-if="config.invoice?.enabled && !pendingCashOrder" class="invoice-fields">
+          <legend>發票</legend>
+          <label>發票開立方式<select v-model="invoiceForm.type">
+            <option value="CLOUD">雲端發票</option><option value="MOBILE">手機條碼</option><option value="DONATE">捐贈</option>
+          </select></label>
+          <label>發票通知 email<input v-model="invoiceForm.email" type="email" maxlength="100" autocomplete="email" /></label>
+          <label v-if="invoiceForm.type === 'MOBILE'">手機條碼<input v-model="invoiceForm.carrier" maxlength="8" @input="invoiceForm.carrier = invoiceForm.carrier.toUpperCase()" /></label>
+          <label v-if="invoiceForm.type === 'DONATE'">捐贈碼<input v-model="invoiceForm.loveCode" maxlength="7" inputmode="numeric" /></label>
+        </fieldset><div v-if="pendingCashOrder">
           <div class="change-row">
             <span>小計</span><b>{{ money(pendingCashOrder.subtotal) }}</b>
           </div>

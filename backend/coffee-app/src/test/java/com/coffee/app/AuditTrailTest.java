@@ -86,7 +86,7 @@ class AuditTrailTest {
                 null,
                 List.of(
                     new Orders.LineInput(
-                        "latte", 1, List.of("temp-hot", "sugar-none")))),
+                        "latte", 1, List.of("temp-hot", "sugar-none"))), null),
             UUID.randomUUID().toString());
     orders.cash(cashier, created.id(), 200);
     orders.transition(cashier, created.id(), "PREPARING");
