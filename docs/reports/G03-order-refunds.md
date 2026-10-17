@@ -8,8 +8,8 @@ G02 #94 已於 2026-10-17T14:40:29Z 整份合併（7a861b2），V16 已存在。
 ## 施工狀態
 
 - [x] S1 退款本體：fe14fa55的兩組完整CI成功，backend432／frontend183測試及build通過。
-- [ ] S2a 日期與用戶端（驗收12–14）：程式與測試完成，等待本次最新head遠端verify。
-- [ ] S2b 發票退款掃描／作廢排程（15–23含21a–21l）：未開始，不可拆排程。
+- [x] S2a 日期與用戶端（驗收12–14）：13d95e9兩組最新head CI成功，backend470／frontend183及build通過。
+- [ ] S2b 發票退款掃描／作廢排程（15–23含21a–21l）：程式與測試已保存，等待最新head遠端verify；整段一併驗證。
 - [ ] S3 端點／報表／前端／文件：未開始。
 
 整份保持 draft，不啟用 auto-merge，不能以 S1 當作完整退款上線。
@@ -53,7 +53,7 @@ S2 才會接上退款與發票開立競態防線；本階段未呼叫任何綠�
 | S2前置掃描 | internalRefundCursorIsInclusiveAtInitialBoundaryAndKeysetPaginated |
 
 CashSessionsTest、CoffeeIntegrationTest、HttpWorkflowTest 完全未改。
-S2 驗收12–23（含21a–21l）與 S3 驗收24–33未實作／未驗證；不冒稱完成。
+S2b最新head驗證結果以PR描述為準；S3驗收24–33尚未實作／未驗證。
 
 ## 驗證
 
@@ -105,3 +105,48 @@ S2 驗收12–23（含21a–21l）與 S3 驗收24–33未實作／未驗證；�
 BAD_CIPHER／BAD_DATA_JSON／TRANS_CODE_ERROR假伺服器在操作成立後破壞回應，發票實際已作廢，
 因此原本查詢預期未作廢不正確。修正測試明確驗證三情境已作廢、其他四情境未作廢，
 並追加剩餘金額未變（後續折讓因發票已作廢被拒）；Unknown斷言保留，不改假伺服器或生產行為去掩蓋不明結果。
+
+## S2b 退款與發票排程
+
+執行識別codex-g03-s2b-20261017T174225Z；同一主線來源與PR #97，沒有開另一份規格。
+
+- REFUNDED初始游標為T0-lag，之後退款掃描和游標推進同一短交易；主鍵競態回滾、不跳過訂單。
+  確定沒有發票才SKIPPED；ISSUED或持有者／不明／在途列建立作廢列。
+- issueOne以條件更新判定退款可否跳過，不信任認領前的快照。拒絕且退款改SKIPPED/NONE；
+  所有ISSUED路徑提交後再重讀退款狀態，確保作廢列存在。保留G02遲到Ok補償與NONE重設。
+- 作廢批次join僅取ISSUED，避免FAILED/PENDING發票堵住批次。reverseOne使用NOT_SUPPORTED包住HTTP、
+  REQUIRES_NEW短交易、UUID持有者、認領後重讀、送出前持久化timestamp相同的inflight_until。
+  不明先查GetIssue，界線未過不重送且不加attempts；作廢拒絕只改走折讓一次。
+  DONE/確定拒絕清界線；Unknown保留界線與實際送出kind，達上限保留uncertain；失去token丟棄回應。
+- 額外防守性檢查：查詢的發票號及金額必須符合快照，作廢狀態／餘額需可判讀；
+  折讓成功必須有非空且<=20碼的IA_Allow_No，否則當Unknown、下一輪查詢，不能假造成功。
+- INFO摘要只增加作廢／折讓／失敗數量；無新migration、依賴、權限、設定或端點，不呼叫DoAction。
+  email仍從Orders API取得，不跨模組查orders表。S3失敗清單／重試／前端仍未接上。
+
+### S2b 驗收對照（InvoiceRefundSchedulerTest）
+
+| 驗收 | 測試方法 |
+| --- | --- |
+| 15 | refundCursorBoundaryAndLagAreInclusiveAndDurable |
+| 16 | issuedRefundVoidsAndReportsAggregate |
+| 17 | expiredInvoiceUsesFullAllowanceWithoutVoid |
+| 18 | refusedVoidFallsBackOnceInSameRound |
+| 19 | reversalSucceedThenTimeoutQueriesInsteadOfResending（作廢／折讓） |
+| 20 | refundBeforeEnqueueSkipsWithoutProviderRequest；certainPendingAndRejectedInvoiceSkipWithoutAnyNewRequest；missingInvoiceInformationOnRefundSkipsWithoutNetwork |
+| 21、21a | refundDuringIssueIsCaughtEvenWhenRefundCursorAlreadyPassed（掃描／游標已走過兩種） |
+| 21b、21c | uncertainIssueAfterRefundConfirmsOrCreatesUniqueInvoice（成功逾時／查無後開立） |
+| 21d | uncertainRefundRejectedIssueEndsAsNone |
+| 21e | unresolvedFailedInvoicesDoNotStarveIssuedReversal（batch=2，三筆FAILED在前） |
+| 21f | staleWorkerCannotSendWhileOwnerIsInFlightThenRefundSkipsRejectedInvoice |
+| 21g | deadOwnerRefundWaitsForLeaseThenQueriesExistingInvoice |
+| 21h | lateSuccessfulIssuePullsSkippedNoneBackIntoReversal |
+| 21i | reversalClaimExcludesConcurrentWorkerAndHttpDoesNotHoldTransaction |
+| 21j | delayedIssueRefundNeverSkipsAndOnlyResendsAfterBound（apply/drop） |
+| 21k、21l | delayedReversalPreservesKindAndBoundWithoutEarlyResend（作廢／折讓） |
+| 22 | deterministicRejectionsAndUnknownAttemptCapHaveDistinctCertainty |
+| 23 | 全案例cleanLogs；queryRejectedFailsWithoutMutationAndSensitiveProviderMessagesStaySanitized；既有TimeZoneGuardTest／EcpayNoEgressGuardTest未改 |
+| 額外回歸 | lostReversalOwnerDiscardsResponseAndNextOwnerQueriesEffect；malformedAllowanceSuccessRemainsUncertainUntilQueryProvesEffect；malformedQueryDoesNotAuthorizeProviderMutation |
+
+本地frontend183測試通過，build另列最新結果；backend verify仍因Maven Central DNS在解析parent POM前失敗，
+未進編譯，不宣稱backend本地通過。將整段實作與測試push交最新head Checks、Actions與jobs驗證。
+官方stage實機尚未驗證，仍留S3文件驗收紀錄，不把假伺服器冒充官方結果。
