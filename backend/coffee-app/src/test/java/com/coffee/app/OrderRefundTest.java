@@ -138,7 +138,9 @@ class OrderRefundTest {
     for (String actor : List.of("manager2", "cashier", "customer")) {
       assertThat(refund(actor, id, "越權", null).statusCode()).isEqualTo(403);
     }
-    assertThat(new Browser().request("POST", "/orders/" + id + "/refund", "{}", true).statusCode()).isEqualTo(401);
+    Browser anonymous = new Browser();
+    anonymous.refresh(); // Isolate authentication from the independent CSRF gate.
+    assertThat(anonymous.request("POST", "/orders/" + id + "/refund", "{}", true).statusCode()).isEqualTo(401);
     assertThat(browsers.get("manager").request("POST", "/orders/" + id + "/refund", "{}", false).statusCode()).isEqualTo(403);
     assertThat(row(id)).isEqualTo(before);
     assertThat(sessions.get(identity.find("manager"), session.id())).isEqualTo(cashBefore);
@@ -285,13 +287,13 @@ class OrderRefundTest {
     }
     Collections.sort(ids);
     db.update("update orders set refunded_at=1000 where id=?", ids.get(0));
-    for (int i = 1; i < 4; i++) db.update("update orders set refunded_at=2000 where id=?", ids.get(i));
+    for (int i = 1; i < 4; i++) db.update("update orders set refunded_at=2000,paid_at=5000 where id=?", ids.get(i));
     var first = orders.refundedCandidates(2000, "", 2000, 2);
     assertThat(first).extracting(Orders.RefundedCandidate::orderId).containsExactly(ids.get(1), ids.get(2));
     assertThat(orders.refundedCandidates(2000, ids.get(2), 2000, 2))
         .extracting(Orders.RefundedCandidate::orderId).containsExactly(ids.get(3));
     assertThat(orders.invoiceCandidate(ids.get(1)).orElseThrow().refundedAt()).isEqualTo(2000L);
-    assertThat(orders.invoiceCandidates(0, "", System.currentTimeMillis(), 200))
+    assertThat(orders.invoiceCandidates(5000, "", 5000, 200))
         .filteredOn(o -> o.orderId().equals(ids.get(1))).singleElement()
         .satisfies(o -> assertThat(o.refundedAt()).isEqualTo(2000L));
   }
