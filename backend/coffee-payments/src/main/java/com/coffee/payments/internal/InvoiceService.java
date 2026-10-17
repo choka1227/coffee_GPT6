@@ -31,6 +31,10 @@ public class InvoiceService implements Invoices {
   private final boolean enabled;
   private final long lagMs, leaseMs;
   private final int batch, maxAttempts;
+  private static final String INVOICE_SELECT = "select i.*,r.kind as reversal_kind,r.status as reversal_status,r.allowance_no,r.last_error as reversal_error "
+      + "from invoices i left join invoice_reversals r on r.order_id=i.order_id ";
+  private static final String REVERSAL_SELECT = "select r.*,i.invoice_no,i.amount from invoice_reversals r "
+      + "join invoices i on i.order_id=r.order_id ";
 
   public record Claim(String token, int amount, int attempts, boolean uncertain, Long inflightUntil) {}
   private record Outcome(String status, boolean uncertain, boolean clearBound, int attempts,
@@ -39,13 +43,14 @@ public class InvoiceService implements Invoices {
   private Invoice readInvoice(java.sql.ResultSet row, int index) throws java.sql.SQLException {
     return new Invoice(row.getString("order_id"), row.getString("branch_id"), row.getInt("amount"),
         row.getString("status"), row.getString("invoice_no"), row.getString("invoice_date"),
-        row.getString("random_number"), row.getInt("attempts"), row.getString("last_error"), row.getLong("updated_at"));
+        row.getString("random_number"), row.getInt("attempts"), row.getString("last_error"), row.getLong("updated_at"),
+        row.getString("reversal_kind"), row.getString("reversal_status"), row.getString("allowance_no"), row.getString("reversal_error"));
   }
 
   @Override
   public Optional<Invoice> forOrder(Actor actor, String orderId) {
     orders.get(actor, orderId);
-    return db.query("select * from invoices where order_id=?", this::readInvoice, orderId).stream().findFirst();
+    return db.query(INVOICE_SELECT + "where i.order_id=?", this::readInvoice, orderId).stream().findFirst();
   }
 
   private void requireStaff(Actor actor) {
@@ -63,8 +68,8 @@ public class InvoiceService implements Invoices {
       if (branch == null) throw new Problem(403, "只能存取所屬分店資料");
     }
     List<Invoice> rows = branch == null
-        ? db.query("select * from invoices where status='FAILED' order by updated_at desc,order_id limit 201", this::readInvoice)
-        : db.query("select * from invoices where status='FAILED' and branch_id=? order by updated_at desc,order_id limit 201", this::readInvoice, branch);
+        ? db.query(INVOICE_SELECT + "where i.status='FAILED' order by i.updated_at desc,i.order_id limit 201", this::readInvoice)
+        : db.query(INVOICE_SELECT + "where i.status='FAILED' and i.branch_id=? order by i.updated_at desc,i.order_id limit 201", this::readInvoice, branch);
     return new InvoicePage(List.copyOf(rows.subList(0, Math.min(200, rows.size()))), rows.size() > 200);
   }
 
@@ -72,14 +77,51 @@ public class InvoiceService implements Invoices {
   public Invoice retry(Actor actor, String orderId) {
     requireStaff(actor);
     return tx.execute(ignored -> {
-      var invoice = db.query("select * from invoices where order_id=?", this::readInvoice, orderId)
+      var invoice = db.query(INVOICE_SELECT + "where i.order_id=?", this::readInvoice, orderId)
           .stream().findFirst().orElseThrow(() -> new Problem(404, "找不到這筆發票"));
       actor.branch(invoice.branchId());
       if (db.update("update invoices set status='PENDING',attempts=0,uncertain=true,claim_token=null,"
           + "claimed_until=null,last_error=null,updated_at=? where order_id=? and status='FAILED'",
           System.currentTimeMillis(), orderId) == 0)
         throw new Problem(409, "這張發票目前不需要重試");
-      return db.queryForObject("select * from invoices where order_id=?", this::readInvoice, orderId);
+      return db.queryForObject(INVOICE_SELECT + "where i.order_id=?", this::readInvoice, orderId);
+    });
+  }
+
+  private Reversal readReversal(java.sql.ResultSet r, int n) throws java.sql.SQLException {
+    return new Reversal(r.getString("order_id"), r.getString("branch_id"), r.getString("invoice_no"),
+        r.getInt("amount"), r.getString("kind"), r.getString("status"), r.getString("allowance_no"),
+        r.getInt("attempts"), r.getString("last_error"), r.getLong("updated_at"));
+  }
+
+  @Override
+  public ReversalPage failedReversals(Actor actor, String branchId) {
+    requireStaff(actor);
+    String branch = branchId == null || branchId.isBlank() ? null : branchId;
+    if (!actor.global()) {
+      if (branch != null) actor.branch(branch);
+      branch = actor.branchId();
+      if (branch == null) throw new Problem(403, "只能存取所屬分店資料");
+    }
+    String query = REVERSAL_SELECT + "where r.status='FAILED'";
+    List<Reversal> rows = branch == null
+        ? db.query(query + " order by r.updated_at desc,r.order_id limit 201", this::readReversal)
+        : db.query(query + " and r.branch_id=? order by r.updated_at desc,r.order_id limit 201", this::readReversal, branch);
+    return new ReversalPage(List.copyOf(rows.subList(0, Math.min(200, rows.size()))), rows.size() > 200);
+  }
+
+  @Override
+  public Reversal retryReversal(Actor actor, String orderId) {
+    requireStaff(actor);
+    return tx.execute(ignored -> {
+      var row = db.query(REVERSAL_SELECT + "where r.order_id=?", this::readReversal, orderId)
+          .stream().findFirst().orElseThrow(() -> new Problem(404, "找不到這筆發票"));
+      actor.branch(row.branchId());
+      if (db.update("update invoice_reversals set status='PENDING',attempts=0,uncertain=true,"
+          + "claim_token=null,claimed_until=null,last_error=null,updated_at=? where order_id=? and status='FAILED'",
+          System.currentTimeMillis(), orderId) == 0)
+        throw new Problem(409, "這筆作廢／折讓目前不需要重試");
+      return db.queryForObject(REVERSAL_SELECT + "where r.order_id=?", this::readReversal, orderId);
     });
   }
 

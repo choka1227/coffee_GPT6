@@ -36,7 +36,9 @@ public interface Reports {
       List<Hourly> hourly,
       long cashOrders,
       long onlineOrders,
-      long takeawayOrders) {}
+      long takeawayOrders,
+      long refundAmount,
+      long refundOrders) {}
 
   MonthlyReport report(Actor a, String month, String branchId);
 }

@@ -253,6 +253,7 @@ function exportReport() {
         <article class="kpi featured">
           <div><span>本月營業額</span><Wallet :size="19" /></div>
           <h2>{{ money(report.revenue) }}</h2>
+          <p v-if="report.refundOrders > 0" class="refund-summary">退款 −{{ money(report.refundAmount) }}（{{ report.refundOrders }} 筆）<br />扣除退款後 {{ money(report.revenue - report.refundAmount) }}</p>
           <small>已確認付款 · {{ month }}</small>
         </article>
         <article class="kpi">

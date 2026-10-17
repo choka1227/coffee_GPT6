@@ -139,6 +139,12 @@ public class ReportService implements Reports {
     for (int h = 0; h < 24; h++) {
       hourly.add(new Hourly(String.format("%02d:00", h), hourlyOrders[h]));
     }
+    // Refunds have a different time axis. Scalar subqueries retain the seven-statement
+    // aggregation contract without filtering any existing paid-order projection.
+    String refundFilter = branch == null ? "" : " and f.branch_id=?";
+    List<Object> totalParams = new ArrayList<>(params);
+    totalParams.addAll(params);
+    totalParams.addAll(params);
     long[] totals =
         db.queryForObject(
             "select coalesce(sum(o.total),0),coalesce(sum(o.discount_amount),0),count(*),"
@@ -146,15 +152,17 @@ public class ReportService implements Reports {
                 + "coalesce(sum(case when o.payment_method='ECPAY' then 1 else 0 end),0),"
                 + "coalesce(sum(case when o.fulfillment='TAKEAWAY' then 1 else 0 end),0),"
                 + "coalesce(sum(o.item_discount_amount),0),"
-                + "coalesce(sum(o.discount_amount-o.item_discount_amount),0)"
+                + "coalesce(sum(o.discount_amount-o.item_discount_amount),0),"
+                + "(select coalesce(sum(f.total),0) from orders f where f.refunded_at>=? and f.refunded_at<?" + refundFilter + "),"
+                + "(select count(*) from orders f where f.refunded_at>=? and f.refunded_at<?" + refundFilter + ")"
                 + " from orders o where o.paid_at>=? and o.paid_at<?"
                 + filter,
             (r, n) ->
                 new long[] {
                   r.getLong(1), r.getLong(2), r.getLong(3), r.getLong(4),
-                  r.getLong(5), r.getLong(6), r.getLong(7), r.getLong(8)
+                  r.getLong(5), r.getLong(6), r.getLong(7), r.getLong(8), r.getLong(9), r.getLong(10)
                 },
-            params.toArray());
+            totalParams.toArray());
     long revenue = totals[0], discount = totals[1], count = totals[2];
     long itemDiscount = totals[6], codeDiscount = totals[7];
     long netProductRevenue =
@@ -188,6 +196,8 @@ public class ReportService implements Reports {
         hourly,
         totals[3],
         totals[4],
-        totals[5]);
+        totals[5],
+        totals[8],
+        totals[9]);
   }
 }

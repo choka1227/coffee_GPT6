@@ -182,4 +182,94 @@ class InvoiceApiTest {
     assertThat(row(id)).containsEntry("status", "ISSUED");
     assertThat(fake.received().get(calls).path()).endsWith("/GetIssue");
   }
+
+  // New refund fixtures are cleaned before the unchanged G02 reset deletes invoices/orders.
+  @AfterEach void cleanupRefundFixtures() {
+    db.update("delete from invoice_reversals");
+    db.update("update orders set refunded_at=null,refunded_by=null,refund_reason=null,refund_provider_note=null,refund_cash_session_id=null");
+  }
+  String failedReversal(String branch) {
+    String id = order(branch, true, true);
+    db.update("update invoices set status='PENDING',attempts=0 where order_id=?", id);
+    service.issueOne(id);
+    orders.refund(identity.find(branch.equals("taipei") ? "manager" : "manager2"), id,
+        new Orders.RefundRequest("測試退款", null));
+    db.update("insert into invoice_reversals(order_id,branch_id,kind,status,attempts,last_error,created_at,updated_at) "
+        + "values(?,?,'VOID','FAILED',3,'待人工重試',0,1)", id, branch);
+    return id;
+  }
+  String reversalRetry(String id) { return path(id) + "/reversal/retry"; }
+  Map<String, Object> reversalRow(String id) { return db.queryForMap("select * from invoice_reversals where order_id=?", id); }
+
+  @Test void reversalListAuthorizationScopeSortAndTwoHundredLimit() throws Exception {
+    String a = failedReversal("taipei"), b = failedReversal("banqiao");
+    db.update("update invoice_reversals set updated_at=2 where order_id=?", b);
+    var all = sessions.get("hq").call("GET", "/payments/invoices/reversals/failed", null);
+    assertThat(all.path("items").size()).isEqualTo(2);
+    assertThat(all.path("items").get(0).path("orderId").asText()).isEqualTo(b);
+    assertThat(all.path("items").get(0).path("invoiceNo").asText()).matches("AB[0-9]{8}");
+    assertThat(sessions.get("manager").call("GET", "/payments/invoices/reversals/failed", null).path("items").get(0).path("orderId").asText()).isEqualTo(a);
+    assertThat(sessions.get("hq").call("GET", "/payments/invoices/reversals/failed?branchId=taipei", null).path("items").size()).isEqualTo(1);
+    assertThat(sessions.get("manager").request("GET", "/payments/invoices/reversals/failed?branchId=banqiao", null, true).statusCode()).isEqualTo(403);
+    for (String user : List.of("customer", "cashier"))
+      assertThat(sessions.get(user).request("GET", "/payments/invoices/reversals/failed", null, true).statusCode()).isEqualTo(403);
+    assertThat(new Browser().request("GET", "/payments/invoices/reversals/failed", null, false).statusCode()).isEqualTo(401);
+    Actor forged = new Actor("customer", "x", "x", "CUSTOMER", "SELF", null, Set.of("PAYMENT_RECONCILE"));
+    assertThatThrownBy(() -> service.failedReversals(forged, null)).isInstanceOf(Problem.class).hasMessage("顧客不能管理發票");
+    for (int n = 0; n < 199; n++) {
+      String id = order("taipei", false, true);
+      db.update("insert into invoice_reversals(order_id,branch_id,status,created_at,updated_at) values(?,'taipei','FAILED',0,0)", id);
+    }
+    var page = sessions.get("hq").call("GET", "/payments/invoices/reversals/failed", null);
+    assertThat(page.path("items").size()).isEqualTo(200); assertThat(page.path("truncated").asBoolean()).isTrue();
+  }
+
+  @Test void reversalRetryEnforcesCsrfScopeStateAndPreservesKindAndBoundary() throws Exception {
+    String id = failedReversal("taipei"); long bound = System.currentTimeMillis() + 660000;
+    db.update("update invoice_reversals set kind='ALLOWANCE',uncertain=true,inflight_until=? where order_id=?", bound, id);
+    var before = reversalRow(id);
+    for (String user : List.of("manager2", "cashier", "customer")) {
+      assertThat(sessions.get(user).request("POST", reversalRetry(id), null, true).statusCode()).isEqualTo(403);
+      assertThat(reversalRow(id)).isEqualTo(before);
+    }
+    assertThat(sessions.get("manager").request("POST", reversalRetry(id), null, false).statusCode()).isEqualTo(403);
+    assertThat(reversalRow(id)).isEqualTo(before);
+    int calls = fake.received().size();
+    var result = sessions.get("manager").call("POST", reversalRetry(id), null);
+    assertThat(result.path("kind").asText()).isEqualTo("ALLOWANCE");
+    assertThat(reversalRow(id)).containsEntry("status", "PENDING").containsEntry("attempts", 0)
+        .containsEntry("uncertain", true).containsEntry("kind", "ALLOWANCE").containsEntry("inflight_until", bound)
+        .containsEntry("claim_token", null).containsEntry("claimed_until", null).containsEntry("last_error", null);
+    assertThat(fake.received()).hasSize(calls); // API never calls the provider.
+    service.reverseOne(id);
+    assertThat(fake.received().get(calls).path()).endsWith("/GetIssue");
+    assertThat(fake.received()).hasSize(calls + 1); // Still within old boundary: no allowance.
+    assertThat(reversalRow(id)).containsEntry("attempts", 0).containsEntry("inflight_until", bound);
+    db.update("update invoice_reversals set inflight_until=? where order_id=?", System.currentTimeMillis() - 1, id);
+    service.reverseOne(id);
+    assertThat(reversalRow(id)).containsEntry("status", "DONE").containsEntry("kind", "ALLOWANCE");
+    var detail = sessions.get("customer").call("GET", path(id), null);
+    assertThat(detail.path("reversalStatus").asText()).isEqualTo("DONE");
+    assertThat(detail.path("reversalKind").asText()).isEqualTo("ALLOWANCE");
+    assertThat(detail.path("allowanceNo").asText()).startsWith("AL");
+    var conflict = sessions.get("manager").request("POST", reversalRetry(id), null, true);
+    assertThat(conflict.statusCode()).isEqualTo(409);
+    assertThat(json.readTree(conflict.body()).path("message").asText()).isEqualTo("這筆作廢／折讓目前不需要重試");
+    var missing = sessions.get("hq").request("POST", reversalRetry("missing"), null, true);
+    assertThat(missing.statusCode()).isEqualTo(404);
+    assertThat(json.readTree(missing.body()).path("message").asText()).isEqualTo("找不到這筆發票");
+  }
+
+  @Test void invoiceDetailsExposeNullOrFailureReversalFieldsWithoutChangingInvoiceStatus() throws Exception {
+    String id = order("taipei", true, true);
+    var initial = sessions.get("customer").call("GET", path(id), null);
+    assertThat(initial.path("reversalKind").isNull()).isTrue();
+    assertThat(initial.path("reversalStatus").isNull()).isTrue();
+    db.update("insert into invoice_reversals(order_id,branch_id,status,last_error,created_at,updated_at) values(?,'taipei','FAILED','查不到這張發票，請人工確認',0,0)", id);
+    var failed = sessions.get("manager").call("GET", path(id), null);
+    assertThat(failed.path("status").asText()).isEqualTo("FAILED");
+    assertThat(failed.path("reversalStatus").asText()).isEqualTo("FAILED");
+    assertThat(failed.path("reversalLastError").asText()).isEqualTo("查不到這張發票，請人工確認");
+    assertThat(sessions.get("manager2").request("GET", path(id), null, true).statusCode()).isEqualTo(403);
+  }
 }

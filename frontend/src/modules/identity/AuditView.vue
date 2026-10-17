@@ -50,6 +50,7 @@ onMounted(() => load());
           >動作<select v-model="action">
             <option value="">全部動作</option>
             <option value="ORDER_CASH">現金收款</option>
+            <option value="ORDER_REFUNDED">退款</option>
             <option value="CASH_OPEN">開班</option>
             <option value="CASH_CLOSE">交班</option>
             <option value="ORDER_STATUS">訂單狀態</option>

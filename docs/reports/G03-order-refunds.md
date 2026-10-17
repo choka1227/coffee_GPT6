@@ -9,8 +9,8 @@ G02 #94 已於 2026-10-17T14:40:29Z 整份合併（7a861b2），V16 已存在。
 
 - [x] S1 退款本體：fe14fa55的兩組完整CI成功，backend432／frontend183測試及build通過。
 - [x] S2a 日期與用戶端（驗收12–14）：13d95e9兩組最新head CI成功，backend470／frontend183及build通過。
-- [ ] S2b 發票退款掃描／作廢排程（15–23含21a–21l）：程式與測試已保存，等待最新head遠端verify；整段一併驗證。
-- [ ] S3 端點／報表／前端／文件：未開始。
+- [x] S2b 發票退款掃描／作廢排程（15–23含21a–21l）：c5df720兩組CI成功，backend498／frontend183及build通過。
+- [ ] S3 端點／報表／前端／文件：程式及驗收24–33測試／文件完成，等待本次最新head遠端verify。
 
 整份保持 draft，不啟用 auto-merge，不能以 S1 當作完整退款上線。
 S2 才會接上退款與發票開立競態防線；本階段未呼叫任何綠界 API 或 DoAction。
@@ -53,7 +53,7 @@ S2 才會接上退款與發票開立競態防線；本階段未呼叫任何綠�
 | S2前置掃描 | internalRefundCursorIsInclusiveAtInitialBoundaryAndKeysetPaginated |
 
 CashSessionsTest、CoffeeIntegrationTest、HttpWorkflowTest 完全未改。
-S2b最新head驗證結果以PR描述為準；S3驗收24–33尚未實作／未驗證。
+S3最新head驗證結果以PR描述為準；官方stage實機仍為待PO驗收，不擋合併。
 
 ## 驗證
 
@@ -150,3 +150,45 @@ BAD_CIPHER／BAD_DATA_JSON／TRANS_CODE_ERROR假伺服器在操作成立後破�
 本地frontend183測試通過，build另列最新結果；backend verify仍因Maven Central DNS在解析parent POM前失敗，
 未進編譯，不宣稱backend本地通過。將整段實作與測試push交最新head Checks、Actions與jobs驗證。
 官方stage實機尚未驗證，仍留S3文件驗收紀錄，不把假伺服器冒充官方結果。
+
+## S3 端點、報表、畫面與文件
+
+來源仍為7a861b2的G03；執行識別codex-g03-s3-20261017T183554Z，續同PR #97。
+本輪#95的Claude回覆承認原退件矛盾、尚未推修正，head仍d28a25ed，保留REQUEST_CHANGES不重送。
+
+- 新增作廢失敗清單與重試：沿用PAYMENT_RECONCILE／非顧客／分店範圍；最多200筆、倒序。
+  404沿用「找不到這筆發票」、409依G03指定文案；寫入需CSRF。重試不呼叫provider，保留kind/inflight，
+  attempts歸零、uncertain=true、清持有者，後續仍先查詢。
+- Invoice mapper用payments內部LEFT JOIN補reversalKind/reversalStatus，沒有列均null；訂單授權仍先orders.get。
+  §7要求顯示折讓號與失敗原因，但§6.7 record只列kind/status，故補nullable allowanceNo/reversalLastError，
+  只攜帶既有作廢列已遮罩的值，不捏造單號或更改原invoice.lastError語意。NONE回應新增欄位仍全部null。
+- 月報僅加refundAmount/refundOrders，獨立以refunded_at時間與同一branch篩選；舊paid_at條件／毛額／商品／折抵不改。
+  為保留既有聚合「固定7次SQL」防線，退款總額／筆數用同一totals SQL中的獨立scalar subquery取得，
+  不增加SQL round-trip、不讓付款區間限制跨月退款。不是在前端計算退款。
+- ReportAggregationTest的手建schema追加nullable refunded_at、insert明列原欄位、完整expected map追加兩個0值；
+  原完整輸出及7次SQL斷言全保留，只同步新欄位契約。另新增退款前後所有舊欄位相等、跨月與跨店案例。
+- OrdersView顯示退款資訊、整筆退款對話框、線上必填退刷紀錄，送出只有reason/providerNote而無金額；
+  canRefund純函式守權限／已付款／未退款／未取消，退款後隱藏推進。CashSessions/Reports顯示退款與扣除後數字，
+  無退款月報整行隱藏；對帳顯示失敗與重試；Audit新增ORDER_REFUNDED選項，權限標籤追加ORDER_REFUND。
+- docs/ECPAY.md新增人工退刷限制、排程界線、§11六步及空白驗收紀錄表；官方stage尚未執行，列待PO驗收。
+- 無新migration／依賴／設定／模組邊界，V1–V17及AGENTS/CLAUDE不改。
+
+### S3 驗收對照
+
+| 驗收 | 測試方法 |
+| --- | --- |
+| 24 | InvoiceApiTest.reversalListAuthorizationScopeSortAndTwoHundredLimit；reversalRetryEnforcesCsrfScopeStateAndPreservesKindAndBoundary（真HTTP、Cookie、CSRF、403不變性、404/409文案、200筆上限、保留方式/界線且先查） |
+| 25 | invoiceDetailsExposeNullOrFailureReversalFieldsWithoutChangingInvoiceStatus；reversalRetryEnforcesCsrfScopeStateAndPreservesKindAndBoundary（成功單號） |
+| 26 | ReportAggregationTest.refundsUseRefundMonthAndPreserveEveryExistingFieldAndScope；既有完整輸出及固定7次查詢測試原斷言保留 |
+| 27 | refund.spec.ts canRefund四種可退款狀態及四種拒絕條件（包含epoch0） |
+| 28 | Refund.dom.test.ts 已退款資訊/推進隱藏、收銀顧客入口隱藏、現金/線上文案、200字/空白、POST URL/body無金額/CSRF/刷新、VOID/ALLOWANCE/PENDING/FAILED/NONE與顧客隱藏原因 |
+| 29 | CashSessionsView.dom.test.ts 目前班別與歷史退款；ReportsView.dom.test.ts 退款兩案例（有/無） |
+| 30 | ReconciliationView.dom.test.ts 顯示訂單發票方式原因及200筆提示，POST重試後刷新 |
+| 31 | AuditView.dom.test.ts 稽核篩選包含退款 |
+| 32 | docs/ECPAY.md「退款與發票作廢／折讓」及「待PO驗收」六步記錄表；未冒稱實測 |
+| 33 | 本檔包含各階段、1–33方法映射、未改測試與疑點 |
+
+指定既有CashSessionsTest、CoffeeIntegrationTest、HttpWorkflowTest及TimeZoneGuardTest／EcpayNoEgressGuardTest全未改。
+InvoiceApiTest僅追加案例、helper與新fixture的AfterEach清理；G02原案例／reset／斷言未改。
+本地backend verify因Maven Central DNS失敗仍未編譯；前端最新結果及遠端最新head CI以PR描述為準。
+首輪DOM測試抓到load只刷新開票清單、未初載作廢清單，已修正實際load流程，未放寬測試。

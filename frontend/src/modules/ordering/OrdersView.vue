@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount } from "vue";
+import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { useRoute } from "vue-router";
 import {
   RefreshCw,
@@ -15,6 +15,7 @@ import { money, dateTime, statuses } from "../../shared/format";
 import { notify } from "../../shared/notice";
 import Modal from "../../shared/Modal.vue";
 import { openEcpay } from "../payments/ecpay";
+import { canRefund } from "./refund";
 const auth = useAuth(),
   route = useRoute(),
   orders = ref<Order[]>([]),
@@ -32,6 +33,30 @@ const auth = useAuth(),
 let queryTimer: ReturnType<typeof setTimeout> | undefined;
 let requestSequence = 0;
 const invoice = ref<Invoice | null>(null);
+const refundOrder = ref<Order | null>(null);
+const refundReason = ref("");
+const providerNote = ref("");
+const validRefund = computed(() => refundReason.value.trim().length > 0
+  && refundReason.value.trim().length <= 200
+  && (refundOrder.value?.paymentMethod !== "ECPAY"
+    || (providerNote.value.trim().length > 0 && providerNote.value.trim().length <= 200)));
+function openRefund(order: Order) {
+  refundOrder.value = order; refundReason.value = ""; providerNote.value = "";
+}
+async function refund() {
+  if (!refundOrder.value || !validRefund.value || busy.value) return;
+  const order = refundOrder.value;
+  busy.value = true;
+  try {
+    const updated = await send<Order>("/orders/" + encodeURIComponent(order.id) + "/refund", {
+      reason: refundReason.value.trim(),
+      providerNote: order.paymentMethod === "ECPAY" ? providerNote.value.trim() : null,
+    });
+    refundOrder.value = null; selected.value = updated;
+    notify("訂單已退款"); await load();
+  } catch (e) { notify((e as Error).message); }
+  finally { busy.value = false; }
+}
 let invoiceSequence = 0;
 watch(selected, async (order) => {
   const sequence = ++invoiceSequence;
@@ -235,7 +260,7 @@ async function pay(o: Order) {
               </td>
               <td>
                 <span class="status" :class="o.status.toLowerCase()">{{
-                  statuses[o.status]
+                  o.refundedAt != null ? statuses.REFUNDED : statuses[o.status]
                 }}</span>
               </td>
               <td>
@@ -262,7 +287,7 @@ async function pay(o: Order) {
                   >
                     收款</button
                   ><button
-                    v-if="!auth.customer && nextStatus[o.status]"
+                    v-if="!auth.customer && o.refundedAt == null && nextStatus[o.status]"
                     class="btn small secondary"
                     :disabled="busy"
                     @click="transition(o, nextStatus[o.status])"
@@ -303,12 +328,21 @@ async function pay(o: Order) {
   <Modal v-if="selected" title="訂單明細" @close="selected = null"
     ><div class="receipt">
       <span class="status" :class="selected.status.toLowerCase()">{{
-        statuses[selected.status]
+        selected.refundedAt != null ? statuses.REFUNDED : statuses[selected.status]
       }}</span>
       <h3>#{{ selected.id }}</h3>
+      <p v-if="selected.refundedAt != null" class="refund-info">
+        退款時間：{{ dateTime(selected.refundedAt) }}<br />退款原因：{{ selected.refundReason }}<br />執行人：{{ selected.refundedBy }}
+      </p>
+      <template v-if="invoice?.reversalKind !== 'NONE'">
+        <p v-if="invoice?.reversalStatus === 'DONE'" class="reversal-status">{{ invoice.reversalKind === 'VOID' ? '發票已作廢' : '發票已折讓' }}<span v-if="invoice.reversalKind === 'ALLOWANCE' && invoice.allowanceNo">（折讓單號 {{ invoice.allowanceNo }}）</span></p>
+        <p v-else-if="invoice?.reversalStatus === 'PENDING'" class="reversal-status">發票作廢處理中</p>
+        <p v-else-if="invoice?.reversalStatus === 'FAILED' && !auth.customer" class="reversal-status">發票作廢／折讓失敗：{{ invoice.reversalLastError }}</p>
+      </template>
       <p v-if="invoice?.status === 'ISSUED'" class="invoice-status">發票號碼 {{ invoice.invoiceNo }}（隨機碼 {{ invoice.randomNumber }}）</p>
       <p v-else-if="invoice?.status === 'PENDING' || (invoice?.status === 'FAILED' && auth.customer)" class="invoice-status">發票開立中</p>
       <p v-else-if="invoice?.status === 'FAILED'" class="invoice-status">發票開立失敗：{{ invoice.lastError }}</p>
+      <p v-else-if="invoice?.status === 'SKIPPED'" class="invoice-status">未開立</p>
       <p class="muted">
         {{ selected.branchName }} · {{ dateTime(selected.createdAt) }}
       </p>
@@ -352,6 +386,9 @@ async function pay(o: Order) {
         }}
       </p>
       <button
+        v-if="canRefund(selected, auth.user?.permissions || [])"
+        class="btn danger refund-button" :disabled="busy" @click="openRefund(selected)">整筆退款</button>
+      <button
         v-if="
           selected.status === 'PENDING_PAYMENT' &&
           selected.paymentMethod === 'CASH'
@@ -389,4 +426,13 @@ async function pay(o: Order) {
         {{ busy ? "確認中…" : "確認已收到現金" }}<Check :size="18" />
       </button></form
   ></Modal>
+  <Modal v-if="refundOrder" title="整筆退款" @close="!busy && (refundOrder = null)">
+    <form class="form-stack refund-form" @submit.prevent="refund">
+      <p v-if="refundOrder.paymentMethod === 'CASH'">請從錢櫃退還 {{ money(refundOrder.total) }} 給顧客。</p>
+      <p v-else>請先到綠界廠商後台完成退刷，再回來登記。系統不會自動退刷。</p>
+      <label>退款原因<input v-model="refundReason" maxlength="200" required /></label>
+      <label v-if="refundOrder.paymentMethod === 'ECPAY'">綠界退刷紀錄<input v-model="providerNote" maxlength="200" required /></label>
+      <button class="btn danger" :disabled="busy || !validRefund">{{ busy ? '登記中…' : '確認整筆退款' }}</button>
+    </form>
+  </Modal>
 </template>
