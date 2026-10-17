@@ -26,6 +26,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
     "spring.datasource.url=jdbc:h2:mem:g03-refund;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
@@ -40,6 +42,7 @@ class OrderRefundTest {
   @Autowired Identity identity;
   @Autowired Catalog catalog;
   @Autowired JdbcTemplate db;
+  @Autowired PlatformTransactionManager transactionManager;
   final ObjectMapper json = new ObjectMapper();
   final Map<String, Browser> browsers = new HashMap<>();
 
@@ -217,6 +220,46 @@ class OrderRefundTest {
     assertThat(row(id).get("refund_cash_session_id")).isNull();
     assertThat(sessions.search(manager, new CashSessions.Query("taipei", 1000L, 2000L, null, 50))
         .unassignedCashRevenue()).isGreaterThanOrEqualTo(100);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  void refundAndCloseSerializeOnBranchInEitherOrder(boolean refundFirst) throws Exception {
+    Actor manager = identity.find("manager");
+    var session = sessions.open(manager, new CashSessions.Open("taipei", 1000, "競態"));
+    String id = paid("taipei", "CASH");
+    CountDownLatch holding = new CountDownLatch(1), attempting = new CountDownLatch(1), release = new CountDownLatch(1);
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    try {
+      Future<?> first = executor.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(tx -> {
+        db.queryForObject("select id from branches where id='taipei' for update", String.class);
+        holding.countDown();
+        await(release);
+        if (refundFirst) orders.refund(manager, id, new Orders.RefundRequest("先退款", null));
+        else sessions.close(manager, session.id(), new CashSessions.Close(1100, ""));
+      }));
+      Future<?> second = executor.submit(() -> {
+        await(holding); attempting.countDown();
+        if (refundFirst) sessions.close(manager, session.id(), new CashSessions.Close(1000, ""));
+        else orders.refund(manager, id, new Orders.RefundRequest("交班後退款", null));
+      });
+      await(attempting); release.countDown();
+      first.get(15, TimeUnit.SECONDS); second.get(15, TimeUnit.SECONDS);
+      var closed = sessions.get(manager, session.id());
+      assertThat(closed.status()).isEqualTo("CLOSED");
+      assertThat(closed.expectedAmount()).isEqualTo(refundFirst ? 1000 : 1100);
+      assertThat(closed.refundAmount()).isEqualTo(refundFirst ? 100 : 0);
+      assertThat(row(id).get("refund_cash_session_id")).isEqualTo(refundFirst ? session.id() : null);
+      assertThat(auditCount(id)).isEqualTo(1);
+    } finally { release.countDown(); executor.shutdownNow(); }
+  }
+
+  static void await(CountDownLatch latch) {
+    try {
+      if (!latch.await(10, TimeUnit.SECONDS)) throw new AssertionError("latch timeout");
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt(); throw new AssertionError(interrupted);
+    }
   }
 
   @Test void refundsNeverRestoreStockOrDiscountRedemptions() throws Exception {

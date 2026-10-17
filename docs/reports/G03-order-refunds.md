@@ -47,7 +47,7 @@ S2 才會接上退款與發票開立競態防線；本階段未呼叫任何綠�
 | 4 | authorizationCsrfAndCrossBranchDenialsLeaveEverythingUnchanged（真 HTTP／Cookie／CSRF、完整列與班別與audit數量不變） |
 | 5 | invalidReasonAndUnpaidCancelledOrdersAreRejected（含G04 expireOnline、200/201字）；四狀態案例的重複退款409 |
 | 8 | concurrentHttpRefundsHaveExactlyOneWinnerAndOneAudit（兩HTTP請求、CountDownLatch、恰好200/409） |
-| 9、10 | refundDeductsCurrentSessionAndClosedAmountsStayFrozen；unassignedRefundsUseRefundTimeRatherThanOriginalPaymentTime |
+| 9、10 | refundDeductsCurrentSessionAndClosedAmountsStayFrozen；unassignedRefundsUseRefundTimeRatherThanOriginalPaymentTime；refundAndCloseSerializeOnBranchInEitherOrder（兩種鎖取得順序） |
 | 11 | refundsNeverRestoreStockOrDiscountRedemptions |
 | S2前置掃描 | internalRefundCursorIsInclusiveAtInitialBoundaryAndKeysetPaginated |
 
