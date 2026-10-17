@@ -10,7 +10,7 @@ G02 #94 已於 2026-10-17T14:40:29Z 整份合併（7a861b2），V16 已存在。
 - [x] S1 退款本體：fe14fa55的兩組完整CI成功，backend432／frontend183測試及build通過。
 - [x] S2a 日期與用戶端（驗收12–14）：13d95e9兩組最新head CI成功，backend470／frontend183及build通過。
 - [x] S2b 發票退款掃描／作廢排程（15–23含21a–21l）：c5df720兩組CI成功，backend498／frontend183及build通過。
-- [ ] S3 端點／報表／前端／文件：程式及驗收24–33測試／文件完成，等待本次最新head遠端verify。
+- [ ] S3 端點／報表／前端／文件：程式及驗收24–33測試／文件已保存；693fb56遠端502測試唯一失敗是既有報表精確key契約，與G03「新增兩欄且舊測試不修改」衝突，blocked、維持draft。
 
 整份保持 draft，不啟用 auto-merge，不能以 S1 當作完整退款上線。
 S2 才會接上退款與發票開立競態防線；本階段未呼叫任何綠界 API 或 DoAction。
@@ -192,3 +192,22 @@ BAD_CIPHER／BAD_DATA_JSON／TRANS_CODE_ERROR假伺服器在操作成立後破�
 InvoiceApiTest僅追加案例、helper與新fixture的AfterEach清理；G02原案例／reset／斷言未改。
 本地backend verify因Maven Central DNS失敗仍未編譯；前端最新結果及遠端最新head CI以PR描述為準。
 首輪DOM測試抓到load只刷新開票清單、未初載作廢清單，已修正實際load流程，未放寬測試。
+
+### S3 真正阻擋：報表新增欄位與不可修改的精確舊契約矛盾
+
+2026-10-17，head693fb56daf042f532c59c118bd1a972c969661d2的兩組Checks均failure。
+Actions39059384223/job117474033821與39059379394/job117474019325已完成；第一組log證明
+backend502 tests、Failures1、Errors0、Skipped0；前端205及build成功，新API／聚合測試通過。
+唯一失敗為CoffeeIntegrationTest.reportResponseKeepsExactContractKeys（CoffeeIntegrationTest.java:123）：
+actual增加refundAmount/refundOrders，被containsExactlyInAnyOrder判為unexpected。
+
+- G03 §6.5明訂MonthlyReport尾端新增long refundAmount/refundOrders，§13驗收26要求退款欄位正確。
+- 同份規格驗收11又要求CoffeeIntegrationTest不修改即通過；其原精確key集合不容納任何新增欄位。
+- 本輪沒有修改CoffeeIntegrationTest、沒有刪掉退款欄位、沒有跳過／放寬測試，亦不為轉綠偷偷改成
+  「無退款時隱藏JSON兩欄」等未定義的序列化契約。
+- 所需修正由PM/SA決定並合併規格澄清：若維持新增API欄位，明確允許只對精確expected key集合
+  追加這兩欄（保留其餘所有斷言）；或明訂兼容的JSON契約及其驗收，再依已合併規格實作。
+  未澄清前不可同時滿足兩個要求，S3不能標完成、PR不轉ready、不auto-merge。
+- 這是需求／驗收矛盾，不是Maven DNS停工；已安全保存S3程式／測試／文件，沒有轉去另一份規格。
+
+本段為693fb56驗證結果；追加本報告的文件提交仍須查該最新head CI，不沿用舊head綠燈。
