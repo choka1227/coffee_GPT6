@@ -192,17 +192,21 @@ gh pr merge <N> --auto --merge
 
 #### Codex 的工具無法以 merge 方式啟用 auto-merge 時（PO 2026-10-17 決定）
 
-Codex 的 GitHub 連線只能以 squash 啟用 auto-merge、無法指定 merge 方式時，**Codex 不要改用 squash**，在 PR 描述註明即可，由 Claude 代為處理。四個條件全部成立才可以：
+Codex 的 GitHub 連線只能以 squash 啟用 auto-merge、無法指定 merge 方式時，**Codex 不要改用 squash**，在 PR 描述註明即可，由 Claude 代為處理。
+
+**共同前提**（三項全部成立才動手）：
 
 1. Codex 已把 PR 轉為 ready，且規格的施工階段全部完成
 2. Claude 已對**目前的 head** 送出 `APPROVE`
-3. 目前 head 的 CI 全綠
-4. 與主線無衝突
+3. 與主線無衝突
 
-- CI 仍在跑 → Claude 以 merge 方式啟用 auto-merge
-- **PR 已經可以直接合併時**（GitHub 不給開 auto-merge）→ **Claude 直接以 merge 方式合併，並鎖定已核准的 head SHA**（`expectedHeadSha` 填 `APPROVE` 綁定的 `commit_id`；head 變了合併會失敗，要重審新 head）
-- **任何時候都不用 squash 或 rebase**
-- 還沒核准、CI 沒綠、還是 draft 的 PR，一律不代為合併
+**依目前 head 的 CI 狀態分流：**
+
+- **仍在跑（pending）** → Claude 以 merge 方式**啟用 auto-merge**。必要檢查全部 success 後 GitHub 才會合併，失敗就不會合併
+- **全部 success** → Claude **直接以 merge 方式合併，並鎖定已核准的 head SHA**（`expectedHeadSha` 填 `APPROVE` 綁定的 `commit_id`；head 變了合併會失敗，要重審新 head）。這時 GitHub 通常不給開 auto-merge，所以直接合併
+- **任一 failure** → 不動，照一般審查流程退件
+
+**任何時候都不用 squash 或 rebase。** 共同前提任一不成立（還沒核准、draft、有衝突）一律不代為處理。
 
 這不是繞過互審：Claude 的 `APPROVE` 仍是合併的前提，代為處理的只有「按下合併」這一步。首例是 [PR #94](https://github.com/choka1227/coffee_GPT6/pull/94)（G02，2026-10-17 由 Claude 以 merge 方式合併，主線 `7a861b2`）。
 
