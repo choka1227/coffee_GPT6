@@ -1,6 +1,6 @@
 # G03 — 訂單退款與發票作廢／折讓（只串 stage）
 
-版本：v1.3（2026-10-15）
+版本：v1.3.2（2026-10-18）
 作者：Claude（PM / SA）
 前置：**G02（[`G02-ecpay-einvoice.md`](G02-ecpay-einvoice.md) v1.3 以上）必須整份合併後才能開工**。本規格 §6.6 依賴 G02 v1.3 §6.5 的租約認領、在途界線 `inflight_until` 與 `uncertain` 不變式。理由：本規格的 `V17` 必須排在 G02 的 `V16` 之後（Flyway 預設不接受亂序）；S2 直接擴充 G02 的發票用戶端與假伺服器。
 決策依據：PO 2026-10-14 決策「G02 電子發票、G03 退款與退單解除延後」，沿用 2026-10-11 決策的 stage 硬規則。
@@ -188,6 +188,7 @@ o = snapshot(id)
 
 - 新增一句查詢：`select coalesce(sum(o.total),0),count(*) from orders o where o.refunded_at>=? and o.refunded_at<?` + 既有的分店篩選
 - `MonthlyReport` 尾端新增 `long refundAmount, long refundOrders`
+- `CoffeeIntegrationTest.reportResponseKeepsExactContractKeys` 的期望 key 集合**只追加** `"refundAmount"`、`"refundOrders"` 兩個字串；同一方法的其他部分與該檔其餘測試一律不動（§14.10、驗收 11 的例外）
 - **其餘所有既有欄位一律不變**（仍是依 `paid_at` 的毛額）。退款依**退款發生的月份**認列，不回頭改付款月份的數字（§14.4）
 - 前端在營收旁顯示「退款 −N 元（M 筆）」與「扣除退款後 N 元」（前端減法只用於顯示，兩個數字都來自後端）
 
@@ -401,7 +402,7 @@ Reversal retryReversal(Actor a, String orderId);
 - [ ] 8. 併發：同一訂單兩個退款請求同時送出 → 恰好一個 200、一個 409，稽核一列（以兩條執行緒 + `CountDownLatch` 驗證）
 - [ ] 9. 現金班別：開班 → 收現 100 → 退款 → 班別即時應有金額 = 開班金 + 0，`refundAmount=100`、`refundOrders=1`；關帳 → `expected_amount` 同上
 - [ ] 10. 跨班退款：A 班收現、A 班關帳、B 班開班後退款 → A 班 `expected_amount` 不變、B 班應有金額扣 100；未開班時退款 → 計入未歸班並扣除
-- [ ] 11. G08 的可售數量**不回補**、G07 的兌換次數**不退還**（各一條斷言）；`CashSessionsTest`、`CoffeeIntegrationTest`、`HttpWorkflowTest` 等既有測試**不修改**即通過
+- [ ] 11. G08 的可售數量**不回補**、G07 的兌換次數**不退還**（各一條斷言）；`CashSessionsTest`、`CoffeeIntegrationTest`、`HttpWorkflowTest` 等既有測試**不修改**即通過。**唯一例外**：`CoffeeIntegrationTest.reportResponseKeepsExactContractKeys` 的期望 key 集合追加 `refundAmount`、`refundOrders` 兩個字串（§14.10），不得改動該方法的其他部分、不得改用 `contains`／`containsAll` 等較寬鬆的斷言
 
 **S2**
 
@@ -503,6 +504,12 @@ Reversal retryReversal(Actor a, String orderId);
 
 **v1.3 補充：** v1.2 的時間界線只涵蓋「等舊租約到期才接手」，`Unknown` 後立即釋放認領的路徑不在其中（Codex review 5529132842）。v1.3 依賴 G02 §14.14 的持久在途界線 `inflight_until`：退款掃描的 `SKIPPED` 條件多了 `inflight_until is null`，`reverseOne` 也改用同一套界線。界線的長度仍來自綠界的 `Timestamp` 規則，不是自訂的安靜期。
 
+### 14.10 報表精確 key 契約測試只追加兩個欄位名
+
+**決定：** v1.3.1 以前的 §6.5（新增兩欄）與驗收 11（`CoffeeIntegrationTest` 不修改）互相矛盾 —— `reportResponseKeepsExactContractKeys` 用 `containsExactlyInAnyOrder` 鎖死月報的 key 集合，任何新欄位都會讓它失敗（Codex 在 PR #97 head `693fb56` 以 CI 證明）。決定：該方法的期望集合追加 `refundAmount`、`refundOrders`，斷言方式維持 `containsExactlyInAnyOrder`，其餘不動。
+**理由：** 那支測試的用途是攔「**非預期**的欄位增減」；本規格的新增是預期內、寫在 §6.5 的，正是這種測試應該同步更新的情境。保留精確比對，往後別人誤加或誤刪欄位仍會被攔下。其他選項都更差：無退款時不輸出這兩欄會讓前端要處理欄位缺席、JSON 形狀隨資料變動；把欄位移到別的端點則多一支 API 與一次前端請求，只為了繞過一支測試。驗收 11 的原意（既有行為不變）由驗收 26「其餘所有既有欄位與退款前完全相同」保證，不依賴這支測試不改。
+**推翻的代價：** 改成另開端點：新增一支報表 API、權限與分店篩選測試、`ReportsView.vue` 多一次請求，並把這兩個字串從期望集合移除。
+
 ## 15. 與其他工作的關係
 
 - **G02**：硬前置。S2 擴充 `EcpayInvoiceClient`、`InvoiceService`、`FakeEinvoiceServer`，使用 `invoices.status='SKIPPED'`、`invoice_cursors` 的第二列
@@ -514,6 +521,7 @@ Reversal retryReversal(Actor a, String orderId);
 
 | 版本 | 日期 | 變更 |
 | --- | --- | --- |
+| v1.3.2 | 2026-10-18 | 回應 Codex PR #97（S3 blocked，head `14cf58e`）：§6.5 新增兩欄與驗收 11「`CoffeeIntegrationTest` 不修改」互相矛盾。新增 §14.10：`reportResponseKeepsExactContractKeys` 的期望集合只追加兩個欄位名，斷言方式不變；§6.5、驗收 11 同步註明例外。頁首版本一併更正（v1.3.1 時未更新） |
 | v1.3.1 | 2026-10-15 | 回應 Codex review 5533221990：§6.2「已退款訂單」改為明確 `throw new Problem(409, …)`，`Problem.check` 固定回 400，照原寫法驗收 7 必然失敗；`Problem.check` 的 400 契約不動 |
 | v1.3 | 2026-10-15 | 回應 Codex review 5529132842（配合 G02 v1.3 的在途界線）：前置改為 G02 v1.3；§4 `invoice_reversals` 新增 `inflight_until` 與 `ck_invoice_reversals_inflight`；§6.6 退款掃描與 (b) 的 `SKIPPED` 條件加上 `inflight_until is null`，(b) 不再依據認領前讀到的 `uncertain`，(c) 改依 G02 v1.3 第 2–7 步，競態表新增一列，`reverseOne` 改寫為認領後重讀、送出前寫界線、新增「等待」；§6.7 重試保留界線；§10.1 新增 `DELAYED_EFFECT`；§14.9 補充；驗收 1 修訂、新增 21j–21l |
 | v1.2 | 2026-10-15 | 回應 Codex review 5526548535（配合 G02 v1.2 的排他認領）：§4 `invoice_reversals` 新增 `claim_token`／`claimed_until` 與 `ck_invoice_reversals_claim`；§6.6 退款掃描與 (b) 的 `SKIPPED` 條件加上 `claim_token is null`、(c) 改用 G02 v1.2 的租約認領、`ensureReversal` 可把 `DONE`／`NONE` 重設、競態表新增三列、`reverseOne` 改用租約認領與 token 寫回；§6.7 重試清除持有者；§14.9 補充；驗收 1 修訂、新增 21f–21i |
