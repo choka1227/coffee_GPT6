@@ -48,3 +48,26 @@ describe("ReconciliationView 作廢後付款異常", () => {
     expect(wrapper.text()).not.toContain("作廢後收到付款，需人工退款");
   });
 });
+
+describe("發票作廢折讓失敗", () => {
+  it("顯示訂單發票方式原因及200筆提示，POST重試後刷新", async () => {
+    let failed = true;
+    const { fetch, requests } = stubApi({
+      "/api/payments/reconciliation/pending": { items: [], truncated: false },
+      "/api/payments/anomalies": { items: [], truncated: false },
+      "/api/payments/invoices/failed": { items: [], truncated: false },
+      "/api/payments/invoices/reversals/failed": () => ({ items: failed ? [{ orderId: "O1", invoiceNo: "AB12345678", kind: "ALLOWANCE", lastError: "查不到發票" }] : [], truncated: failed }),
+      "/api/payments/invoices/order/O1/reversal/retry": () => { failed = false; return {}; },
+    });
+    const wrapper = await mountView(ReconciliationView, { actor: globalActor(), fetch });
+    const block = wrapper.get(".reversal-failures");
+    expect(block.text()).toContain("發票作廢／折讓失敗");
+    expect(block.text()).toContain("O1"); expect(block.text()).toContain("AB12345678");
+    expect(block.text()).toContain("方式：折讓"); expect(block.text()).toContain("查不到發票");
+    expect(block.text()).toContain("前 200 筆");
+    await block.get("button").trigger("click"); await flushPromises();
+    expect(requests).toContainEqual(expect.objectContaining({ path: "/api/payments/invoices/order/O1/reversal/retry", method: "POST" }));
+    expect(requests.find(r => r.path.endsWith("/reversal/retry"))!.headers.get("X-CSRF-TOKEN")).toBe("test-token");
+    expect(wrapper.find(".reversal-failures").exists()).toBe(false);
+  });
+});

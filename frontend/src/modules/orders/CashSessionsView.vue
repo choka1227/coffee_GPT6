@@ -116,7 +116,8 @@ watch(branchId, () => load());
           <div><span class="eyebrow">OPEN SESSION</span><h2>目前班別</h2><p>{{ current.openedByName }} · {{ dateTime(current.openedAt) }}</p></div>
           <div class="metric"><small>準備金</small><b>{{ money(current.openingFloat) }}</b></div>
           <div class="metric"><small>現金收入（{{ current.orderCount }} 筆）</small><b>{{ money(current.cashRevenue) }}</b></div>
-          <div class="metric primary-metric"><small>應有金額</small><b>{{ money(current.expectedAmount) }}</b></div>
+          <div class="metric"><small>現金退款 −{{ money(current.refundAmount) }}（{{ current.refundOrders }} 筆）</small></div>
+          <div class="metric primary-metric"><small>應有金額（已扣除本班現金退款）</small><b>{{ money(current.expectedAmount) }}</b></div>
           <form class="session-form" @submit.prevent="closeSession">
             <label>實點金額<input v-model.number="countedAmount" type="number" min="0" max="10000000" required /></label>
             <label>備註<input v-model="note" maxlength="200" /></label>
@@ -135,7 +136,7 @@ watch(branchId, () => load());
       <section class="panel">
         <h2>班別歷史</h2>
         <div class="table-wrap"><table><thead><tr><th>開班時間</th><th>操作人員</th><th>現金收入</th><th>應有／實點</th><th>短溢</th></tr></thead><tbody>
-          <tr v-for="item in history" :key="item.id"><td>{{ dateTime(item.openedAt) }}<small>{{ item.status === 'OPEN' ? '進行中' : `交班 ${dateTime(item.closedAt!)}` }}</small></td><td>{{ item.openedByName }}<small v-if="item.closedByName">交班：{{ item.closedByName }}</small></td><td>{{ money(item.cashRevenue) }}<small>{{ item.orderCount }} 筆</small></td><td>{{ money(item.expectedAmount) }}<small v-if="item.countedAmount !== null">實點 {{ money(item.countedAmount) }}</small></td><td><span v-if="item.variance !== null" class="variance">{{ varianceLabel(item.variance) }}</span><span v-else>—</span></td></tr>
+          <tr v-for="item in history" :key="item.id"><td>{{ dateTime(item.openedAt) }}<small>{{ item.status === 'OPEN' ? '進行中' : `交班 ${dateTime(item.closedAt!)}` }}</small></td><td>{{ item.openedByName }}<small v-if="item.closedByName">交班：{{ item.closedByName }}</small></td><td>{{ money(item.cashRevenue) }}<small>{{ item.orderCount }} 筆</small><small>現金退款 −{{ money(item.refundAmount) }}（{{ item.refundOrders }} 筆）</small></td><td>{{ money(item.expectedAmount) }}<small v-if="item.countedAmount !== null">實點 {{ money(item.countedAmount) }}</small></td><td><span v-if="item.variance !== null" class="variance">{{ varianceLabel(item.variance) }}</span><span v-else>—</span></td></tr>
           <tr v-if="!history.length"><td colspan="5" class="empty-state">尚無班別紀錄</td></tr>
         </tbody></table></div>
         <button v-if="nextCursor" class="btn secondary" :disabled="loading" @click="load(true)">載入更多<ChevronRight :size="16" /></button>
@@ -147,7 +148,7 @@ watch(branchId, () => load());
 <style scoped>
 .branch-picker { margin-bottom: 18px; max-width: 420px; }
 .branch-picker label, .session-form label, .open-form label { display: grid; gap: 6px; }
-.session-grid { display: grid; grid-template-columns: 1.4fr repeat(3, 1fr); gap: 20px; align-items: center; }
+.session-grid { display: grid; grid-template-columns: 1.4fr repeat(4, 1fr); gap: 20px; align-items: center; }
 .metric { display: grid; gap: 6px; }
 .metric b { font-size: 1.35rem; }
 .primary-metric { color: var(--accent); }

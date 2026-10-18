@@ -59,4 +59,11 @@ class OrderController {
       @RequestAttribute Actor actor, @PathVariable String id, @RequestBody Status q) {
     return s.transition(actor, id, q.status());
   }
+
+  @PostMapping("/{id}/refund")
+  Orders.Order refund(
+      @RequestAttribute Actor actor, @PathVariable String id,
+      @RequestBody Orders.RefundRequest request) {
+    return s.refund(actor, id, request);
+  }
 }

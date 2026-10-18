@@ -10,6 +10,7 @@ public interface Identity {
           "PAYMENT_RECONCILE",
           "POS_ORDER",
           "ORDER_MANAGE",
+          "ORDER_REFUND",
           "REPORT_STORE",
           "REPORT_ALL",
           "BRANCH_MANAGE",

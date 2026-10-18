@@ -137,7 +137,7 @@ public class CashSessionService implements CashSessions {
     if (!"OPEN".equals(rows.get(0).get("status"))) throw new Problem(409, "此班別已交班");
     int openingFloat = ((Number) rows.get(0).get("opening_float")).intValue();
     int cashRevenue = cashRevenue(id);
-    int expected = Math.addExact(openingFloat, cashRevenue);
+    int expected = Math.subtractExact(Math.addExact(openingFloat, cashRevenue), cashRefunds(id)[0]);
     int variance = Math.subtractExact(request.countedAmount(), expected);
     db.update(
         "update cash_sessions set status='CLOSED',closed_by=?,closed_at=?,counted_amount=?,"
@@ -196,9 +196,26 @@ public class CashSessionService implements CashSessions {
       params.add(to);
     }
     var row = db.queryForMap(sql.toString(), params.toArray());
+    var refunds = new StringBuilder(
+        "select coalesce(sum(total),0) revenue,count(*) orders from orders"
+            + " where branch_id=? and refund_cash_session_id is null"
+            + " and payment_method='CASH' and refunded_at is not null");
+    List<Object> refundParams = new ArrayList<>();
+    refundParams.add(branchId);
+    if (from != null) {
+      refunds.append(" and refunded_at>=?");
+      refundParams.add(from);
+    }
+    if (to != null) {
+      refunds.append(" and refunded_at<?");
+      refundParams.add(to);
+    }
+    var refund = db.queryForMap(refunds.toString(), refundParams.toArray());
     return new int[] {
-      Math.toIntExact(((Number) row.get("revenue")).longValue()),
-      ((Number) row.get("orders")).intValue()
+      Math.toIntExact(Math.subtractExact(((Number) row.get("revenue")).longValue(),
+          ((Number) refund.get("revenue")).longValue())),
+      Math.toIntExact(Math.subtractExact(((Number) row.get("orders")).longValue(),
+          ((Number) refund.get("orders")).longValue()))
     };
   }
 
@@ -238,6 +255,15 @@ public class CashSessionService implements CashSessions {
         id);
   }
 
+  private int[] cashRefunds(String id) {
+    var row = db.queryForMap(
+        "select coalesce(sum(total),0) amount,count(*) orders from orders"
+            + " where refund_cash_session_id=? and payment_method='CASH' and refunded_at is not null",
+        id);
+    return new int[] {Math.toIntExact(((Number) row.get("amount")).longValue()),
+        Math.toIntExact(((Number) row.get("orders")).longValue())};
+  }
+
   private Session session(String id, boolean live) {
     var rows =
         db.queryForList(
@@ -248,9 +274,10 @@ public class CashSessionService implements CashSessions {
     if (rows.isEmpty()) throw new Problem(404, "找不到這個班別");
     var row = rows.get(0);
     int openingFloat = ((Number) row.get("opening_float")).intValue();
-    int expected = live ? Math.addExact(openingFloat, cashRevenue(id))
+    int[] refunds = cashRefunds(id);
+    int revenue = cashRevenue(id);
+    int expected = live ? Math.subtractExact(Math.addExact(openingFloat, revenue), refunds[0])
         : ((Number) row.get("expected_amount")).intValue();
-    int revenue = Math.subtractExact(expected, openingFloat);
     return new Session(
         (String) row.get("id"), (String) row.get("branch_id"), (String) row.get("status"),
         openingFloat, revenue, orderCount(id), expected,
@@ -260,7 +287,7 @@ public class CashSessionService implements CashSessions {
         ((Number) row.get("opened_at")).longValue(), (String) row.get("closed_by"),
         (String) row.get("closed_by_name"),
         row.get("closed_at") == null ? null : ((Number) row.get("closed_at")).longValue(),
-        (String) row.get("note"));
+        (String) row.get("note"), refunds[0], refunds[1]);
   }
 
   private String note(String value) {

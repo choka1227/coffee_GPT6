@@ -24,7 +24,9 @@ public interface CashSessions {
       String closedBy,
       String closedByName,
       Long closedAt,
-      String note) {}
+      String note,
+      int refundAmount,
+      int refundOrders) {}
 
   record Query(String branchId, Long from, Long to, String cursor, int limit) {}
 

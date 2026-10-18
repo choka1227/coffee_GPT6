@@ -18,7 +18,7 @@ class InvoiceController {
     return service.forOrder(actor, orderId).<Object>map(value -> value).orElseGet(() -> {
       Map<String, Object> none = new LinkedHashMap<>();
       for (String field : new String[] {"orderId", "branchId", "amount", "invoiceNo", "invoiceDate",
-          "randomNumber", "attempts", "lastError", "updatedAt"}) none.put(field, null);
+          "randomNumber", "attempts", "lastError", "updatedAt", "reversalKind", "reversalStatus", "allowanceNo", "reversalLastError"}) none.put(field, null);
       none.put("status", "NONE");
       return Collections.unmodifiableMap(none);
     });
@@ -31,5 +31,14 @@ class InvoiceController {
   @PostMapping("/order/{orderId}/retry")
   Invoices.Invoice retry(@RequestAttribute Actor actor, @PathVariable String orderId) {
     return service.retry(actor, orderId);
+  }
+
+  @GetMapping("/reversals/failed")
+  Invoices.ReversalPage failedReversals(@RequestAttribute Actor actor,
+      @RequestParam(required = false) String branchId) { return service.failedReversals(actor, branchId); }
+
+  @PostMapping("/order/{orderId}/reversal/retry")
+  Invoices.Reversal retryReversal(@RequestAttribute Actor actor, @PathVariable String orderId) {
+    return service.retryReversal(actor, orderId);
   }
 }

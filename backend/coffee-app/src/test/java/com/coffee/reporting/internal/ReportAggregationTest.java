@@ -51,7 +51,7 @@ class ReportAggregationTest {
     db.execute(
         "create table orders(id varchar(20) primary key,branch_id varchar(36) not null,"
             + "total integer not null,discount_amount integer not null,item_discount_amount"
-            + " integer not null,paid_at bigint,"
+            + " integer not null,paid_at bigint,refunded_at bigint,"
             + "fulfillment varchar(20) not null,payment_method varchar(10) not null)");
     db.execute(
         "create table order_items(id varchar(36) primary key,order_id varchar(20) not"
@@ -286,6 +286,29 @@ class ReportAggregationTest {
         .hasMessage("只能存取所屬分店資料");
   }
 
+  @Test
+  void refundsUseRefundMonthAndPreserveEveryExistingFieldAndScope() {
+    var before = asMap(reports.report(global(), MONTH, null));
+    long feb = LocalDateTime.parse("2024-02-20T12:00").atZone(TAIPEI).toInstant().toEpochMilli();
+    db.update("update orders set refunded_at=? where id='A-1'", feb);
+    var after = asMap(reports.report(global(), MONTH, null));
+    assertThat(after.remove("refundAmount")).isEqualTo(100L);
+    assertThat(after.remove("refundOrders")).isEqualTo(1L);
+    before.remove("refundAmount"); before.remove("refundOrders");
+    assertThat(after).isEqualTo(before);
+    assertThat(reports.report(branchActor("alpha"), MONTH, null).refundAmount()).isEqualTo(100L);
+    assertThat(reports.report(branchActor("beta"), MONTH, null).refundAmount()).isZero();
+    var febBefore = asMap(reports.report(global(), MONTH, null));
+    long march = LocalDateTime.parse("2024-03-01T00:00").atZone(TAIPEI).toInstant().toEpochMilli();
+    db.update("update orders set refunded_at=? where id='B-1'", march);
+    assertThat(asMap(reports.report(global(), MONTH, null))).isEqualTo(febBefore);
+    var next = reports.report(global(), "2024-03", null);
+    assertThat(next.refundAmount()).isEqualTo(400L); assertThat(next.refundOrders()).isEqualTo(1L);
+    assertThat(next.revenue()).isZero();
+    assertThat(reports.report(branchActor("alpha"), "2024-03", null).refundAmount()).isZero();
+    assertThat(reports.report(branchActor("beta"), "2024-03", null).refundAmount()).isEqualTo(400L);
+  }
+
   private Map<String, Object> asMap(Reports.MonthlyReport report) {
     return new ObjectMapper().convertValue(report, new TypeReference<>() {});
   }
@@ -319,6 +342,8 @@ class ReportAggregationTest {
         Map.entry("month", MONTH),
         Map.entry("today", LocalDate.now(TAIPEI).toString()),
         Map.entry("revenue", 1000L),
+        Map.entry("refundAmount", 0L),
+        Map.entry("refundOrders", 0L),
         Map.entry("discount", 0L),
         Map.entry("itemDiscount", 0L),
         Map.entry("codeDiscount", 0L),
@@ -454,7 +479,7 @@ class ReportAggregationTest {
       int lineDiscount) {
     long epoch = LocalDateTime.parse(paidAt).atZone(TAIPEI).toInstant().toEpochMilli();
     db.update(
-        "insert into orders values(?,?,?,?,?,?,?,?)",
+        "insert into orders(id,branch_id,total,discount_amount,item_discount_amount,paid_at,fulfillment,payment_method) values(?,?,?,?,?,?,?,?)",
         id,
         branch,
         total,

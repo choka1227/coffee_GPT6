@@ -144,7 +144,9 @@ class CoffeeIntegrationTest {
             "hourly",
             "cashOrders",
             "onlineOrders",
-            "takeawayOrders");
+            "takeawayOrders",
+            "refundAmount",
+            "refundOrders");
   }
 
   String optionBody(List<String> optionIds) throws Exception {

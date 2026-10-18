@@ -150,6 +150,9 @@ export interface Order {
   note: string;
   createdAt: number;
   paidAt: number | null;
+  refundedAt: number | null;
+  refundedBy: string | null;
+  refundReason: string | null;
   tendered: number | null;
   changeAmount: number | null;
   items: Line[];
@@ -193,6 +196,8 @@ export interface CashSession {
   status: "OPEN" | "CLOSED";
   openingFloat: number;
   cashRevenue: number;
+  refundAmount: number;
+  refundOrders: number;
   orderCount: number;
   expectedAmount: number;
   countedAmount: number | null;
@@ -212,6 +217,8 @@ export interface CashSessionPage {
   unassignedOrderCount: number;
 }
 export interface Report {
+  refundAmount: number;
+  refundOrders: number;
   month: string;
   today: string;
   revenue: number;
@@ -361,6 +368,10 @@ export interface InvoiceRequest {
   loveCode?: string;
 }
 export interface Invoice {
+  reversalKind: "VOID" | "ALLOWANCE" | "NONE" | null;
+  reversalStatus: "PENDING" | "DONE" | "FAILED" | null;
+  reversalLastError: string | null;
+  allowanceNo: string | null;
   orderId: string | null;
   branchId: string | null;
   amount: number | null;
@@ -373,3 +384,16 @@ export interface Invoice {
   updatedAt: number | null;
 }
 export interface InvoicePage { items: Invoice[]; truncated: boolean }
+export interface InvoiceReversal {
+  orderId: string;
+  branchId: string;
+  invoiceNo: string | null;
+  amount: number;
+  kind: "VOID" | "ALLOWANCE" | "NONE" | null;
+  status: "PENDING" | "DONE" | "FAILED";
+  allowanceNo: string | null;
+  attempts: number;
+  lastError: string | null;
+  updatedAt: number;
+}
+export interface InvoiceReversalPage { items: InvoiceReversal[]; truncated: boolean }

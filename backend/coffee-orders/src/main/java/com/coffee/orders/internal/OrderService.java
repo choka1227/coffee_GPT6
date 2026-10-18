@@ -427,7 +427,8 @@ public class OrderService implements Orders {
                     r.getObject("paid_at", Long.class),
                     r.getObject("tendered", Integer.class),
                     r.getObject("change_amount", Integer.class),
-                    readInvoice(r)),
+                    readInvoice(r), r.getObject("refunded_at", Long.class),
+                    r.getString("refunded_by"), r.getString("refund_reason")),
             params.toArray());
     boolean more = headers.size() > limit;
     if (more) headers = new ArrayList<>(headers.subList(0, limit));
@@ -596,12 +597,16 @@ public class OrderService implements Orders {
       Long paidAt,
       Integer tendered,
       Integer changeAmount,
-      InvoiceRequest invoice) {
+      InvoiceRequest invoice,
+      Long refundedAt,
+      String refundedBy,
+      String refundReason) {
     Order toOrder(List<Line> lines, OrderDiscount discount) {
       return new Order(
           id, branchId, branchName, accountId, status, fulfillment, paymentMethod, total,
           subtotal, discountAmount, itemDiscountAmount, discount, null, note,
-          createdAt, paidAt, tendered, changeAmount, lines, invoice);
+          createdAt, paidAt, tendered, changeAmount, lines, invoice,
+          refundedAt, refundedBy, refundReason);
     }
   }
 
@@ -641,6 +646,7 @@ public class OrderService implements Orders {
     lock(id);
     Order o = snapshot(id);
     manage(a, o);
+    if (o.refundedAt() != null) throw new Problem(409, "這筆訂單已經退款");
     Problem.check(o.paymentMethod().equals("CASH"), "此訂單使用線上付款");
     if (o.paidAt() != null) return o;
     Problem.check(o.status().equals("PENDING_PAYMENT"), "訂單目前無法收款");
@@ -672,6 +678,40 @@ public class OrderService implements Orders {
   }
 
   @Transactional
+  public Order refund(Actor a, String id, RefundRequest request) {
+    a.require("ORDER_REFUND");
+    String branchId = branchOf(id);
+    a.branch(branchId);
+    lockBranch(branchId);
+    lock(id);
+    Order o = snapshot(id);
+    String reason = request == null || request.reason() == null ? "" : request.reason().trim();
+    Problem.check(!reason.isBlank() && reason.length() <= 200, "請填寫 200 字以內的退款原因");
+    if (o.refundedAt() != null) throw new Problem(409, "這筆訂單已經退款");
+    if (o.paidAt() == null) throw new Problem(409, "這筆訂單尚未付款，不能退款");
+    String providerNote = null;
+    String sessionId = null;
+    if ("ECPAY".equals(o.paymentMethod())) {
+      providerNote = request.providerNote() == null ? "" : request.providerNote().trim();
+      Problem.check(!providerNote.isBlank() && providerNote.length() <= 200,
+          "請先到綠界廠商後台完成退刷，並填寫退刷紀錄");
+    } else {
+      sessionId = db.queryForList(
+          "select id from cash_sessions where branch_id=? and status='OPEN'", String.class, branchId)
+          .stream().findFirst().orElse(null);
+    }
+    int changed = db.update(
+        "update orders set refunded_at=?,refunded_by=?,refund_reason=?,refund_provider_note=?,"
+            + "refund_cash_session_id=? where id=? and refunded_at is null",
+        System.currentTimeMillis(), a.id(), reason, providerNote, sessionId, id);
+    if (changed != 1) throw new Problem(409, "這筆訂單已經退款");
+    audit.record(a, "ORDER_REFUNDED", id, branchId,
+        "整筆退款 " + o.total() + " 元（" + ("CASH".equals(o.paymentMethod()) ? "現金" : "線上付款")
+            + "）：" + reason);
+    return snapshot(id);
+  }
+
+  @Transactional
   public Order transition(Actor a, String id, String next) {
     lock(id);
     Order o = snapshot(id);
@@ -679,6 +719,7 @@ public class OrderService implements Orders {
       Problem.check(o.accountId().equals(a.id()), "只能取消自己的訂單");
       Problem.check("CANCELLED".equals(next), "不允許此操作");
     } else manage(a, o);
+    if (o.refundedAt() != null) throw new Problem(409, "這筆訂單已經退款");
     boolean allowed =
         (o.status().equals("PENDING_PAYMENT")
                 && "CANCELLED".equals(next)
@@ -723,15 +764,28 @@ public class OrderService implements Orders {
         "select * from orders where paid_at is not null and paid_at<=?"
             + " and (paid_at>? or (paid_at=? and id>?)) order by paid_at,id limit ?",
         (r, n) -> new InvoiceCandidate(r.getString("id"), r.getString("branch_id"),
-            r.getInt("total"), r.getLong("paid_at"), readInvoice(r)),
+            r.getInt("total"), r.getLong("paid_at"), readInvoice(r),
+            r.getObject("refunded_at", Long.class)),
         until, afterAt, afterAt, afterId, limit);
   }
 
   public Optional<InvoiceCandidate> invoiceCandidate(String orderId) {
     return db.query("select * from orders where id=? and paid_at is not null",
         (r, n) -> new InvoiceCandidate(r.getString("id"), r.getString("branch_id"),
-            r.getInt("total"), r.getLong("paid_at"), readInvoice(r)), orderId)
+            r.getInt("total"), r.getLong("paid_at"), readInvoice(r),
+            r.getObject("refunded_at", Long.class)), orderId)
         .stream().findFirst();
+  }
+
+  public List<RefundedCandidate> refundedCandidates(
+      long afterAt, String afterId, long until, int limit) {
+    return db.query(
+        "select id,branch_id,refunded_at,invoice_email from orders where refunded_at is not null"
+            + " and refunded_at<=? and (refunded_at>? or (refunded_at=? and id>?))"
+            + " order by refunded_at,id limit ?",
+        (r, n) -> new RefundedCandidate(r.getString("id"), r.getString("branch_id"),
+            r.getLong("refunded_at"), r.getString("invoice_email")),
+        until, afterAt, afterAt, afterId, limit);
   }
 
   @Transactional
@@ -786,7 +840,8 @@ public class OrderService implements Orders {
                 r.getObject("paid_at", Long.class),
                 r.getObject("tendered", Integer.class),
                 r.getObject("change_amount", Integer.class),
-                List.of(), readInvoice(r)),
+                List.of(), readInvoice(r), r.getObject("refunded_at", Long.class),
+                r.getString("refunded_by"), r.getString("refund_reason")),
         params.toArray());
   }
 
@@ -913,7 +968,8 @@ public class OrderService implements Orders {
                                         z.getString("group_name"), z.getString("option_name"),
                                         z.getInt("price_delta")),
                                     x.getString("id"))),
-                        id), readInvoice(r)),
+                        id), readInvoice(r), r.getObject("refunded_at", Long.class),
+                    r.getString("refunded_by"), r.getString("refund_reason")),
             id);
     if (rows.isEmpty()) throw new Problem(404, "找不到訂單");
     return rows.get(0);

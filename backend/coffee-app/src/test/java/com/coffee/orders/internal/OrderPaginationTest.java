@@ -39,7 +39,8 @@ class OrderPaginationTest {
         "create table orders(id varchar(20) primary key,branch_id varchar(36),account_id varchar(36),"
             + "status varchar(24),fulfillment varchar(20),payment_method varchar(10),total integer,discount_amount integer default 0,"
             + "item_discount_amount integer default 0,note varchar(200),created_at bigint,paid_at bigint,tendered integer,change_amount integer,"
-            + "invoice_type varchar(8),invoice_email varchar(100),invoice_carrier varchar(8),invoice_love_code varchar(7))");
+            + "invoice_type varchar(8),invoice_email varchar(100),invoice_carrier varchar(8),invoice_love_code varchar(7),"
+            + "refunded_at bigint,refunded_by varchar(36),refund_reason varchar(200))");
     db.execute(
         "create table order_items(id varchar(36) primary key,order_id varchar(20),product_id varchar(36),"
             + "name varchar(80),category varchar(40),unit_price integer,quantity integer,"
