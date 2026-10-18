@@ -130,6 +130,42 @@ public final class EcpayInvoiceClient {
         System.currentTimeMillis() / 1000);
   }
 
+  public CallResult invalid(
+      String invoiceNo, String invoiceDate, String reason, long timestampSec) {
+    if (!enabled) return new Unknown("DISABLED");
+    if (!validInvoice(invoiceNo, invoiceDate) || reason == null || reason.isBlank())
+      return new Unknown("INVOICE");
+    return call("Invalid", Map.of("MerchantID", merchant, "InvoiceNo", invoiceNo,
+        "InvoiceDate", invoiceDate.substring(0, 10), "Reason", reason), timestampSec);
+  }
+
+  public CallResult allowance(
+      String invoiceNo, String invoiceDate, int amount, String email, long timestampSec) {
+    if (!enabled) return new Unknown("DISABLED");
+    if (!validInvoice(invoiceNo, invoiceDate) || amount <= 0) return new Unknown("INVOICE");
+    Map<String, Object> data = new LinkedHashMap<>();
+    data.put("MerchantID", merchant);
+    data.put("InvoiceNo", invoiceNo);
+    data.put("InvoiceDate", invoiceDate.substring(0, 10));
+    data.put("AllowanceNotify", email == null || email.isBlank() ? "N" : "E");
+    if (email != null && !email.isBlank()) data.put("NotifyMail", email);
+    data.put("AllowanceAmount", amount);
+    data.put("Items", List.of(Map.of("ItemSeq", 1, "ItemName", "餐飲費用", "ItemCount", 1,
+        "ItemWord", "式", "ItemPrice", amount, "ItemTaxType", "1", "ItemAmount", amount)));
+    return call("Allowance", data, timestampSec);
+  }
+
+  private static boolean validInvoice(String invoiceNo, String invoiceDate) {
+    if (invoiceNo == null || invoiceNo.isBlank() || invoiceDate == null || invoiceDate.length() < 10)
+      return false;
+    try {
+      java.time.LocalDate.parse(invoiceDate.substring(0, 10));
+      return true;
+    } catch (java.time.DateTimeException invalidDate) {
+      return false;
+    }
+  }
+
   private CallResult call(String path, Map<String, Object> data, long timestampSec) {
     try {
       String body = writer.writeToString(Map.of("MerchantID", merchant,
@@ -155,7 +191,7 @@ public final class EcpayInvoiceClient {
       message = message.replaceAll("[\\r\\n\\t]", " ");
       // Provider messages may echo request fields: never retain known sensitive values.
       for (Object value : List.of(key, iv, merchant)) message = message.replace(value.toString(), "[已隱藏]");
-      for (String field : List.of("CustomerEmail", "CarrierNum", "LoveCode")) {
+      for (String field : List.of("CustomerEmail", "CarrierNum", "LoveCode", "NotifyMail", "Reason")) {
         Object value = data.get(field);
         if (value instanceof String text && !text.isEmpty()) message = message.replace(text, "[已隱藏]");
       }

@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 import { api } from "../../shared/api";
 import { money } from "../../shared/format";
-import type { PaymentAnomaly, ReconciliationPending, ReconciliationAttempt, Invoice, InvoicePage } from "../../shared/types";
+import type { PaymentAnomaly, ReconciliationPending, ReconciliationAttempt, Invoice, InvoicePage, InvoiceReversal, InvoiceReversalPage } from "../../shared/types";
 
 const items = ref<ReconciliationPending[]>([]);
 const truncated = ref(false);
@@ -14,6 +14,23 @@ const anomalyItems = ref<PaymentAnomaly[]>([]);
 const anomalyTruncated = ref(false);
 const invoiceItems = ref<Invoice[]>([]);
 const invoiceTruncated = ref(false);
+const reversalItems = ref<InvoiceReversal[]>([]);
+const reversalTruncated = ref(false);
+async function loadReversals() {
+  try {
+    const page = await api<InvoiceReversalPage>("/payments/invoices/reversals/failed");
+    reversalItems.value = page.items; reversalTruncated.value = page.truncated;
+  } catch (e) { message.value = (e as Error).message; }
+}
+async function retryReversal(id: string) {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    await api(`/payments/invoices/order/${encodeURIComponent(id)}/reversal/retry`, { method: "POST" });
+    await loadReversals(); message.value = "已排入作廢／折讓重試，等待排程確認。";
+  } catch (e) { message.value = (e as Error).message; }
+  finally { busy.value = false; }
+}
 async function loadInvoices() {
   try {
     const page = await api<InvoicePage>("/payments/invoices/failed");
@@ -27,6 +44,7 @@ async function retryInvoice(id: string | null) {
   try {
     await api(`/payments/invoices/order/${encodeURIComponent(id)}/retry`, { method: "POST" });
     await loadInvoices();
+    await loadReversals();
     message.value = "已排入發票重試，等待排程確認。";
   } catch (e) { message.value = (e as Error).message; }
   finally { busy.value = false; }
@@ -49,6 +67,7 @@ async function load() {
     anomalyItems.value = anomalyPage.items;
     anomalyTruncated.value = anomalyPage.truncated;
     await loadInvoices();
+    await loadReversals();
   }
   catch (e) { message.value = (e as Error).message; }
   finally { busy.value = false; }
@@ -91,6 +110,15 @@ onMounted(load);
     <button :disabled="busy" @click="load">重新整理</button>
     <p v-if="truncated">僅顯示前 200 筆。</p>
     <p role="status">{{ message }}</p>
+    <section v-if="reversalItems.length" class="reversal-failures">
+      <h2>發票作廢／折讓失敗</h2><p v-if="reversalTruncated">僅顯示前 200 筆作廢／折讓。</p>
+      <article v-for="reversal in reversalItems" :key="reversal.orderId">
+        <p>訂單編號：{{ reversal.orderId }}</p><p>發票號碼：{{ reversal.invoiceNo || '尚未確認' }}</p>
+        <p>方式：{{ reversal.kind === 'VOID' ? '作廢' : reversal.kind === 'ALLOWANCE' ? '折讓' : '待確認' }}</p>
+        <p>失敗原因：{{ reversal.lastError }}</p>
+        <button :disabled="busy" @click="retryReversal(reversal.orderId)">重試</button>
+      </article>
+    </section>
     <section v-if="invoiceItems.length" class="invoice-failures">
       <h2>發票開立失敗</h2><p v-if="invoiceTruncated">僅顯示前 200 筆發票。</p>
       <article v-for="invoice in invoiceItems" :key="invoice.orderId || ''">

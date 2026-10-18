@@ -10,7 +10,12 @@ public interface Orders {
   record InvoiceRequest(String type, String email, String carrier, String loveCode) {}
 
   record InvoiceCandidate(
-      String orderId, String branchId, int total, long paidAt, InvoiceRequest invoice) {}
+      String orderId, String branchId, int total, long paidAt, InvoiceRequest invoice,
+      Long refundedAt) {}
+
+  record RefundRequest(String reason, String providerNote) {}
+
+  record RefundedCandidate(String orderId, String branchId, long refundedAt, String invoiceEmail) {}
 
   record Create(
       String branchId,
@@ -83,7 +88,10 @@ public interface Orders {
       Integer tendered,
       Integer changeAmount,
       List<Line> items,
-      InvoiceRequest invoice) {}
+      InvoiceRequest invoice,
+      Long refundedAt,
+      String refundedBy,
+      String refundReason) {}
 
   record Query(
       String status, String branchId, Long from, Long to, String q, String cursor, int limit) {}
@@ -99,6 +107,8 @@ public interface Orders {
   Order get(Actor a, String id);
 
   Order cash(Actor a, String id, int tendered);
+
+  Order refund(Actor a, String id, RefundRequest request);
 
   Order transition(Actor a, String id, String status);
 
@@ -120,4 +130,6 @@ public interface Orders {
   List<InvoiceCandidate> invoiceCandidates(long afterAt, String afterId, long until, int limit);
 
   Optional<InvoiceCandidate> invoiceCandidate(String orderId);
+
+  List<RefundedCandidate> refundedCandidates(long afterAt, String afterId, long until, int limit);
 }

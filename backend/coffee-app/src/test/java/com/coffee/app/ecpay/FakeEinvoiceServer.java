@@ -17,7 +17,8 @@ public final class FakeEinvoiceServer implements AutoCloseable {
   public enum Scenario {
     OK, DUPLICATE, REJECTED, SUCCEED_THEN_TIMEOUT, TIMEOUT, DELAYED_EFFECT,
     HTTP_500, TRANS_CODE_ERROR, BAD_CIPHER, AMOUNT_MISMATCH, REDIRECT_TO_PRODUCTION,
-    BAD_JSON, BAD_DATA_JSON, OTHER_REJECTED, MISSING_FIELDS, STRING_AMOUNT
+    BAD_JSON, BAD_DATA_JSON, OTHER_REJECTED, MISSING_FIELDS, STRING_AMOUNT,
+    VOID_PAST_DEADLINE, ECHO_SENSITIVE
   }
 
   public record Request(String path, JsonNode outer, JsonNode data) {
@@ -35,6 +36,10 @@ public final class FakeEinvoiceServer implements AutoCloseable {
   private final Map<String, Scenario> scenarios = new ConcurrentHashMap<>();
   private final Map<String, Consumer<Request>> hooks = new ConcurrentHashMap<>();
   private final AtomicInteger sequence = new AtomicInteger();
+  private record ReversalState(boolean invalid, int remaining) {}
+  private final Map<String, ReversalState> reversals = new ConcurrentHashMap<>();
+  private final List<Request> delayedReversals = new CopyOnWriteArrayList<>();
+  private final AtomicInteger allowanceSequence = new AtomicInteger();
 
   public FakeEinvoiceServer(String key, String iv) throws IOException {
     this.key = key;
@@ -49,6 +54,8 @@ public final class FakeEinvoiceServer implements AutoCloseable {
     server.setExecutor(executor);
     server.createContext("/B2CInvoice/Issue", this::handle);
     server.createContext("/B2CInvoice/GetIssue", this::handle);
+    server.createContext("/B2CInvoice/Invalid", this::handleReversal);
+    server.createContext("/B2CInvoice/Allowance", this::handleReversal);
     server.start();
   }
 
@@ -57,8 +64,11 @@ public final class FakeEinvoiceServer implements AutoCloseable {
   public void hook(String operation, Consumer<Request> hook) { hooks.put(operation, hook); }
   public List<Request> received() { return List.copyOf(received); }
   public int invoiceCount() { return invoices.size(); }
-  public void applyDelayed() { delayed.forEach(this::remember); delayed.clear(); }
-  public void dropDelayed() { delayed.clear(); }
+  public void applyDelayed() {
+    delayed.forEach(this::remember); delayed.clear();
+    delayedReversals.forEach(this::applyReversal); delayedReversals.clear();
+  }
+  public void dropDelayed() { delayed.clear(); delayedReversals.clear(); }
   public void reset() {
     received.clear();
     invoices.clear();
@@ -66,6 +76,9 @@ public final class FakeEinvoiceServer implements AutoCloseable {
     scenarios.clear();
     hooks.clear();
     sequence.set(0);
+    reversals.clear();
+    delayedReversals.clear();
+    allowanceSequence.set(0);
   }
 
   private Map<String, Object> remember(Request request) {
@@ -122,6 +135,11 @@ public final class FakeEinvoiceServer implements AutoCloseable {
               + (scenario == Scenario.AMOUNT_MISMATCH ? 1 : 0));
           result.put("IIS_Invalid_Status", "0");
           result.put("IIS_Remain_Allowance_Amt", invoice.get("SalesAmount"));
+          ReversalState reversal = reversals.get(invoice.get("InvoiceNo"));
+          if (reversal != null) {
+            result.put("IIS_Invalid_Status", reversal.invalid() ? "1" : "0");
+            result.put("IIS_Remain_Allowance_Amt", reversal.remaining());
+          }
         }
       }
       if (scenario == Scenario.MISSING_FIELDS) result.remove(issue ? "InvoiceNo" : "IIS_Number");
@@ -141,6 +159,71 @@ public final class FakeEinvoiceServer implements AutoCloseable {
     exchange.getResponseHeaders().set("Content-Type", "application/json");
     exchange.sendResponseHeaders(status, bytes.length);
     exchange.getResponseBody().write(bytes);
+  }
+
+  private synchronized Map<String, Object> applyReversal(Request request) {
+    String invoiceNo = request.data().path("InvoiceNo").asText();
+    var invoice = invoices.values().stream()
+        .filter(row -> invoiceNo.equals(row.get("InvoiceNo"))).findFirst().orElse(null);
+    if (invoice == null) return Map.of("RtnCode", 1600003, "RtnMsg", "查無發票");
+    ReversalState old = reversals.getOrDefault(invoiceNo,
+        new ReversalState(false, (int) invoice.get("SalesAmount")));
+    if (old.invalid()) return Map.of("RtnCode", 4000001, "RtnMsg", "發票已作廢");
+    if (request.path().endsWith("/Invalid")) {
+      reversals.put(invoiceNo, new ReversalState(true, old.remaining()));
+      return Map.of("RtnCode", 1, "RtnMsg", "成功");
+    }
+    int amount = request.data().path("AllowanceAmount").asInt();
+    if (amount <= 0 || amount > old.remaining())
+      return Map.of("RtnCode", 4000001, "RtnMsg", "超過可折讓餘額");
+    int remaining = Math.subtractExact(old.remaining(), amount);
+    reversals.put(invoiceNo, new ReversalState(false, remaining));
+    return Map.of("RtnCode", 1, "IA_Allow_No", "AL" + allowanceSequence.incrementAndGet(),
+        "IA_Remain_Allowance_Amt", remaining);
+  }
+
+  private void handleReversal(HttpExchange exchange) throws IOException {
+    try (exchange) {
+      JsonNode outer = json.readTree(exchange.getRequestBody());
+      JsonNode data = json.readTree(EinvoiceCodec.decrypt(outer.path("Data").asText(), key, iv));
+      Request request = new Request(exchange.getRequestURI().getPath(), outer, data);
+      received.add(request);
+      String operation = request.path().endsWith("/Invalid") ? "Invalid" : "Allowance";
+      hooks.getOrDefault(operation, ignored -> {}).accept(request);
+      Scenario scenario = scenarios.getOrDefault(operation, Scenario.OK);
+      if (scenario == Scenario.REDIRECT_TO_PRODUCTION) {
+        exchange.getResponseHeaders().set("Location", "https://einvoice.ecpay.com.tw/B2CInvoice/" + operation);
+        send(exchange, 302, ""); return;
+      }
+      if (scenario == Scenario.HTTP_500) { send(exchange, 500, ""); return; }
+      if (scenario == Scenario.BAD_JSON) { send(exchange, 200, "{"); return; }
+      if (scenario == Scenario.SUCCEED_THEN_TIMEOUT) applyReversal(request);
+      if (scenario == Scenario.DELAYED_EFFECT) delayedReversals.add(request);
+      if (scenario == Scenario.TIMEOUT || scenario == Scenario.SUCCEED_THEN_TIMEOUT
+          || scenario == Scenario.DELAYED_EFFECT) {
+        try { Thread.sleep(60000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        return;
+      }
+      Map<String, Object> result;
+      if (scenario == Scenario.REJECTED || scenario == Scenario.OTHER_REJECTED)
+        result = Map.of("RtnCode", 4000001, "RtnMsg", "參數錯誤");
+      else if (scenario == Scenario.VOID_PAST_DEADLINE && operation.equals("Invalid"))
+        result = Map.of("RtnCode", 5070450, "RtnMsg", "已超過作廢期限");
+      else if (scenario == Scenario.ECHO_SENSITIVE)
+        result = Map.of("RtnCode", 4000001, "RtnMsg", key + "\n" + iv + "\t"
+            + outer.path("MerchantID").asText() + " " + data.path("NotifyMail").asText()
+            + " " + data.path("Reason").asText());
+      else result = applyReversal(request);
+      if (scenario == Scenario.MISSING_FIELDS) {
+        result = new LinkedHashMap<>(result); result.remove("IA_Allow_No");
+      }
+      String encrypted = scenario == Scenario.BAD_CIPHER ? "bad-cipher"
+          : EinvoiceCodec.encrypt(scenario == Scenario.BAD_DATA_JSON ? "{" : json.writeValueAsString(result), key, iv);
+      send(exchange, 200, json.writeValueAsString(Map.of("TransCode",
+          scenario == Scenario.TRANS_CODE_ERROR ? 999 : 1, "Data", encrypted)));
+    } catch (RuntimeException ignored) {
+      // Preserve the fake server's no-sensitive-data/no-stack-trace logging contract.
+    }
   }
 
   @Override

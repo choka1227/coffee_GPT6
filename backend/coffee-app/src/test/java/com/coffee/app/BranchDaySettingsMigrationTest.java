@@ -34,7 +34,7 @@ class BranchDaySettingsMigrationTest {
     var db = new JdbcTemplate(source);
     seed(db);
 
-    assertThat(Identity.PERMISSIONS).hasSize(14).contains("BRANCH_HOURS_OVERRIDE");
+    assertThat(Identity.PERMISSIONS).hasSize(15).contains("BRANCH_HOURS_OVERRIDE", "ORDER_REFUND");
     assertThat(
             db.queryForList(
                 "select role_code from role_permissions"

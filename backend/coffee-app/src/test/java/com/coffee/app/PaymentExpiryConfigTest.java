@@ -152,6 +152,6 @@ class PaymentExpiryConfigTest {
         null,
         null,
         null,
-        List.of(), null);
+        List.of(), null, null, null, null);
   }
 }

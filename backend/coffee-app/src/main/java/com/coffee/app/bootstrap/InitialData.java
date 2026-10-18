@@ -50,6 +50,7 @@ public class InitialData implements ApplicationRunner {
               "ORDER_CREATE",
               "POS_ORDER",
               "ORDER_MANAGE",
+              "ORDER_REFUND",
               "REPORT_STORE",
               "PAYMENT_RECONCILE",
               "MENU_AVAILABILITY",

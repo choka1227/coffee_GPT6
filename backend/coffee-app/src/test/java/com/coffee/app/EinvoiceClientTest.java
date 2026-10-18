@@ -27,7 +27,7 @@ class EinvoiceClientTest {
 
   static InvoiceCandidate order(String type) {
     return new InvoiceCandidate("CF000000000000000001", "taipei", 126, 1000,
-        new InvoiceRequest(type, "private@example.test", "/ABC1234", "1234567"));
+        new InvoiceRequest(type, "private@example.test", "/ABC1234", "1234567"), null);
   }
 
   @ParameterizedTest

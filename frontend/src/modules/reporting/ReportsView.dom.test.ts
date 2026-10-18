@@ -37,6 +37,19 @@ function panelByTitle(wrapper: VueWrapper, title: string) {
   return panel!;
 }
 
+describe("ReportsView退款", () => {
+  it("有退款時顯示金額筆數與扣除後數字，毛額仍不變", async () => {
+    const wrapper = await mountReports(reportFixture({ revenue: 238, refundAmount: 126, refundOrders: 1 }));
+    expect(wrapper.get(".refund-summary").text()).toContain("退款 −$126（1 筆）");
+    expect(wrapper.get(".refund-summary").text()).toContain("扣除退款後 $112");
+    expect(wrapper.get(".kpi.featured h2").text()).toBe("$238");
+  });
+  it("沒有退款時整行不顯示", async () => {
+    const wrapper = await mountReports(reportFixture());
+    expect(wrapper.find(".refund-summary").exists()).toBe(false);
+  });
+});
+
 type ChartOption = {
   xAxis: { data: unknown[] };
   series: { type: string; data: unknown[]; name?: string }[];

@@ -31,12 +31,14 @@ export const statuses: Record<string, string> = {
   READY: "可取餐",
   COMPLETED: "已完成",
   CANCELLED: "已取消",
+  REFUNDED: "已退款",
 };
 export const permissions: Record<string, string> = {
   PAYMENT_RECONCILE: "金流對帳",
   ORDER_CREATE: "點餐",
   POS_ORDER: "櫃台收銀",
   ORDER_MANAGE: "門市訂單",
+  ORDER_REFUND: "訂單退款",
   REPORT_STORE: "單店業績",
   REPORT_ALL: "跨店業績",
   BRANCH_MANAGE: "分店管理",
