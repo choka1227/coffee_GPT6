@@ -1,7 +1,8 @@
 # G03 訂單退款與發票作廢／折讓實作回報
 
-來源：`docs/specs/G03-order-refunds.md`（修訂紀錄 v1.3.1），主線
-`7a861b22c7ec6285842b544528c0cd7c2cafd25b`。工作順序為 GAP-ANALYSIS 第30項。
+來源：`docs/specs/G03-order-refunds.md` v1.3.2，最新同步主線
+`c10041e5978868071d2086b340132b069e350482`（#98，2026-10-18T06:20:16Z 合併）。
+初始開工來源為 `7a861b22c7ec6285842b544528c0cd7c2cafd25b`；工作順序為 GAP-ANALYSIS 第30項。
 G02 #94 已於 2026-10-17T14:40:29Z 整份合併（7a861b2），V16 已存在。
 來源交接 #96；本次執行識別 codex-pr95-g03-20261017T1536Z。
 
@@ -10,10 +11,11 @@ G02 #94 已於 2026-10-17T14:40:29Z 整份合併（7a861b2），V16 已存在。
 - [x] S1 退款本體：fe14fa55的兩組完整CI成功，backend432／frontend183測試及build通過。
 - [x] S2a 日期與用戶端（驗收12–14）：13d95e9兩組最新head CI成功，backend470／frontend183及build通過。
 - [x] S2b 發票退款掃描／作廢排程（15–23含21a–21l）：c5df720兩組CI成功，backend498／frontend183及build通過。
-- [ ] S3 端點／報表／前端／文件：程式及驗收24–33測試／文件已保存；693fb56遠端502測試唯一失敗是既有報表精確key契約，與G03「新增兩欄且舊測試不修改」衝突，blocked、維持draft。
+- [ ] S3 端點／報表／前端／文件：程式及驗收24–33測試／文件已保存；v1.3.2 已解除舊契約矛盾，僅追加兩個 expected keys，等待本次最新 head 完整 CI 驗證。
 
-整份保持 draft，不啟用 auto-merge，不能以 S1 當作完整退款上線。
-S2 才會接上退款與發票開立競態防線；本階段未呼叫任何綠界 API 或 DoAction。
+等待最新 head 完整驗證期間保持 draft，不啟用 auto-merge；不以舊 head 成功代表本次成功。
+S2 已接上退款與發票開立競態防線；系統不呼叫 DoAction，官方 stage 實測仍待 PO。
+以下各階段驗證紀錄保留當時狀態，最新結果以 PR #97 描述為準。
 
 ## S1 設計與變更
 
@@ -52,7 +54,8 @@ S2 才會接上退款與發票開立競態防線；本階段未呼叫任何綠�
 | 11 | refundsNeverRestoreStockOrDiscountRedemptions |
 | S2前置掃描 | internalRefundCursorIsInclusiveAtInitialBoundaryAndKeysetPaginated |
 
-CashSessionsTest、CoffeeIntegrationTest、HttpWorkflowTest 完全未改。
+CashSessionsTest、HttpWorkflowTest 完全未改；CoffeeIntegrationTest 僅依 v1.3.2 §14.10
+於 reportResponseKeepsExactContractKeys 期望集合追加 refundAmount、refundOrders，精確斷言及其餘檔案內容不變。
 S3最新head驗證結果以PR描述為準；官方stage實機仍為待PO驗收，不擋合併。
 
 ## 驗證
@@ -188,12 +191,13 @@ BAD_CIPHER／BAD_DATA_JSON／TRANS_CODE_ERROR假伺服器在操作成立後破�
 | 32 | docs/ECPAY.md「退款與發票作廢／折讓」及「待PO驗收」六步記錄表；未冒稱實測 |
 | 33 | 本檔包含各階段、1–33方法映射、未改測試與疑點 |
 
-指定既有CashSessionsTest、CoffeeIntegrationTest、HttpWorkflowTest及TimeZoneGuardTest／EcpayNoEgressGuardTest全未改。
+指定既有CashSessionsTest、HttpWorkflowTest及TimeZoneGuardTest／EcpayNoEgressGuardTest全未改。
+CoffeeIntegrationTest 唯一變更為 v1.3.2 §14.10 允許的兩個 expected keys，保留 containsExactlyInAnyOrder。
 InvoiceApiTest僅追加案例、helper與新fixture的AfterEach清理；G02原案例／reset／斷言未改。
 本地backend verify因Maven Central DNS失敗仍未編譯；前端最新結果及遠端最新head CI以PR描述為準。
 首輪DOM測試抓到load只刷新開票清單、未初載作廢清單，已修正實際load流程，未放寬測試。
 
-### S3 真正阻擋：報表新增欄位與不可修改的精確舊契約矛盾
+### S3 歷史阻擋（已由 v1.3.2 解除）：報表精確舊契約矛盾
 
 2026-10-17，head693fb56daf042f532c59c118bd1a972c969661d2的兩組Checks均failure。
 Actions39059384223/job117474033821與39059379394/job117474019325已完成；第一組log證明
@@ -211,3 +215,14 @@ actual增加refundAmount/refundOrders，被containsExactlyInAnyOrder判為unexpe
 - 這是需求／驗收矛盾，不是Maven DNS停工；已安全保存S3程式／測試／文件，沒有轉去另一份規格。
 
 本段為693fb56驗證結果；追加本報告的文件提交仍須查該最新head CI，不沿用舊head綠燈。
+
+### S3 v1.3.2 續作
+
+2026-10-18，執行 codex-g03-s3-finish-20261018T0635Z，確認 #98 實際合併且主線含 §14.10 後，
+將 c10041e merge 進原 codex/g03-order-refunds（不 rebase、不 force push）。
+僅於 CoffeeIntegrationTest.reportResponseKeepsExactContractKeys 尾端追加兩個欄位名稱；原24欄、
+containsExactlyInAnyOrder、同方法其他內容及該檔其餘測試逐字不變。JSON兩欄仍永遠輸出。
+驗收26的退款前後舊欄位相等／跨月／跨店測試保留；未新增需求、依賴或 migration。
+本次本地 frontend 205 測試與 build 通過；backend verify 因 Maven Central DNS 失敗，未進編譯。
+diff --check 通過，三支腳本仍 100755。遠端最新 head Checks／Actions／jobs 結果會回填 PR #97；
+CI 未通過前不將 S3 標完成。官方 stage 六步未執行，依 §11 不阻擋合併，不能冒稱實測。
