@@ -11,9 +11,10 @@ G02 #94 已於 2026-10-17T14:40:29Z 整份合併（7a861b2），V16 已存在。
 - [x] S1 退款本體：fe14fa55的兩組完整CI成功，backend432／frontend183測試及build通過。
 - [x] S2a 日期與用戶端（驗收12–14）：13d95e9兩組最新head CI成功，backend470／frontend183及build通過。
 - [x] S2b 發票退款掃描／作廢排程（15–23含21a–21l）：c5df720兩組CI成功，backend498／frontend183及build通過。
-- [ ] S3 端點／報表／前端／文件：程式及驗收24–33測試／文件已保存；v1.3.2 已解除舊契約矛盾，僅追加兩個 expected keys，等待本次最新 head 完整 CI 驗證。
+- [x] S3 端點／報表／前端／文件：驗收24–33完整保存；v1.3.2 解除舊契約矛盾後僅追加兩個 expected keys，01173ace 的兩組完整 CI 全部成功。
 
-等待最新 head 完整驗證期間保持 draft，不啟用 auto-merge；不以舊 head 成功代表本次成功。
+S1、S2a、S2b、S3 全部完成。01173ace 完整驗證成功；此文件收尾提交仍須重查其最新 head CI，
+成功前保持 draft。無自審或直接合併；工具不能指定 merge 方式時依 AGENTS 由 Claude 審核後處理。
 S2 已接上退款與發票開立競態防線；系統不呼叫 DoAction，官方 stage 實測仍待 PO。
 以下各階段驗證紀錄保留當時狀態，最新結果以 PR #97 描述為準。
 
@@ -225,4 +226,7 @@ containsExactlyInAnyOrder、同方法其他內容及該檔其餘測試逐字不�
 驗收26的退款前後舊欄位相等／跨月／跨店測試保留；未新增需求、依賴或 migration。
 本次本地 frontend 205 測試與 build 通過；backend verify 因 Maven Central DNS 失敗，未進編譯。
 diff --check 通過，三支腳本仍 100755。遠端最新 head Checks／Actions／jobs 結果會回填 PR #97；
-CI 未通過前不將 S3 標完成。官方 stage 六步未執行，依 §11 不阻擋合併，不能冒稱實測。
+01173ace 的 Checks 117608103476／117608094047 全部 completed/success；
+Actions 39104757262／39104754070 與對應 jobs 全部成功，完成 S3 遠端驗證。
+此後僅更新本報告完成狀態，仍以最終提交 Checks／Actions／jobs 全綠才轉 ready，不沿用前版綠燈。
+官方 stage 六步未執行，依 §11 不阻擋合併，不能冒稱實測。
