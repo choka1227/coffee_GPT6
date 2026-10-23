@@ -120,10 +120,15 @@ onMounted(load);
       <button class="btn primary" @click="add"><Plus :size="16" />新增促銷</button>
     </div>
     <div v-if="loading" class="loading-state">讀取中…</div>
+    <div v-else-if="!rules.length" class="panel empty-state">
+      <Tags :size="32" /><h2>尚未建立品項促銷</h2>
+      <p>為商品或分類新增促銷，設定適用期間與折扣。</p>
+      <button class="btn primary" @click="add"><Plus :size="16" />新增促銷</button>
+    </div>
     <div v-else class="card-grid">
       <article v-for="rule in rules" :key="rule.id!" class="admin-card">
-        <div><Tags :size="18" /><strong>{{ targetLabel(rule) }}</strong>
-          <span class="badge">{{ rule.active ? "啟用" : "停用" }}</span></div>
+        <div class="card-heading"><Tags :size="18" /><strong>{{ targetLabel(rule) }}</strong>
+          <span class="status" :class="rule.active ? 'paid' : 'cancelled'">{{ rule.active ? "啟用" : "停用" }}</span></div>
         <h3>{{ rule.name }}</h3>
         <p>{{ kindLabel(rule) }}</p>
         <p class="muted">{{ rule.branchId ? branches.find((b) => b.id === rule.branchId)?.name : "全鏈適用" }}</p>
@@ -157,8 +162,8 @@ onMounted(load);
           @change="setTime('startsAt', $event)" /></label>
         <label>結束時間<input type="datetime-local" :value="localTime(editing.endsAt)"
           @change="setTime('endsAt', $event)" /></label>
-        <label><input v-model="editing.active" type="checkbox" /> 啟用</label>
-        <button class="btn primary" :disabled="saving">{{ saving ? "儲存中…" : "儲存" }}</button>
+        <label class="checkbox-label"><input v-model="editing.active" type="checkbox" /> 啟用</label>
+        <div class="form-actions"><button class="btn primary" :disabled="saving">{{ saving ? "儲存中…" : "儲存" }}</button></div>
       </form>
     </Modal>
   </div>

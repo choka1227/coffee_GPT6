@@ -29,7 +29,9 @@ const root = ref<HTMLElement>();
 let chart: ECharts | undefined;
 let observer: ResizeObserver | undefined;
 onMounted(() => {
-  chart = init(root.value!);
+  chart = init(root.value!, {
+    textStyle: { fontFamily: getComputedStyle(root.value!).fontFamily },
+  });
   chart.setOption({
     ...props.option,
     aria: { enabled: true, description: props.description || props.label },

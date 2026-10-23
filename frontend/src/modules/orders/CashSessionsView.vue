@@ -105,13 +105,13 @@ watch(branchId, () => load());
       <div><span class="eyebrow">CASH CONTROL</span><h1>現金班別</h1><p class="muted">開班、交班與短溢紀錄都由系統依收款資料計算。</p></div>
       <button class="btn secondary" :disabled="loading || !branchId" @click="load()"><RefreshCw :size="17" />重新整理</button>
     </div>
-    <section v-if="auth.user?.scope === 'GLOBAL'" class="panel branch-picker">
+    <section v-if="auth.user?.scope === 'GLOBAL'" class="panel panel-body session-branch-picker">
       <label>分店<select v-model="branchId"><option v-for="branch in branches" :key="branch.id || ''" :value="branch.id || ''">{{ branch.name }}</option></select></label>
     </section>
     <div v-if="error" class="error-state">{{ error }}</div>
     <div v-else-if="loading && !history.length" class="loading-state">讀取班別資料中…</div>
     <template v-else-if="branchId">
-      <section class="panel session-card">
+      <section class="panel panel-body session-card">
         <div v-if="current" class="session-grid">
           <div><span class="eyebrow">OPEN SESSION</span><h2>目前班別</h2><p>{{ current.openedByName }} · {{ dateTime(current.openedAt) }}</p></div>
           <div class="metric"><small>準備金</small><b>{{ money(current.openingFloat) }}</b></div>
@@ -132,33 +132,32 @@ watch(branchId, () => load());
           <button class="btn primary" :disabled="busy">{{ busy ? "開班中…" : "開始班別" }}</button>
         </form>
       </section>
-      <section v-if="unassignedOrderCount" class="panel warning-card"><b>未歸班現金</b><span>{{ unassignedOrderCount }} 筆，共 {{ money(unassignedCashRevenue) }}</span><small>這些收款發生時沒有開啟中的班別，已獨立列出供核對。</small></section>
+      <section v-if="unassignedOrderCount" class="panel panel-body warning-card"><b>未歸班現金</b><span>{{ unassignedOrderCount }} 筆，共 {{ money(unassignedCashRevenue) }}</span><small>這些收款發生時沒有開啟中的班別，已獨立列出供核對。</small></section>
       <section class="panel">
-        <h2>班別歷史</h2>
+        <div class="section-heading"><h2>班別歷史</h2></div>
         <div class="table-wrap"><table><thead><tr><th>開班時間</th><th>操作人員</th><th>現金收入</th><th>應有／實點</th><th>短溢</th></tr></thead><tbody>
           <tr v-for="item in history" :key="item.id"><td>{{ dateTime(item.openedAt) }}<small>{{ item.status === 'OPEN' ? '進行中' : `交班 ${dateTime(item.closedAt!)}` }}</small></td><td>{{ item.openedByName }}<small v-if="item.closedByName">交班：{{ item.closedByName }}</small></td><td>{{ money(item.cashRevenue) }}<small>{{ item.orderCount }} 筆</small><small>現金退款 −{{ money(item.refundAmount) }}（{{ item.refundOrders }} 筆）</small></td><td>{{ money(item.expectedAmount) }}<small v-if="item.countedAmount !== null">實點 {{ money(item.countedAmount) }}</small></td><td><span v-if="item.variance !== null" class="variance">{{ varianceLabel(item.variance) }}</span><span v-else>—</span></td></tr>
           <tr v-if="!history.length"><td colspan="5" class="empty-state">尚無班別紀錄</td></tr>
         </tbody></table></div>
-        <button v-if="nextCursor" class="btn secondary" :disabled="loading" @click="load(true)">載入更多<ChevronRight :size="16" /></button>
+        <div v-if="nextCursor" class="panel-footer"><button class="btn secondary" :disabled="loading" @click="load(true)">載入更多<ChevronRight :size="16" /></button></div>
       </section>
     </template>
   </div>
 </template>
 
 <style scoped>
-.branch-picker { margin-bottom: 18px; max-width: 420px; }
-.branch-picker label, .session-form label, .open-form label { display: grid; gap: 6px; }
-.session-grid { display: grid; grid-template-columns: 1.4fr repeat(4, 1fr); gap: 20px; align-items: center; }
+.session-branch-picker { margin-bottom: var(--section-gap); max-width: 420px; }
+.session-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; align-items: start; }
+.session-grid > div:first-child { grid-column: 1 / -1; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
 .metric { display: grid; gap: 6px; }
 .metric b { font-size: 1.35rem; }
 .primary-metric { color: var(--accent); }
-.session-form { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr auto auto; gap: 14px; align-items: end; }
-.open-form { display: grid; grid-template-columns: 1.4fr 1fr 1fr auto; gap: 18px; align-items: end; }
+.session-form { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto; gap: 20px; align-items: end; padding-top: 24px; border-top: 1px solid var(--line); }
+.open-form { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 20px; align-items: end; }
+.session-form label, .open-form label { min-width: 0; }
 .variance { color: #b42318; font-weight: 700; }
 .variance.zero { color: var(--muted); }
-.warning-card { display: grid; grid-template-columns: auto auto 1fr; gap: 16px; margin-top: 18px; border-color: #f4b740; }
+.warning-card { display: grid; grid-template-columns: auto auto 1fr; gap: 16px; border-color: #e8cf9c; background: #fffbf2; }
 td small { display: block; margin-top: 4px; color: var(--muted); }
-.panel + .panel { margin-top: 18px; }
-.panel > .btn { margin-top: 18px; }
 @media (max-width: 900px) { .session-grid, .open-form, .session-form { grid-template-columns: 1fr; } .session-form { grid-column: auto; } .warning-card { grid-template-columns: 1fr; } }
 </style>

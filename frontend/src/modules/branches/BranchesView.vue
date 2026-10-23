@@ -540,9 +540,6 @@ function updateTime(
 </template>
 
 <style scoped>
-.branch-card-body > .btn + .btn {
-  margin-left: 0.5rem;
-}
 .hours-form {
   display: grid;
   gap: 1rem;
@@ -555,7 +552,7 @@ function updateTime(
   color: #6a4a00;
 }
 .hours-day {
-  border-bottom: 1px solid var(--border, #dedbd3);
+  border-bottom: 1px solid var(--line);
   padding-bottom: 0.8rem;
 }
 .hours-day-title,
@@ -571,7 +568,7 @@ function updateTime(
   margin-top: 0.6rem;
 }
 .hours-row input {
-  min-width: 8rem;
+  min-width: 0;
 }
 .hours-day .muted {
   margin: 0.55rem 0 0;
@@ -580,7 +577,7 @@ function updateTime(
   display: grid;
   gap: 0.75rem;
   padding-top: 0.5rem;
-  border-top: 1px solid var(--border, #dedbd3);
+  border-top: 1px solid var(--line);
 }
 .override-section .muted {
   margin: 0.25rem 0 0;
@@ -595,7 +592,7 @@ function updateTime(
 .override-row {
   justify-content: space-between;
   padding: 0.7rem;
-  border: 1px solid var(--border, #dedbd3);
+  border: 1px solid var(--line);
   border-radius: 0.6rem;
 }
 .override-row > div:first-child {
@@ -607,6 +604,12 @@ function updateTime(
   gap: 0.75rem;
   padding: 0.9rem;
   border-radius: 0.6rem;
-  background: var(--surface-soft, #f7f5ef);
+  background: var(--surface-soft);
+}
+.hours-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; }
+.override-kind, .override-actions { flex-wrap: wrap; }
+.override-row > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 620px) {
+  .override-row { flex-direction: column; align-items: stretch; }
 }
 </style>
