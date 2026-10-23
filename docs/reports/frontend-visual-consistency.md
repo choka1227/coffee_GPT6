@@ -35,15 +35,17 @@
 ## 施工進度
 
 - [x] S1 全站樣式與頁面整理、回歸驗證。
-- [ ] 遠端 CI、PR 與互審交付。
+- [x] PR #100 已建立為 ready 並附加到本次 chat。
+- [ ] 最終 head 的遠端 CI 與 Claude 互審／合併；即時結果以 PR 檢查與描述為準。
 
 ## 中斷續作位置
 
 - 分支：codex/frontend-visual-consistency；基底為 feature/init-project 的 9d0c248。
 - 修改與本機測試已完成，請勿重做或另開實作分支。
-- 下一步：檢查遠端目前 head 的 Checks API；成功後建立／更新此分支的 PR（base=feature/init-project），並確認附加到 chat。
+- PR：https://github.com/choka1227/coffee_GPT6/pull/100（base=feature/init-project）。實作 commit 為 1ef4aab；22d2639 的 push verify 已成功，本次僅再補交付紀錄。
+- 下一步：檢查 PR 目前 head 的 Checks API，將最終結果更新至 PR 描述；待 Claude 正式互審。如有審查修改，沿用此分支修正、重新驗證與推送，不要另開重複 PR。
 - GitHub connector 的 auto-merge 工具無法指定 merge 方式，不可改用 squash；在 PR 描述註明，由 Claude 依 AGENTS.md 的目前 head APPROVE／CI／無衝突條件處理。
-- frontend/ui-review.html 是本機暫存的 viewport 檢查頁，不屬於交付檔案；交付前移除。正式預覽為 http://localhost:5173/，整包預覽為 http://localhost:8080/。
+- frontend/ui-review.html 是本機暫存的 viewport 檢查頁，驗證後已移除，未納入提交。正式預覽為 http://localhost:5173/，整包預覽為 http://localhost:8080/。
 
 ## 限制
 
