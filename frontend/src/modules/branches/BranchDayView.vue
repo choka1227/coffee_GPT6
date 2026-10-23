@@ -312,15 +312,16 @@ async function deleteOverride(value: BranchDayOverride) {
 <style scoped>
 .branch-day-page {
   display: grid;
-  gap: 1rem;
+  gap: var(--section-gap);
 }
+.branch-day-page .page-heading { margin-bottom: 0; }
 .day-card {
   display: grid;
-  gap: 0.8rem;
-  padding: 1rem;
-  border: 1px solid var(--border, #dedbd3);
-  border-radius: 0.8rem;
-  background: var(--surface, #fff);
+  gap: 16px;
+  padding: var(--panel-padding);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 .day-card h2,
 .day-card p {
@@ -348,20 +349,24 @@ async function deleteOverride(value: BranchDayOverride) {
 .weekly-grid > div {
   padding: 0.65rem;
   border-radius: 0.5rem;
-  background: var(--surface-soft, #f7f5ef);
+  background: var(--surface-soft);
 }
 .override-row {
   justify-content: space-between;
   padding: 0.7rem;
-  border: 1px solid var(--border, #dedbd3);
+  border: 1px solid var(--line);
   border-radius: 0.6rem;
 }
 .override-editor {
   max-width: 48rem;
 }
 .hours-row input {
-  min-width: 8rem;
+  min-width: 0;
 }
+.weekly-card > div:first-child > svg { flex-shrink: 0; }
+.override-kind, .override-actions { flex-wrap: wrap; }
+.override-row > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.hours-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; }
 @media (max-width: 640px) {
   .override-row,
   .override-kind {

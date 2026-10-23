@@ -11,6 +11,7 @@ onBeforeUnmount(() => dialog.value?.close());
   <dialog
     ref="dialog"
     class="modal"
+    :aria-label="title"
     :class="{ wide }"
     @cancel.prevent="emit('close')"
     @click="
@@ -25,6 +26,6 @@ onBeforeUnmount(() => dialog.value?.close());
         <X :size="21" />
       </button>
     </header>
-    <slot />
+    <div class="modal-body"><slot /></div>
   </dialog>
 </template>

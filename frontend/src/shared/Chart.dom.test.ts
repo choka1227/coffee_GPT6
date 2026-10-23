@@ -94,6 +94,21 @@ describe("Chart.vue", () => {
     expect(mocks.dispose).toHaveBeenCalledOnce();
   });
 
+  it("以容器字體初始化主題，更新資料後仍沿用同一個主題", async () => {
+    const wrapper = mount(Chart, {
+      props: { option: { series: [] }, label: "營業額" },
+      attrs: { style: 'font-family: "Microsoft JhengHei", sans-serif' },
+      attachTo: document.body,
+    });
+    expect(mocks.init).toHaveBeenCalledWith(wrapper.element, {
+      textStyle: { fontFamily: getComputedStyle(wrapper.element).fontFamily },
+    });
+    expect(getComputedStyle(wrapper.element).fontFamily).toContain("Microsoft JhengHei");
+    await wrapper.setProps({ option: { series: [{ data: [10] }] } });
+    expect(mocks.init).toHaveBeenCalledOnce();
+    wrapper.unmount();
+  });
+
   it("容器有 role=img 與可讀的 aria-label", async () => {
     const wrapper = mount(Chart, {
       props: {
