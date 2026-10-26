@@ -995,13 +995,13 @@ async function saveStock(clear = false) {
         <p class="muted">{{ selected.subtitle }}</p>
         <fieldset v-for="g in selected.optionGroups" :key="g.id!">
           <legend>{{ g.name }} <small>選擇 {{ g.minSelect }}–{{ g.maxSelect }} 項</small></legend>
-          <label v-for="item in g.items" :key="item.id!">
+          <label v-for="item in g.items" :key="item.id!" class="checkbox-label option-choice">
             <input
               :type="g.selection === 'SINGLE' ? 'radio' : 'checkbox'"
               :name="'option-' + g.id"
               :checked="selectedOptionIds.includes(item.id!)"
               @change="toggleOption(g.id, item.id, g.selection === 'SINGLE')"
-            />{{ item.name }}<span v-if="item.priceDelta"> +{{ money(item.priceDelta) }}</span>
+            /><span>{{ item.name }}<small v-if="item.priceDelta"> +{{ money(item.priceDelta) }}</small></span>
           </label>
         </fieldset>
         <label

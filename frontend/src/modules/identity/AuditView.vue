@@ -45,7 +45,7 @@ onMounted(() => load());
       </div>
     </div>
     <section class="panel">
-      <form class="filter-bar" @submit.prevent="load(false)">
+      <form class="filter-bar panel-body" @submit.prevent="load(false)">
         <label
           >動作<select v-model="action">
             <option value="">全部動作</option>
@@ -83,17 +83,15 @@ onMounted(() => load());
           </tbody>
         </table>
       </div>
-      <button v-if="nextCursor" class="btn secondary" :disabled="loading" @click="load(true)">
+      <div v-if="nextCursor" class="panel-footer"><button class="btn secondary" :disabled="loading" @click="load(true)">
         載入更多<ChevronRight :size="16" />
-      </button>
+      </button></div>
     </section>
   </div>
 </template>
 
 <style scoped>
 .filter-bar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 14px; align-items: end; }
-label { display: grid; gap: 6px; }
 td small { display: block; margin-top: 3px; }
-.panel > .btn { margin-top: 18px; }
 @media (max-width: 800px) { .filter-bar { grid-template-columns: 1fr; } }
 </style>

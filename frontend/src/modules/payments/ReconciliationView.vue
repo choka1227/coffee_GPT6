@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { RefreshCw, ShieldCheck } from "lucide-vue-next";
 import { api } from "../../shared/api";
 import { money } from "../../shared/format";
 import type { PaymentAnomaly, ReconciliationPending, ReconciliationAttempt, Invoice, InvoicePage, InvoiceReversal, InvoiceReversalPage } from "../../shared/types";
@@ -104,64 +105,113 @@ onMounted(load);
 </script>
 
 <template>
-  <section>
-    <h1>金流對帳</h1>
-    <p>查核逾靜默期的線上付款訂單；只有查單確認未付款或模擬付款時，才會依設定逾時作廢。</p>
-    <button :disabled="busy" @click="load">重新整理</button>
-    <p v-if="truncated">僅顯示前 200 筆。</p>
-    <p role="status">{{ message }}</p>
-    <section v-if="reversalItems.length" class="reversal-failures">
-      <h2>發票作廢／折讓失敗</h2><p v-if="reversalTruncated">僅顯示前 200 筆作廢／折讓。</p>
-      <article v-for="reversal in reversalItems" :key="reversal.orderId">
+  <div class="page-pad reconciliation-page">
+    <div class="page-heading">
+      <div>
+        <span class="eyebrow">PAYMENT RECONCILIATION</span>
+        <h1>金流對帳</h1>
+        <p class="muted">查核逾靜默期的線上付款訂單；只有查單確認未付款或模擬付款時，才會依設定逾時作廢。</p>
+      </div>
+      <button class="btn secondary" :disabled="busy" @click="load"><RefreshCw :size="17" />重新整理</button>
+    </div>
+    <p v-if="message" class="reconciliation-notice" role="status">{{ message }}</p>
+    <section v-if="reversalItems.length" class="panel reversal-failures">
+      <div class="section-heading"><h2>發票作廢／折讓失敗</h2><span class="status pending_payment">{{ reversalItems.length }} 筆待處理</span></div>
+      <p v-if="reversalTruncated" class="table-foot">僅顯示前 200 筆作廢／折讓。</p>
+      <div class="card-grid panel-body">
+      <article v-for="reversal in reversalItems" :key="reversal.orderId" class="admin-card">
         <p>訂單編號：{{ reversal.orderId }}</p><p>發票號碼：{{ reversal.invoiceNo || '尚未確認' }}</p>
         <p>方式：{{ reversal.kind === 'VOID' ? '作廢' : reversal.kind === 'ALLOWANCE' ? '折讓' : '待確認' }}</p>
         <p>失敗原因：{{ reversal.lastError }}</p>
-        <button :disabled="busy" @click="retryReversal(reversal.orderId)">重試</button>
+        <button class="btn secondary" :disabled="busy" @click="retryReversal(reversal.orderId)">重試</button>
       </article>
+      </div>
     </section>
-    <section v-if="invoiceItems.length" class="invoice-failures">
-      <h2>發票開立失敗</h2><p v-if="invoiceTruncated">僅顯示前 200 筆發票。</p>
-      <article v-for="invoice in invoiceItems" :key="invoice.orderId || ''">
+    <section v-if="invoiceItems.length" class="panel invoice-failures">
+      <div class="section-heading"><h2>發票開立失敗</h2><span class="status pending_payment">{{ invoiceItems.length }} 筆待處理</span></div>
+      <p v-if="invoiceTruncated" class="table-foot">僅顯示前 200 筆發票。</p>
+      <div class="card-grid panel-body">
+      <article v-for="invoice in invoiceItems" :key="invoice.orderId || ''" class="admin-card">
         <p>訂單編號：{{ invoice.orderId }}</p><p>金額：{{ money(invoice.amount || 0) }}</p>
         <p>失敗原因：{{ invoice.lastError }}</p><p>最後更新時間：{{ date(invoice.updatedAt) }}</p>
-        <button :disabled="busy" @click="retryInvoice(invoice.orderId)">重試</button>
+        <button class="btn secondary" :disabled="busy" @click="retryInvoice(invoice.orderId)">重試</button>
       </article>
+      </div>
     </section>
-    <p v-if="!busy && !items.length">目前沒有待查核訂單。</p>
-    <section v-if="anomalyItems.length">
-      <h2>作廢後收到付款，需人工退款</h2>
-      <p v-if="anomalyTruncated">僅顯示前 200 筆異常。</p>
-      <article v-for="anomaly in anomalyItems" :key="anomaly.id">
+    <section v-if="anomalyItems.length" class="panel">
+      <div class="section-heading"><h2>作廢後收到付款，需人工退款</h2><span class="status pending_payment">{{ anomalyItems.length }} 筆待處理</span></div>
+      <p v-if="anomalyTruncated" class="table-foot">僅顯示前 200 筆異常。</p>
+      <div class="card-grid panel-body">
+      <article v-for="anomaly in anomalyItems" :key="anomaly.id" class="admin-card">
         <p>訂單編號：{{ anomaly.orderId }}</p>
         <p>訂單金額：{{ money(anomaly.orderTotal) }}</p>
         <p>綠界金額：{{ anomaly.tradeAmount == null ? "未提供" : money(anomaly.tradeAmount) }}</p>
         <p>來源：{{ anomaly.source === "CALLBACK" ? "付款通知" : "作廢後複查" }}</p>
         <p>偵測時間：{{ date(anomaly.detectedAt) }}</p>
         <label>處理說明<input v-model="resolutionNotes[anomaly.id]" maxlength="200" /></label>
-        <button :disabled="busy" @click="resolveAnomaly(anomaly.id)">已處理</button>
+        <button class="btn primary" :disabled="busy" @click="resolveAnomaly(anomaly.id)">已處理</button>
       </article>
+      </div>
     </section>
-    <div style="overflow-x:auto">
+    <section class="panel">
+      <div class="section-heading"><h2>待查核訂單</h2><span class="status">{{ items.length }} 筆</span></div>
+      <div v-if="busy && !items.length" class="loading-state">讀取待查核訂單中…</div>
+      <div v-else-if="!items.length" class="empty-state">
+        <ShieldCheck :size="32" /><h3>目前沒有待查核訂單。</h3><p>可使用重新整理，查看最新付款狀態。</p>
+      </div>
+      <div v-else class="table-wrap">
       <table>
         <thead><tr><th>訂單</th><th>分店</th><th>金額</th><th>建立時間</th><th>最近查核</th><th>次數</th><th>操作</th></tr></thead>
         <tbody><tr v-for="item in items" :key="item.orderId">
-          <td>{{ item.orderId }}</td><td>{{ item.branchName }}</td><td>{{ money(item.total) }}</td>
+          <td><b>{{ item.orderId }}</b></td><td>{{ item.branchName }}</td><td class="numeric">{{ money(item.total) }}</td>
           <td>{{ date(item.createdAt) }}</td>
           <td>{{ item.lastOutcome ? labels[item.lastOutcome] || item.lastOutcome : "尚未查核" }}<br>{{ date(item.lastQueriedAt) }}</td>
           <td>{{ item.attempts }}</td><td>
-            <button :disabled="busy" @click="reconcile(item.orderId)">立即查核</button>
-            <button :disabled="busy" @click="history(item.orderId)">歷程</button>
+            <div class="row-actions">
+            <button class="btn primary small" :disabled="busy" @click="reconcile(item.orderId)">立即查核</button>
+            <button class="btn secondary small" :disabled="busy" @click="history(item.orderId)">歷程</button>
+            </div>
           </td>
         </tr></tbody>
       </table>
-    </div>
-    <section v-if="selected">
-      <h2>{{ selected }} 查核歷程（最近 50 筆）</h2>
-      <p v-if="!attempts.length">尚無紀錄。</p>
-      <ul><li v-for="(attempt, index) in attempts" :key="index">
+      </div>
+      <p v-if="truncated" class="table-foot">僅顯示前 200 筆。</p>
+    </section>
+    <section v-if="selected" class="panel">
+      <div class="section-heading"><div><h2>查核歷程</h2><p class="muted">{{ selected }} · 最近 50 筆</p></div></div>
+      <p v-if="!attempts.length" class="empty-state compact">尚無紀錄。</p>
+      <ul v-else class="reconciliation-history"><li v-for="(attempt, index) in attempts" :key="index">
         {{ date(attempt.queriedAt) }} · {{ attempt.triggerSource === "MANUAL" ? "人工" : "排程" }} ·
         {{ labels[attempt.outcome] || attempt.outcome }}：{{ attempt.detail }}
       </li></ul>
     </section>
-  </section>
+  </div>
 </template>
+
+<style scoped>
+.reconciliation-notice {
+  padding: 16px 20px;
+  margin-bottom: var(--section-gap);
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--green);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.reconciliation-history {
+  margin: 0;
+  padding: 0 var(--panel-padding);
+  list-style: none;
+}
+.reconciliation-history li {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.reconciliation-history li:last-child {
+  border-bottom: 0;
+}
+.section-heading p {
+  overflow-wrap: anywhere;
+}
+</style>
